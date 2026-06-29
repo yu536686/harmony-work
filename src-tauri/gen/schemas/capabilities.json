@@ -1,0 +1,1 @@
+{"main-capability":{"identifier":"main-capability","description":"小亨 WorkBuddy 主窗口最小权限","local":true,"windows":["main"],"permissions":["core:default","dialog:default","notification:default"]}}
