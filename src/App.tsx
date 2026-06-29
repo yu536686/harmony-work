@@ -72,6 +72,7 @@ import {
   saveState,
   searchSkillMarket,
   sendWeixinText,
+  startHeartbeatScheduler,
   startWeixinMonitor,
   archiveTaskTree,
   stopChatStream,
@@ -594,23 +595,26 @@ function App() {
 
   useEffect(() => {
     if (!ready) return;
-    const tick = () => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const tick = (now = new Date()) => {
+      if (disposed) return;
       const current = stateRef.current;
       if (!current.settings.heartbeatEnabled) return;
       const intervalMs = Math.max(5, current.settings.heartbeatIntervalMinutes || 60) * 60 * 1000;
       const last = current.settings.heartbeatLastRun ? Date.parse(current.settings.heartbeatLastRun) : 0;
-      if (Date.now() - last < intervalMs) return;
+      if (now.getTime() - last < intervalMs) return;
       const busy = Object.values(runsRef.current).some((run) => run.phase === "planning" || run.phase === "running");
       if (busy) return;
-      const now = new Date().toISOString();
+      const nowIso = now.toISOString();
       const conversationId = HEARTBEAT_CONVERSATION_ID;
       const existing = current.conversations.find((item) => item.id === conversationId);
       const xiaohengId = current.agents.find((agent) => agent.role === "xiaoheng")?.id;
       const conversation: Conversation = existing ?? {
         id: conversationId,
         title: "Heartbeat 心跳",
-        createdAt: now,
-        updatedAt: now,
+        createdAt: nowIso,
+        updatedAt: nowIso,
         messages: [],
         options: {
           workspaceRoot: current.settings.workspaceRoot || defaultWorkspaceRoot,
@@ -621,9 +625,9 @@ function App() {
           permissionMode: "restricted"
         }
       };
-      const dueSchedules = current.schedules.filter((schedule) => dailyScheduleDue(schedule, new Date()));
+      const dueSchedules = current.schedules.filter((schedule) => dailyScheduleDue(schedule, now));
       if (!dueSchedules.length) {
-        setState((value) => ({ ...value, settings: { ...value.settings, heartbeatLastRun: now } }));
+        setState((value) => ({ ...value, settings: { ...value.settings, heartbeatLastRun: nowIso } }));
         return;
       }
       const due = dueSchedules[0];
@@ -642,8 +646,8 @@ function App() {
       const nextState: AppState = {
         ...current,
         conversations: existing ? current.conversations : [conversation, ...current.conversations],
-        settings: { ...current.settings, heartbeatLastRun: now },
-        schedules: current.schedules.map((schedule) => schedule.id === due.id ? { ...schedule, lastRun: now } : schedule)
+        settings: { ...current.settings, heartbeatLastRun: nowIso },
+        schedules: current.schedules.map((schedule) => schedule.id === due.id ? { ...schedule, lastRun: nowIso } : schedule)
       };
       setState(nextState);
       void runConversationAgent({
@@ -654,9 +658,18 @@ function App() {
         prompt
       }).catch((error) => console.error("heartbeat failed", error));
     };
-    const timer = window.setInterval(tick, 60_000);
+    void startHeartbeatScheduler().catch((error) => console.error("heartbeat scheduler failed", error));
+    listen<{ epochSeconds?: number }>("xiaoheng://heartbeat-tick", (event) => {
+      const epoch = event.payload.epochSeconds;
+      tick(epoch ? new Date(epoch * 1000) : new Date());
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch((error) => console.error(error));
     tick();
-    return () => window.clearInterval(timer);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [ready]);
 
   const xiaoheng = state.agents.find((agent) => agent.role === "xiaoheng");

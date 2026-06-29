@@ -109,6 +109,11 @@ export async function saveState(state: AppState): Promise<void> {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+export async function startHeartbeatScheduler(): Promise<{ ok: boolean; started: boolean }> {
+  if (!inTauri()) return { ok: true, started: false };
+  return invoke("start_heartbeat_scheduler");
+}
+
 export async function readMemoryFile(): Promise<{ ok: boolean; path: string; byteSize?: number; charCount?: number; content?: string; contentPreview?: string; contentTail?: string; contentTruncated?: boolean }> {
   if (!inTauri()) return { ok: true, path: "preview://MEMORY.md", byteSize: 0, charCount: 0, content: "" };
   return invoke("memory_file_read");

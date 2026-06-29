@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -22,6 +22,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, UserAttentionType, WindowEvent,
 };
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 const KEYRING_SERVICE: &str = "com.harmony.xiaoheng-workbuddy";
@@ -42,6 +43,7 @@ static IM_CONFIG: OnceLock<Mutex<BTreeMap<String, Value>>> = OnceLock::new();
 static WEIXIN_LOGINS: OnceLock<Mutex<BTreeMap<String, WeixinLoginSession>>> = OnceLock::new();
 static WEIXIN_MONITORS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static STOPPED_RUNS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+static HEARTBEAT_SCHEDULER_STARTED: OnceLock<()> = OnceLock::new();
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -5157,6 +5159,158 @@ fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+#[tauri::command]
+fn start_heartbeat_scheduler(app: AppHandle) -> Result<Value, String> {
+    let started = HEARTBEAT_SCHEDULER_STARTED.set(()).is_ok();
+    if started {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let epoch_seconds = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|value| value.as_secs())
+                    .unwrap_or_default();
+                let _ = app_handle.emit(
+                    "xiaoheng://heartbeat-tick",
+                    json!({
+                        "source": "tauri-backend",
+                        "epochSeconds": epoch_seconds
+                    }),
+                );
+            }
+        });
+    }
+    Ok(json!({"ok": true, "started": started}))
+}
+
+async fn ensure_browser_debugger(
+    client: &reqwest::Client,
+    work_context: &Value,
+    port: u16,
+    initial_url: Option<&str>,
+) -> Result<(), String> {
+    let version_url = format!("http://127.0.0.1:{port}/json/version");
+    if client.get(&version_url).send().await.is_ok() {
+        return Ok(());
+    }
+    let cwd = active_workspace_dir(work_context)?;
+    let profile_dir = cwd.join(".xiaoheng-browser-profile");
+    fs::create_dir_all(&profile_dir)
+        .map_err(|e| format!("failed to create browser profile dir: {e}"))?;
+    let url = initial_url.unwrap_or("about:blank");
+    let port_arg = ps_quote(&format!("--remote-debugging-port={port}"));
+    let profile_arg = ps_quote(&format!(
+        "--user-data-dir={}",
+        profile_dir.to_string_lossy()
+    ));
+    let url_arg = ps_quote(url);
+    let script = format!(
+        "$programFilesX86=${{env:ProgramFiles(x86)}}; $candidates=@((Join-Path $env:ProgramFiles 'Microsoft\\Edge\\Application\\msedge.exe'),(Join-Path $env:ProgramFiles 'Google\\Chrome\\Application\\chrome.exe'),(Join-Path $programFilesX86 'Microsoft\\Edge\\Application\\msedge.exe'),(Join-Path $programFilesX86 'Google\\Chrome\\Application\\chrome.exe')); $browser=$candidates|Where-Object{{$_ -and (Test-Path $_)}}|Select-Object -First 1; if(-not $browser){{throw 'Edge or Chrome was not found'}}; Start-Process -FilePath $browser -ArgumentList @({}, {}, '--no-first-run', '--new-window', {}); Start-Sleep -Milliseconds 900; Write-Output $browser",
+        port_arg, profile_arg, url_arg
+    );
+    let result = run_powershell_script(script, cwd).await?;
+    if result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(format!("failed to start browser debugger: {result}"))
+    }
+}
+
+async fn browser_target_ws(
+    client: &reqwest::Client,
+    port: u16,
+    url: Option<&str>,
+    create_new: bool,
+) -> Result<String, String> {
+    if create_new {
+        if let Some(target_url) = url {
+            let endpoint = format!("http://127.0.0.1:{port}/json/new?{target_url}");
+            let response = client
+                .put(&endpoint)
+                .send()
+                .await
+                .map_err(|e| format!("failed to create browser target: {e}"))?;
+            if response.status().is_success() {
+                let target: Value = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("failed to parse browser target: {e}"))?;
+                if let Some(ws) = target.get("webSocketDebuggerUrl").and_then(Value::as_str) {
+                    return Ok(ws.to_owned());
+                }
+            }
+        }
+    }
+    let targets: Vec<Value> = client
+        .get(format!("http://127.0.0.1:{port}/json"))
+        .send()
+        .await
+        .map_err(|e| format!("failed to list browser targets: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse browser targets: {e}"))?;
+    targets
+        .iter()
+        .find(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+        .and_then(|target| target.get("webSocketDebuggerUrl").and_then(Value::as_str))
+        .map(str::to_owned)
+        .ok_or_else(|| "no debuggable browser page target found".to_owned())
+}
+
+async fn cdp_command(ws_url: &str, method: &str, params: Value) -> Result<Value, String> {
+    let (mut socket, _) = connect_async(ws_url)
+        .await
+        .map_err(|e| format!("failed to connect browser websocket: {e}"))?;
+    let command = json!({
+        "id": 1,
+        "method": method,
+        "params": params
+    });
+    socket
+        .send(Message::Text(command.to_string().into()))
+        .await
+        .map_err(|e| format!("failed to send browser command: {e}"))?;
+    while let Some(message) = socket.next().await {
+        let message = message.map_err(|e| format!("failed to read browser command result: {e}"))?;
+        let Message::Text(text) = message else {
+            continue;
+        };
+        let payload: Value = serde_json::from_str(&text)
+            .map_err(|e| format!("failed to parse browser command result: {e}; body={text}"))?;
+        if payload.get("id").and_then(Value::as_i64) == Some(1) {
+            if let Some(error) = payload.get("error") {
+                return Err(format!("browser command {method} failed: {error}"));
+            }
+            return Ok(payload.get("result").cloned().unwrap_or_else(|| json!({})));
+        }
+    }
+    Err(format!("browser command {method} returned no response"))
+}
+
+fn js_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
+}
+
+async fn browser_runtime_eval(ws_url: &str, expression: String) -> Result<Value, String> {
+    let result = cdp_command(
+        ws_url,
+        "Runtime.evaluate",
+        json!({
+            "expression": expression,
+            "awaitPromise": true,
+            "returnByValue": true
+        }),
+    )
+    .await?;
+    Ok(result
+        .get("result")
+        .and_then(|value| value.get("value"))
+        .cloned()
+        .unwrap_or(result))
+}
+
 async fn browser_control(
     client: &reqwest::Client,
     args: &Value,
@@ -5171,31 +5325,145 @@ async fn browser_control(
         .get("url")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty());
+    let port = args
+        .get("port")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value < 65536)
+        .unwrap_or(9222) as u16;
     match action.as_str() {
         "open" | "navigate" => {
             let Some(url) = url else {
                 return Err("browser_control open/navigate requires url".to_owned());
             };
-            let script = format!("Start-Process {}", ps_quote(url));
-            let result = run_powershell_script(script, active_workspace_dir(work_context)?).await?;
+            ensure_browser_debugger(client, work_context, port, Some(url)).await?;
+            let ws = browser_target_ws(client, port, Some(url), true).await?;
+            let result = cdp_command(&ws, "Page.navigate", json!({"url": url})).await?;
             Ok(json!({
-                "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "ok": true,
                 "action": action,
                 "url": url,
+                "debugPort": port,
                 "detail": result
             }))
         }
         "fetch" | "extract" | "read" => {
-            let Some(url) = url else {
-                return Err("browser_control fetch/extract/read requires url".to_owned());
-            };
-            web_fetch(client, &json!({ "url": url })).await
+            ensure_browser_debugger(client, work_context, port, url).await?;
+            let ws = browser_target_ws(client, port, url, url.is_some()).await?;
+            if let Some(url) = url {
+                let _ = cdp_command(&ws, "Page.navigate", json!({"url": url})).await;
+                tokio::time::sleep(Duration::from_millis(700)).await;
+            }
+            let text = browser_runtime_eval(
+                &ws,
+                "document.body ? document.body.innerText : document.documentElement.innerText"
+                    .to_owned(),
+            )
+            .await?;
+            Ok(json!({"ok": true, "action": action, "url": url, "text": text, "debugPort": port}))
+        }
+        "screenshot" => {
+            ensure_browser_debugger(client, work_context, port, url).await?;
+            let ws = browser_target_ws(client, port, url, url.is_some()).await?;
+            if let Some(url) = url {
+                let _ = cdp_command(&ws, "Page.navigate", json!({"url": url})).await;
+                tokio::time::sleep(Duration::from_millis(900)).await;
+            }
+            let result = cdp_command(
+                &ws,
+                "Page.captureScreenshot",
+                json!({"format": "png", "captureBeyondViewport": true}),
+            )
+            .await?;
+            let data = result
+                .get("data")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "browser screenshot returned no image data".to_owned())?;
+            let filename = args
+                .get("filename")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("browser-screenshot.png");
+            let path = active_workspace_dir(work_context)?.join(safe_filename(filename));
+            let bytes = BASE64_STANDARD
+                .decode(data)
+                .map_err(|e| format!("failed to decode browser screenshot: {e}"))?;
+            fs::write(&path, bytes)
+                .map_err(|e| format!("failed to write browser screenshot: {e}"))?;
+            Ok(
+                json!({"ok": true, "action": action, "path": path.to_string_lossy(), "debugPort": port}),
+            )
+        }
+        "click" => {
+            ensure_browser_debugger(client, work_context, port, url).await?;
+            let ws = browser_target_ws(client, port, url, url.is_some()).await?;
+            let selector = args
+                .get("selector")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "browser_control click requires selector".to_owned())?;
+            let expression = format!(
+                r#"(async () => {{
+const selector = {};
+const el = document.querySelector(selector);
+if (!el) return {{ ok: false, error: "selector not found", selector }};
+el.scrollIntoView({{ block: "center", inline: "center" }});
+const rect = el.getBoundingClientRect();
+const x = rect.left + rect.width / 2;
+const y = rect.top + rect.height / 2;
+for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {{
+  el.dispatchEvent(new MouseEvent(type, {{ bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }}));
+}}
+return {{ ok: true, selector, x, y, text: el.innerText || el.value || el.getAttribute("aria-label") || "" }};
+}})()"#,
+                js_string(selector)
+            );
+            let result = browser_runtime_eval(&ws, expression).await?;
+            Ok(
+                json!({"ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false), "action": action, "result": result, "debugPort": port}),
+            )
+        }
+        "type" | "fill" => {
+            ensure_browser_debugger(client, work_context, port, url).await?;
+            let ws = browser_target_ws(client, port, url, url.is_some()).await?;
+            let selector = args
+                .get("selector")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "browser_control type/fill requires selector".to_owned())?;
+            let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
+            let append = args.get("append").and_then(Value::as_bool).unwrap_or(false);
+            let expression = format!(
+                r#"(async () => {{
+const selector = {};
+const text = {};
+const append = {};
+const el = document.querySelector(selector);
+if (!el) return {{ ok: false, error: "selector not found", selector }};
+el.scrollIntoView({{ block: "center", inline: "center" }});
+el.focus();
+if ("value" in el) {{
+  el.value = append ? String(el.value || "") + text : text;
+}} else {{
+  el.textContent = append ? String(el.textContent || "") + text : text;
+}}
+el.dispatchEvent(new InputEvent("input", {{ bubbles: true, inputType: "insertText", data: text }}));
+el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+return {{ ok: true, selector, textLength: text.length }};
+}})()"#,
+                js_string(selector),
+                js_string(text),
+                if append { "true" } else { "false" }
+            );
+            let result = browser_runtime_eval(&ws, expression).await?;
+            Ok(
+                json!({"ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false), "action": action, "result": result, "debugPort": port}),
+            )
         }
         _ => Ok(json!({
             "ok": false,
             "action": action,
-            "requires": "playwright or chrome remote-debugging runtime",
-            "error": "Built-in browser_control currently supports open/navigate/fetch/extract/read. DOM-level click/type/screenshot requires Playwright or Chrome remote debugging runtime."
+            "requires": "Edge or Chrome with DevTools remote debugging",
+            "error": "Built-in browser_control supports open, navigate, fetch/read/extract, screenshot, click(selector), and type/fill(selector,text)."
         })),
     }
 }
@@ -6355,14 +6623,17 @@ fn agent_tools() -> Value {
             "type": "function",
             "function": {
                 "name": "browser_control",
-                "description": "Open a URL in the system browser or fetch/extract public webpage text. DOM-level click/type requires a future Playwright runtime.",
+                "description": "Control Edge/Chrome through a built-in DevTools bridge: open/navigate, read page text, capture PNG screenshot, click a CSS selector, or type/fill a CSS selector.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["open", "navigate", "fetch", "extract", "read"] },
+                        "action": { "type": "string", "enum": ["open", "navigate", "fetch", "extract", "read", "screenshot", "click", "type", "fill"] },
                         "url": { "type": "string" },
                         "selector": { "type": "string" },
-                        "text": { "type": "string" }
+                        "text": { "type": "string" },
+                        "filename": { "type": "string" },
+                        "append": { "type": "boolean" },
+                        "port": { "type": "integer", "description": "Optional DevTools port. Default 9222." }
                     },
                     "required": ["action"]
                 }
@@ -6412,6 +6683,7 @@ fn compact_agent_tools() -> Value {
         {"type":"function","function":{"name":"read_attachment_text","description":"Read UTF-8 text from a user-uploaded attachment in current conversation by attachmentId.","parameters":{"type":"object","properties":{"attachmentId":{"type":"string"},"path":{"type":"string"}}}}},
         {"type":"function","function":{"name":"list_files","description":"List files in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"directory":{"type":"string"}}}}},
         {"type":"function","function":{"name":"shell_exec","description":"Run PowerShell or CMD. Requires current conversation permission mode Full Access.","parameters":{"type":"object","properties":{"command":{"type":"string"},"shell":{"type":"string","enum":["powershell","cmd"]},"cwd":{"type":"string"}},"required":["command"]}}},
+        {"type":"function","function":{"name":"browser_control","description":"Control Edge/Chrome via DevTools: open/navigate/read/screenshot/click selector/type selector.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["open","navigate","fetch","extract","read","screenshot","click","type","fill"]},"url":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string"},"filename":{"type":"string"},"append":{"type":"boolean"},"port":{"type":"integer"}},"required":["action"]}}},
         {"type":"function","function":{"name":"web_fetch","description":"Fetch URL text.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
         {"type":"function","function":{"name":"news_to_excel","description":"Fetch news and save xlsx.","parameters":{"type":"object","properties":{"sourceName":{"type":"string"},"url":{"type":"string"},"limit":{"type":"integer","minimum":3,"maximum":50},"filename":{"type":"string"}},"required":["sourceName","url","limit","filename"]}}},
         {"type":"function","function":{"name":"skill_market_search","description":"Search skill markets.","parameters":{"type":"object","properties":{"source":{"type":"string","enum":["harmony","clawhub","skillhub"]},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"}},"required":["source","query"]}}},
@@ -6529,6 +6801,7 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
     }
     if asks_web {
         names.insert("web_fetch");
+        names.insert("browser_control");
     }
     if asks_workspace {
         names.extend(["team_roster", "task_plan_update", "work_pool_update"]);
@@ -6556,6 +6829,7 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
         ]);
     }
     if asks_desktop {
+        names.insert("browser_control");
         names.insert("computer_control");
     }
 
@@ -7630,6 +7904,7 @@ pub fn run() {
             memory_file_read,
             memory_file_search,
             memory_file_append,
+            start_heartbeat_scheduler,
             register_attachment,
             save_api_key,
             has_api_key,
