@@ -295,6 +295,14 @@ export const defaultState: AppState = {
     heartbeatLastRun: "",
     memoryFileEnabled: true,
     memoryEmbeddingEnabled: false,
-    memoryEmbeddingModel: ""
+    memoryEmbeddingModel: "",
+    objectStorageEnabled: true,
+    objectStorageEndpoint: "http://61.150.31.150:8788",
+    objectStorageUploadEndpoint: "http://192.168.11.29:8788",
+    objectStorageBucket: "workbuddy",
+    objectStorageAccessKey: "workbuddy-client",
+    objectStorageSecretKey: "CN74np5NxcY7LlEYRGGdXvUElTBfF5192qRMzI52",
+    objectStorageRegion: "us-east-1",
+    objectStorageLinkExpiryHours: 24
   }
 };

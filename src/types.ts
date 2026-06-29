@@ -184,6 +184,14 @@ export interface AppSettings {
   memoryFileEnabled: boolean;
   memoryEmbeddingEnabled: boolean;
   memoryEmbeddingModel: string;
+  objectStorageEnabled: boolean;
+  objectStorageEndpoint: string;
+  objectStorageUploadEndpoint: string;
+  objectStorageBucket: string;
+  objectStorageAccessKey: string;
+  objectStorageSecretKey: string;
+  objectStorageRegion: string;
+  objectStorageLinkExpiryHours: number;
 }
 
 export interface AppState {

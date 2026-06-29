@@ -1,6 +1,9 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use keyring::Entry;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -36,6 +39,12 @@ const WEIXIN_ILINK_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 const WEIXIN_ILINK_APP_ID: &str = "bot";
 const WEIXIN_ILINK_CLIENT_VERSION: &str = "132099";
 const WEIXIN_DEFAULT_BOT_TYPE: &str = "3";
+const DEFAULT_OBJECT_STORAGE_ENDPOINT: &str = "http://61.150.31.150:8788";
+const DEFAULT_OBJECT_STORAGE_UPLOAD_ENDPOINT: &str = "http://192.168.11.29:8788";
+const DEFAULT_OBJECT_STORAGE_BUCKET: &str = "workbuddy";
+const DEFAULT_OBJECT_STORAGE_ACCESS_KEY: &str = "workbuddy-client";
+const DEFAULT_OBJECT_STORAGE_SECRET_KEY: &str = "CN74np5NxcY7LlEYRGGdXvUElTBfF5192qRMzI52";
+const DEFAULT_OBJECT_STORAGE_REGION: &str = "us-east-1";
 
 static API_KEY_CACHE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 static IM_STATE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
@@ -44,6 +53,9 @@ static WEIXIN_LOGINS: OnceLock<Mutex<BTreeMap<String, WeixinLoginSession>>> = On
 static WEIXIN_MONITORS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static STOPPED_RUNS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static HEARTBEAT_SCHEDULER_STARTED: OnceLock<()> = OnceLock::new();
+static WINDOWS_PATH_RE: OnceLock<Regex> = OnceLock::new();
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -639,6 +651,18 @@ struct WeixinLoginSession {
 struct SkillLocatorInstallRequest {
     locator: String,
     name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectStorageConfig {
+    enabled: bool,
+    endpoint: String,
+    upload_endpoint: String,
+    bucket: String,
+    access_key: String,
+    secret_key: String,
+    region: String,
+    link_expiry_hours: u64,
 }
 
 fn now_string() -> String {
@@ -3999,6 +4023,7 @@ async fn weixin_send_text(
     to_user_id: String,
     content: String,
     context_token: Option<String>,
+    settings: Option<Value>,
 ) -> Result<Value, String> {
     let account = weixin_account(&app).ok_or_else(|| "WeChat is not connected.".to_owned())?;
     let token = account["botToken"].as_str().unwrap_or_default();
@@ -4013,6 +4038,7 @@ async fn weixin_send_text(
         .map_err(|e| e.to_string())?;
     let url = format!("{base_url}/ilink/bot/sendmessage");
     let client_id = weixin_client_id();
+    let content = decorate_im_content_with_file_links("wechat", &content, settings.as_ref()).await;
     let payload = json!({
         "msg": {
             "from_user_id": "",
@@ -4792,6 +4818,349 @@ fn mime_for_path(path: &Path) -> String {
         _ => "application/octet-stream",
     }
     .to_owned()
+}
+
+fn object_setting_string(settings: Option<&Value>, key: &str, default: &str) -> String {
+    settings
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default)
+        .to_owned()
+}
+
+fn object_setting_bool(settings: Option<&Value>, key: &str, default: bool) -> bool {
+    settings
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn object_setting_u64(settings: Option<&Value>, key: &str, default: u64) -> u64 {
+    settings
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_u64)
+        .unwrap_or(default)
+}
+
+fn object_storage_config(settings: Option<&Value>) -> ObjectStorageConfig {
+    ObjectStorageConfig {
+        enabled: object_setting_bool(settings, "objectStorageEnabled", true),
+        endpoint: object_setting_string(
+            settings,
+            "objectStorageEndpoint",
+            DEFAULT_OBJECT_STORAGE_ENDPOINT,
+        ),
+        upload_endpoint: object_setting_string(
+            settings,
+            "objectStorageUploadEndpoint",
+            DEFAULT_OBJECT_STORAGE_UPLOAD_ENDPOINT,
+        ),
+        bucket: object_setting_string(
+            settings,
+            "objectStorageBucket",
+            DEFAULT_OBJECT_STORAGE_BUCKET,
+        ),
+        access_key: object_setting_string(
+            settings,
+            "objectStorageAccessKey",
+            DEFAULT_OBJECT_STORAGE_ACCESS_KEY,
+        ),
+        secret_key: object_setting_string(
+            settings,
+            "objectStorageSecretKey",
+            DEFAULT_OBJECT_STORAGE_SECRET_KEY,
+        ),
+        region: object_setting_string(
+            settings,
+            "objectStorageRegion",
+            DEFAULT_OBJECT_STORAGE_REGION,
+        ),
+        link_expiry_hours: object_setting_u64(settings, "objectStorageLinkExpiryHours", 24)
+            .clamp(1, 24 * 30),
+    }
+}
+
+fn bytes_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
+fn hmac_sha256(key: &[u8], value: &str) -> Result<Vec<u8>, String> {
+    let mut mac = HmacSha256::new_from_slice(key).map_err(|e| e.to_string())?;
+    mac.update(value.as_bytes());
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn aws_signing_key(secret: &str, date: &str, region: &str) -> Result<Vec<u8>, String> {
+    let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), date)?;
+    let k_region = hmac_sha256(&k_date, region)?;
+    let k_service = hmac_sha256(&k_region, "s3")?;
+    hmac_sha256(&k_service, "aws4_request")
+}
+
+fn aws_uri_encode(value: &str, encode_slash: bool) -> String {
+    let mut output = String::new();
+    for byte in value.as_bytes() {
+        let ch = *byte as char;
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~') {
+            output.push(ch);
+        } else if ch == '/' && !encode_slash {
+            output.push('/');
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
+fn endpoint_host(endpoint: &str) -> Result<String, String> {
+    let url = reqwest::Url::parse(endpoint).map_err(|e| format!("invalid MinIO endpoint: {e}"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| "MinIO endpoint is missing host".to_owned())?;
+    Ok(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
+}
+
+fn object_url(endpoint: &str, bucket: &str, key: &str) -> Result<(String, String, String), String> {
+    let endpoint = endpoint.trim_end_matches('/');
+    reqwest::Url::parse(endpoint).map_err(|e| format!("invalid MinIO endpoint: {e}"))?;
+    let encoded_key = aws_uri_encode(key, false);
+    let canonical_uri = format!("/{}/{}", aws_uri_encode(bucket, true), encoded_key);
+    Ok((
+        format!("{endpoint}{canonical_uri}"),
+        canonical_uri,
+        endpoint_host(endpoint)?,
+    ))
+}
+
+fn canonical_query(params: &[(String, String)]) -> String {
+    let mut encoded = params
+        .iter()
+        .map(|(key, value)| (aws_uri_encode(key, true), aws_uri_encode(value, true)))
+        .collect::<Vec<_>>();
+    encoded.sort();
+    encoded
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn signed_s3_authorization(
+    method: &str,
+    canonical_uri: &str,
+    canonical_query: &str,
+    host: &str,
+    payload_hash: &str,
+    config: &ObjectStorageConfig,
+    amz_date: &str,
+    date_stamp: &str,
+) -> Result<String, String> {
+    let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", config.region);
+    let canonical_headers =
+        format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
+    let signed_headers = "host;x-amz-content-sha256;x-amz-date";
+    let canonical_request = format!(
+        "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    );
+    let request_hash = bytes_hex(&Sha256::digest(canonical_request.as_bytes()));
+    let string_to_sign =
+        format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{request_hash}");
+    let signing_key = aws_signing_key(&config.secret_key, date_stamp, &config.region)?;
+    let signature = bytes_hex(&hmac_sha256(&signing_key, &string_to_sign)?);
+    Ok(format!(
+        "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
+        config.access_key
+    ))
+}
+
+async fn minio_put_object(
+    client: &reqwest::Client,
+    config: &ObjectStorageConfig,
+    key: &str,
+    bytes: Vec<u8>,
+    mime: &str,
+) -> Result<(), String> {
+    let (url, canonical_uri, host) = object_url(&config.upload_endpoint, &config.bucket, key)?;
+    let now = Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date_stamp = now.format("%Y%m%d").to_string();
+    let payload_hash = bytes_hex(&Sha256::digest(&bytes));
+    let authorization = signed_s3_authorization(
+        "PUT",
+        &canonical_uri,
+        "",
+        &host,
+        &payload_hash,
+        config,
+        &amz_date,
+        &date_stamp,
+    )?;
+    let response = client
+        .put(url)
+        .header("authorization", authorization)
+        .header("x-amz-date", amz_date)
+        .header("x-amz-content-sha256", payload_hash)
+        .header("content-type", mime)
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| format!("MinIO upload request failed: {e}"))?;
+    let status = response.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("MinIO upload returned {status}: {body}"))
+    }
+}
+
+fn minio_presigned_get_url(config: &ObjectStorageConfig, key: &str) -> Result<String, String> {
+    let (url, canonical_uri, host) = object_url(&config.endpoint, &config.bucket, key)?;
+    let now = Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date_stamp = now.format("%Y%m%d").to_string();
+    let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", config.region);
+    let expires = (config.link_expiry_hours * 3600).to_string();
+    let params = vec![
+        ("X-Amz-Algorithm".to_owned(), "AWS4-HMAC-SHA256".to_owned()),
+        (
+            "X-Amz-Credential".to_owned(),
+            format!("{}/{}", config.access_key, credential_scope),
+        ),
+        ("X-Amz-Date".to_owned(), amz_date.clone()),
+        ("X-Amz-Expires".to_owned(), expires),
+        ("X-Amz-SignedHeaders".to_owned(), "host".to_owned()),
+    ];
+    let query = canonical_query(&params);
+    let canonical_request =
+        format!("GET\n{canonical_uri}\n{query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD");
+    let request_hash = bytes_hex(&Sha256::digest(canonical_request.as_bytes()));
+    let string_to_sign =
+        format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{request_hash}");
+    let signing_key = aws_signing_key(&config.secret_key, &date_stamp, &config.region)?;
+    let signature = bytes_hex(&hmac_sha256(&signing_key, &string_to_sign)?);
+    Ok(format!("{url}?{query}&X-Amz-Signature={signature}"))
+}
+
+fn trim_path_token(value: &str) -> String {
+    value
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '`' | '\''
+                        | '"'
+                        | '>'
+                        | '<'
+                        | ')'
+                        | ']'
+                        | '}'
+                        | ','
+                        | ';'
+                        | '，'
+                        | '。'
+                        | '；'
+                        | '）'
+                        | '】'
+                )
+        })
+        .to_owned()
+}
+
+fn extract_windows_file_paths(content: &str) -> Vec<PathBuf> {
+    let pattern = WINDOWS_PATH_RE.get_or_init(|| {
+        Regex::new(r#"(?i)[A-Z]:\\[^\r\n`"'<>|]+?\.[A-Za-z0-9]{1,12}"#).expect("valid path regex")
+    });
+    let mut seen = BTreeSet::new();
+    let mut paths = Vec::new();
+    for found in pattern.find_iter(content) {
+        let cleaned = trim_path_token(found.as_str());
+        let path = PathBuf::from(&cleaned);
+        if path.is_file() {
+            let key = path.to_string_lossy().to_string();
+            if seen.insert(key) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+async fn decorate_im_content_with_file_links(
+    channel: &str,
+    content: &str,
+    settings: Option<&Value>,
+) -> String {
+    let config = object_storage_config(settings);
+    if !config.enabled {
+        return content.to_owned();
+    }
+    let paths = extract_windows_file_paths(content);
+    if paths.is_empty() {
+        return content.to_owned();
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(value) => value,
+        Err(error) => return format!("{content}\n\n[文件链接生成失败] HTTP client: {error}"),
+    };
+    let now = Utc::now();
+    let yyyy = now.format("%Y").to_string();
+    let mm = now.format("%m").to_string();
+    let mut cards = Vec::new();
+    for path in paths {
+        let bytes = match fs::read(&path) {
+            Ok(value) => value,
+            Err(error) => {
+                cards.push(format!(
+                    "文件读取失败：{} ({error})",
+                    path.to_string_lossy()
+                ));
+                continue;
+            }
+        };
+        let sha256 = bytes_hex(&Sha256::digest(&bytes));
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(safe_filename)
+            .unwrap_or_else(|| "workbuddy-file".to_owned());
+        let mime = mime_for_path(&path);
+        let key = format!("workbuddy/{channel}/{yyyy}/{mm}/{sha256}/{name}");
+        match minio_put_object(&client, &config, &key, bytes, &mime).await {
+            Ok(()) => match minio_presigned_get_url(&config, &key) {
+                Ok(url) => cards.push(format!(
+                    "文件：{name}\n类型：{mime}\n大小：{} bytes\n链接：{url}\n有效期：{} 小时",
+                    fs::metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or_default(),
+                    config.link_expiry_hours
+                )),
+                Err(error) => cards.push(format!("文件链接生成失败：{name} ({error})")),
+            },
+            Err(error) => cards.push(format!("文件上传失败：{name} ({error})")),
+        }
+    }
+    if cards.is_empty() {
+        content.to_owned()
+    } else {
+        format!(
+            "{content}\n\n---\nWorkBuddy 文件卡片\n{}",
+            cards.join("\n\n")
+        )
+    }
 }
 
 #[tauri::command]

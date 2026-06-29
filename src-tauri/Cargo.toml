@@ -1,6 +1,6 @@
 [package]
 name = "xiaoheng-workbuddy"
-version = "0.6.29-alpha.0"
+version = "0.6.30-alpha.0"
 description = "Harmony Xiaoheng AI desktop workbench"
 authors = ["Harmony"]
 edition = "2021"
@@ -31,6 +31,9 @@ tokio-tungstenite = { version = "0.28", default-features = false, features = ["c
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"
 
 [profile.release]
 codegen-units = 1

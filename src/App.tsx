@@ -527,7 +527,7 @@ function App() {
         setRuns: setChatRuns,
         conversationId,
         prompt: inbound.content,
-        onDone: (content) => sendWeixinText(inbound.fromUserId, content, inbound.contextToken ?? existingSession?.contextToken)
+        onDone: (content) => sendWeixinText(inbound.fromUserId, content, inbound.contextToken ?? existingSession?.contextToken, nextState.settings)
       }).catch((error) => {
         setNotice(`微信消息处理失败：${String(error)}`);
         window.setTimeout(() => setNotice(""), 3000);
@@ -2373,7 +2373,7 @@ function ImPage({
       setRuns,
       conversationId: activeConversation.id,
       prompt,
-      onDone: (content) => sendWeixinText(activeSession.externalUserId, content, activeSession.contextToken)
+      onDone: (content) => sendWeixinText(activeSession.externalUserId, content, activeSession.contextToken, state.settings)
     });
   };
 
@@ -2395,7 +2395,7 @@ function ImPage({
       tasks: current.tasks.map((task) => task.conversationId === activeConversation.id && ["todo", "doing", "review", "paused"].includes(task.status) ? { ...task, status: "stopped" } : task),
       conversations: current.conversations.map((item) => item.id === activeConversation.id ? { ...item, messages: [...item.messages, assistant], updatedAt: new Date().toISOString() } : item)
     }));
-    await sendWeixinText(activeSession.externalUserId, assistant.content, activeSession.contextToken);
+    await sendWeixinText(activeSession.externalUserId, assistant.content, activeSession.contextToken, state.settings);
   };
 
   return (
@@ -2755,6 +2755,22 @@ function SettingsPage({ state, setState }: { state: AppState; setState: React.Di
           <label className="check-line"><input type="checkbox" checked={draft.browserBackground} onChange={(event) => update("browserBackground", event.target.checked)} />浏览器后台运行</label>
           <label>界面主题<select value={draft.theme} onChange={(event) => update("theme", event.target.value)}><option value="light">明亮</option><option value="dark">深色</option></select></label>
           <div className="setting-line"><div><strong>本地优先</strong><span>任务、记忆和配置优先保存在本机。</span></div><span className="safe-badge"><ShieldCheck size={14} />已启用</span></div>
+        </section>
+        <section className="panel settings-card settings-span">
+          <div className="settings-title"><Network size={22} /><div><h2>IM 文件分发</h2><p>将 Agent 生成的本地文件上传到 MinIO，并在 IM 频道中发送短期签名下载链接。</p></div></div>
+          <div className="settings-3col">
+            <label className="check-line"><input type="checkbox" checked={draft.objectStorageEnabled} onChange={(event) => update("objectStorageEnabled", event.target.checked)} />启用对象存储短签链接</label>
+            <label>链接有效期（小时）<input type="number" min={1} max={720} value={draft.objectStorageLinkExpiryHours} onChange={(event) => update("objectStorageLinkExpiryHours", Number(event.target.value))} /></label>
+            <label>Region<input value={draft.objectStorageRegion} onChange={(event) => update("objectStorageRegion", event.target.value)} /></label>
+          </div>
+          <div className="settings-2col">
+            <label>公网下载端点<input value={draft.objectStorageEndpoint} onChange={(event) => update("objectStorageEndpoint", event.target.value)} placeholder="http://61.150.31.150:8788" /></label>
+            <label>上传端点<input value={draft.objectStorageUploadEndpoint} onChange={(event) => update("objectStorageUploadEndpoint", event.target.value)} placeholder="http://192.168.11.29:8788" /></label>
+            <label>Bucket<input value={draft.objectStorageBucket} onChange={(event) => update("objectStorageBucket", event.target.value)} /></label>
+            <label>Access Key<input value={draft.objectStorageAccessKey} onChange={(event) => update("objectStorageAccessKey", event.target.value)} /></label>
+            <label>Secret Key<input type="password" value={draft.objectStorageSecretKey} onChange={(event) => update("objectStorageSecretKey", event.target.value)} /></label>
+          </div>
+          <p className="form-hint">路径规则：{"workbuddy/{channel}/{yyyy}/{mm}/{sha256}/{filename}"}。Bucket 保持私有，IM 只发送文件卡片和短签链接。</p>
         </section>
         <section className="panel settings-card settings-span">
           <div className="settings-title"><Activity size={22} /><div><h2>Heartbeat 心跳</h2><p>参考 OpenClaw Gateway 的 Heartbeat 思路，按固定间隔触发一次轻量巡检，用于自动工作、自动化推进、暂停任务恢复和轮询。</p></div></div>

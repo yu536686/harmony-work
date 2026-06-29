@@ -67,7 +67,15 @@ function mergeState(saved: Partial<AppState>): AppState {
       heartbeatLastRun: saved.settings?.heartbeatLastRun ?? defaultState.settings.heartbeatLastRun,
       memoryFileEnabled: saved.settings?.memoryFileEnabled ?? defaultState.settings.memoryFileEnabled,
       memoryEmbeddingEnabled: saved.settings?.memoryEmbeddingEnabled ?? defaultState.settings.memoryEmbeddingEnabled,
-      memoryEmbeddingModel: saved.settings?.memoryEmbeddingModel ?? defaultState.settings.memoryEmbeddingModel
+      memoryEmbeddingModel: saved.settings?.memoryEmbeddingModel ?? defaultState.settings.memoryEmbeddingModel,
+      objectStorageEnabled: saved.settings?.objectStorageEnabled ?? defaultState.settings.objectStorageEnabled,
+      objectStorageEndpoint: saved.settings?.objectStorageEndpoint ?? defaultState.settings.objectStorageEndpoint,
+      objectStorageUploadEndpoint: saved.settings?.objectStorageUploadEndpoint ?? defaultState.settings.objectStorageUploadEndpoint,
+      objectStorageBucket: saved.settings?.objectStorageBucket ?? defaultState.settings.objectStorageBucket,
+      objectStorageAccessKey: saved.settings?.objectStorageAccessKey ?? defaultState.settings.objectStorageAccessKey,
+      objectStorageSecretKey: saved.settings?.objectStorageSecretKey ?? defaultState.settings.objectStorageSecretKey,
+      objectStorageRegion: saved.settings?.objectStorageRegion ?? defaultState.settings.objectStorageRegion,
+      objectStorageLinkExpiryHours: saved.settings?.objectStorageLinkExpiryHours ?? defaultState.settings.objectStorageLinkExpiryHours
     },
     agents: mergedAgents,
     offices: savedOffices.length ? savedOffices : structuredClone(defaultState.offices),
@@ -378,9 +386,9 @@ export async function startWeixinMonitor(): Promise<void> {
   await invoke("weixin_monitor_start");
 }
 
-export async function sendWeixinText(toUserId: string, content: string, contextToken?: string): Promise<void> {
+export async function sendWeixinText(toUserId: string, content: string, contextToken?: string, settings?: AppSettings): Promise<void> {
   if (!inTauri()) return;
-  await invoke("weixin_send_text", { toUserId, content, contextToken });
+  await invoke("weixin_send_text", { toUserId, content, contextToken, settings });
 }
 
 export async function trayNotifyAttention(title: string): Promise<void> {
