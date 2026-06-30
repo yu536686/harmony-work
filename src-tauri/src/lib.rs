@@ -392,6 +392,25 @@ fn initial_openai_messages(system: &str, messages: &[ChatMessage]) -> Vec<OpenAi
     payload_messages
 }
 
+fn initial_openai_messages_for_effective_task(
+    system: &str,
+    messages: &[ChatMessage],
+    effective_prompt: &str,
+) -> Vec<OpenAiMessage> {
+    let mut payload_messages = initial_openai_messages(system, messages);
+    let latest = latest_user_prompt_from_messages(messages);
+    if is_continue_prompt(&latest) && latest.trim() != effective_prompt.trim() {
+        if let Some(message) = payload_messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.role == "user")
+        {
+            message.content = Some(effective_prompt.to_owned());
+        }
+    }
+    payload_messages
+}
+
 fn compact_tool_call_for_model(call: &Value) -> Value {
     let mut compact = call.clone();
     if let Some(arguments) = compact["function"]["arguments"].as_str() {
@@ -1237,7 +1256,7 @@ fn artifact_delivery_correction_message(prompt: &str, answer: &str) -> OpenAiMes
             "Gateway delivery validation failed. The user request requires {}, but the tool history has not verified such an artifact yet.\n\
 Original user request: {}\n\
 Previous assistant reply summary: {}\n\
-Continue the same task now. Do not ask whether to continue. Do not report completion until a tool has created or located the requested output file and verified exists=true plus byteSize/actualByteSize > 0. If source data is large or tool output is truncated, use structured tools, scripts, persisted output paths, or bounded line reads; truncation is not a reason to stop.",
+Continue the same task now. Do not ask whether to continue. Do not report completion until a tool has created or located the requested output file and verified exists=true plus byteSize/actualByteSize > 0. If source data is large or tool output is truncated, use structured tools, scripts, persisted output paths, or bounded line reads; truncation is not a reason to stop. For inventory/export/report tasks, treat source folders as read-only unless the user explicitly asked to move, delete, rename, clean, archive, or reorganize files.",
             contract.describe(),
             truncate_chars(prompt.trim(), 800),
             truncate_chars(answer.trim(), 800)
@@ -1252,6 +1271,16 @@ fn blocked_unverified_execution_answer(prompt: &str, answer: &str) -> String {
         "Gateway 已拦截本轮回复：这条请求需要真实执行，但模型连续没有调用工具。\n\n用户请求：{}\n\n被拦截的模型回复摘要：{}\n\n请重试，或切换到更稳定支持 tool_calls 的模型；WorkBuddy 不会把未执行的说明当作完成结果。",
         truncate_chars(prompt.trim(), 500),
         truncate_chars(answer.trim(), 500)
+    )
+}
+
+fn blocked_unverified_artifact_answer(prompt: &str, answer: &str) -> String {
+    let contract = artifact_contract_from_prompt(prompt);
+    format!(
+        "本次任务未交付：用户请求需要{}，但执行记录里没有验证到匹配的非空文件。\n\n我已经阻止模型把中间过程或口头说明当成完成结果。请重新运行该任务，或切换到更稳定的模型后重试；WorkBuddy 会继续要求创建并验证真实交付物后才允许标记完成。\n\n用户请求摘要：{}\n\n最后一次模型回复摘要：{}",
+        contract.describe(),
+        truncate_chars(prompt.trim(), 500),
+        truncate_chars(strip_hidden_agent_markers(answer).trim(), 500)
     )
 }
 
@@ -2273,6 +2302,22 @@ fn is_continue_prompt(prompt: &str) -> bool {
 }
 
 fn is_meta_error_analysis_prompt(prompt: &str) -> bool {
+    let normalized = prompt.to_lowercase();
+    if normalized.contains("分析一下为什么失败")
+        || normalized.contains("为什么失败")
+        || ((normalized.contains("失败")
+            || normalized.contains("报错")
+            || normalized.contains("错误")
+            || normalized.contains("error")
+            || normalized.contains("fail"))
+            && (normalized.contains("分析")
+                || normalized.contains("原因")
+                || normalized.contains("为什么")
+                || normalized.contains("怎么回事")
+                || normalized.contains("why")))
+    {
+        return true;
+    }
     let compact = compact_prompt_text(prompt);
     (compact.contains("报错") || compact.contains("错误") || compact.contains("error"))
         && (compact.contains("分析")
@@ -2280,6 +2325,43 @@ fn is_meta_error_analysis_prompt(prompt: &str) -> bool {
             || compact.contains("什么原因")
             || compact.contains("为什么")
             || compact.contains("怎么回事"))
+}
+
+fn prompt_explicitly_allows_source_mutation(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    lower.contains("move")
+        || lower.contains("rename")
+        || lower.contains("delete")
+        || lower.contains("remove")
+        || lower.contains("clean")
+        || lower.contains("archive")
+        || prompt.contains("移动")
+        || prompt.contains("搬到")
+        || prompt.contains("整理到")
+        || prompt.contains("重命名")
+        || prompt.contains("改名")
+        || prompt.contains("删除")
+        || prompt.contains("清理")
+        || prompt.contains("归档")
+        || prompt.contains("分类到文件夹")
+}
+
+fn prompt_is_readonly_inventory_or_export(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    (lower.contains("count")
+        || lower.contains("scan")
+        || lower.contains("list")
+        || lower.contains("stat")
+        || lower.contains("export")
+        || lower.contains("excel")
+        || lower.contains("xlsx")
+        || prompt.contains("统计")
+        || prompt.contains("列出")
+        || prompt.contains("清单")
+        || prompt.contains("整理成")
+        || prompt.contains("生成")
+        || prompt.contains("保存"))
+        && !prompt_explicitly_allows_source_mutation(prompt)
 }
 
 fn is_actionable_resume_source(prompt: &str) -> bool {
@@ -2720,6 +2802,7 @@ fn concise_gateway_execution_system(work_context: &Value, latest_prompt: &str) -
 工作方式：\n\
 1. 如果需要工具，先在 assistant content 中用 1 句话确认收到任务，并列出 3-5 个简短步骤，然后同时发出最少必要工具调用。\n\
 2. 文件制品任务应像 OpenClaw 一样执行：确认目标路径/环境 -> 一次性写完整脚本或文件 -> 执行 -> 验证输出 -> 最终汇报。\n\
+2b. For inventory/statistics/export/report tasks, source folders are read-only. Do not move, delete, rename, copy, mkdir, archive, or reorganize source files unless the user explicitly asks for that structural change. Only write the requested output artifact to Desktop/workspace/explicit output path.\n\
 3. 不要把大纲、分块阅读或询问是否继续当作交付；能一次性生成就一次性生成。\n\
 4. 简单聊天不调用工具；只有真实文件、Shell、网页、技能读取、项目状态变更才调用工具。\n\
 5. 普通问答不要创建任务中心 todo；但用户明确要求调度、分配、分别执行、多人协作或任务空间可视化时，必须同步任务中心和人员工作状态。\n\
@@ -2942,6 +3025,56 @@ fn validate_shell_path_anchors(
     Err(format!(
         "PATH_ANCHOR_MISMATCH: latest user request specified path anchor(s): {anchor_list}; this shell command targets {target_list}. Rewrite the command to use the user-specified path first, or ask for clarification."
     ))
+}
+
+fn shell_command_mutates_file_structure(command: &str) -> bool {
+    let lower = command.to_lowercase();
+    let structural_terms = [
+        "move-item",
+        "remove-item",
+        "rename-item",
+        "copy-item",
+        "new-item -itemtype directory",
+        "mkdir ",
+        "md ",
+        " rmdir ",
+        " rd ",
+        " del ",
+        " erase ",
+        " ren ",
+        " rename ",
+        " move ",
+        " robocopy ",
+    ];
+    structural_terms.iter().any(|term| lower.contains(term))
+        || lower.lines().any(|line| {
+            let trimmed = line.trim_start().to_lowercase();
+            [
+                "move ", "del ", "erase ", "ren ", "rename ", "rmdir ", "rd ", "mkdir ", "md ",
+            ]
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+        })
+}
+
+fn validate_shell_side_effects(
+    command: &str,
+    work_context: &Value,
+    effective_prompt: Option<&str>,
+) -> Result<(), String> {
+    let prompt = effective_prompt
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| latest_user_prompt_from_context(work_context));
+    if prompt_is_readonly_inventory_or_export(&prompt)
+        && shell_command_mutates_file_structure(command)
+    {
+        return Err(
+            "SIDE_EFFECT_GUARD: The current user request is a read-only inventory/export task. Do not move, delete, rename, copy, mkdir, or reorganize source files unless the user explicitly asks for that structural change. Use scan/list/read tools and write only the requested output artifact."
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 fn resolve_tool_path(path: PathBuf, work_context: &Value) -> Result<PathBuf, String> {
@@ -6457,7 +6590,12 @@ fn run_shell_command_blocking(
     })
 }
 
-async fn shell_exec(app: &AppHandle, args: &Value, work_context: &Value) -> Result<Value, String> {
+async fn shell_exec(
+    app: &AppHandle,
+    args: &Value,
+    work_context: &Value,
+    effective_prompt: Option<&str>,
+) -> Result<Value, String> {
     if setting_bool(work_context, "confirmShell", true) {
         return Err(permission_required_message("Shell 命令执行"));
     }
@@ -6501,6 +6639,7 @@ async fn shell_exec(app: &AppHandle, args: &Value, work_context: &Value) -> Resu
         .unwrap_or(active_workspace_dir(work_context)?);
     let cwd = resolve_tool_path(cwd, work_context)?;
     validate_shell_path_anchors(&command, &cwd, work_context)?;
+    validate_shell_side_effects(&command, work_context, effective_prompt)?;
     fs::create_dir_all(&cwd).map_err(|e| format!("failed to create cwd: {e}"))?;
     let command_for_status = command.clone();
     let shell_for_result = shell.clone();
@@ -8365,6 +8504,7 @@ async fn execute_tool(
     app: &AppHandle,
     client: &reqwest::Client,
     work_context: &Value,
+    effective_prompt: &str,
     name: &str,
     args: &Value,
 ) -> Value {
@@ -8413,7 +8553,7 @@ async fn execute_tool(
         "scan_files" => scan_files(app, args, work_context),
         "read_attachment_text" => read_attachment_text(args, work_context),
         "list_files" => list_files(args, work_context),
-        "shell_exec" => shell_exec(app, args, work_context).await,
+        "shell_exec" => shell_exec(app, args, work_context, Some(effective_prompt)).await,
         "browser_control" => browser_control(client, args, work_context).await,
         "computer_control" => computer_control(args, work_context).await,
         "im_channel_status" => Ok(im_channel_status_tool()),
@@ -8446,8 +8586,9 @@ async fn complete_openai_chat(
     let mut run_todos: Vec<Value> = Vec::new();
     let mut tool_steps: Vec<Value> = Vec::new();
     let mut repeat_calls: BTreeMap<String, u32> = BTreeMap::new();
-    let mut payload_messages = initial_openai_messages(system, messages);
     let latest_prompt = effective_user_prompt_from_messages(messages);
+    let mut payload_messages =
+        initial_openai_messages_for_effective_task(system, messages, &latest_prompt);
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
     let mut forced_artifact_corrections = 0u32;
@@ -8582,6 +8723,7 @@ async fn complete_openai_chat(
                     ));
                     continue;
                 }
+                return Ok(blocked_unverified_artifact_answer(&latest_prompt, &answer));
             }
             let answer = guard_completion_for_prompt(&latest_prompt, &answer, &tool_steps);
             return Ok(append_hidden_updates(
@@ -8634,7 +8776,7 @@ async fn complete_openai_chat(
                     "error": "Repeated identical tool call suppressed by WorkBuddy soft fence. Stop repeating this tool call; summarize current progress or choose a different next action."
                 })
             } else {
-                execute_tool(app, client, work_context, name, &args).await
+                execute_tool(app, client, work_context, &latest_prompt, name, &args).await
             };
             if mutates_tool_observable_state(name, &result) {
                 repeat_calls.clear();
@@ -8731,9 +8873,10 @@ async fn complete_openai_chat_stream(
     let mut run_todos: Vec<Value> = Vec::new();
     let mut tool_steps: Vec<Value> = Vec::new();
     let mut final_content = String::new();
-    let mut payload_messages = initial_openai_messages(system, messages);
     let mut repeat_calls: BTreeMap<String, u32> = BTreeMap::new();
     let latest_prompt = effective_user_prompt_from_messages(messages);
+    let mut payload_messages =
+        initial_openai_messages_for_effective_task(system, messages, &latest_prompt);
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
     let mut forced_artifact_corrections = 0u32;
@@ -9113,6 +9256,20 @@ async fn complete_openai_chat_stream(
                     final_content.clear();
                     continue;
                 }
+                emit_stream(&app, &run_id, "content_reset", json!({"content": ""}));
+                emit_stream(
+                    &app,
+                    &run_id,
+                    "done",
+                    json!({
+                        "content": blocked_unverified_artifact_answer(&latest_prompt, &final_content),
+                        "tasks": task_updates,
+                        "workPoolUpdates": work_pool_updates,
+                        "todos": run_todos,
+                        "toolSteps": tool_steps
+                    }),
+                );
+                return Ok(());
             }
             emit_stream(
                 &app,
@@ -9170,7 +9327,7 @@ async fn complete_openai_chat_stream(
                     "error": "Repeated identical tool call suppressed by WorkBuddy soft fence. Stop repeating this tool call; summarize current progress or choose a different next action."
                 })
             } else {
-                execute_tool(&app, client, work_context, name, &args).await
+                execute_tool(&app, client, work_context, &latest_prompt, name, &args).await
             };
             if mutates_tool_observable_state(name, &result) {
                 repeat_calls.clear();
@@ -9516,4 +9673,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Xiaoheng WorkBuddy");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readonly_inventory_prompt_blocks_structural_shell_commands() {
+        assert!(prompt_is_readonly_inventory_or_export(
+            "统计这个文件夹里的所有文件，生成 xlsx 保存到桌面"
+        ));
+        assert!(shell_command_mutates_file_structure(
+            "Move-Item -LiteralPath 'A' -Destination 'B'"
+        ));
+        assert!(!prompt_explicitly_allows_source_mutation(
+            "统计这个文件夹里的所有文件，生成 xlsx 保存到桌面"
+        ));
+    }
+
+    #[test]
+    fn explicit_mutation_prompt_allows_structural_intent() {
+        assert!(prompt_explicitly_allows_source_mutation(
+            "把这些文件按类型移动到不同文件夹"
+        ));
+        assert!(!prompt_is_readonly_inventory_or_export(
+            "把这些文件按类型移动到不同文件夹"
+        ));
+    }
 }
