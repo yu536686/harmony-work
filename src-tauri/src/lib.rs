@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
@@ -54,6 +56,7 @@ static WEIXIN_MONITORS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static STOPPED_RUNS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static HEARTBEAT_SCHEDULER_STARTED: OnceLock<()> = OnceLock::new();
 static WINDOWS_PATH_RE: OnceLock<Regex> = OnceLock::new();
+static WINDOWS_ANY_PATH_RE: OnceLock<Regex> = OnceLock::new();
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -2401,7 +2404,11 @@ fn concise_gateway_execution_system(work_context: &Value, latest_prompt: &str) -
     let generated_at = context_generated_at(work_context).unwrap_or_else(|| now_string());
     let beijing_time =
         add_hours_to_utc_iso(&generated_at, 8).unwrap_or_else(|| generated_at.clone());
-    let artifact_rule = artifact_instruction(latest_prompt);
+    let artifact_rule = format!(
+        "{}\n{}",
+        artifact_instruction(latest_prompt),
+        path_anchor_instructions(work_context)
+    );
     let skill_hints = triggered_skill_hints(latest_prompt);
     let dispatch_hints = triggered_dispatch_hints(latest_prompt);
     format!(
@@ -2488,6 +2495,157 @@ fn path_starts_with(candidate: &Path, base: &Path) -> bool {
     } else {
         candidate.starts_with(base)
     }
+}
+
+fn existing_path_prefix(value: &str) -> Option<String> {
+    let mut best = None;
+    let mut end_indices = value
+        .char_indices()
+        .map(|(index, ch)| index + ch.len_utf8())
+        .collect::<Vec<_>>();
+    end_indices.reverse();
+    for end in end_indices {
+        let candidate = trim_path_token(&value[..end]);
+        if candidate.len() < 3 {
+            continue;
+        }
+        let path = PathBuf::from(&candidate);
+        if path.exists() {
+            best = Some(candidate);
+            break;
+        }
+    }
+    best
+}
+
+fn extract_windows_paths_from_text(content: &str) -> Vec<PathBuf> {
+    let pattern = WINDOWS_ANY_PATH_RE
+        .get_or_init(|| Regex::new(r#"(?i)[A-Z]:\\[^\r\n`"'<>|]*"#).expect("valid path regex"));
+    let mut seen = BTreeSet::new();
+    let mut paths = Vec::new();
+    for found in pattern.find_iter(content) {
+        let raw = found.as_str();
+        let cleaned = existing_path_prefix(raw).unwrap_or_else(|| trim_path_token(raw));
+        if cleaned.len() < 3 {
+            continue;
+        }
+        let path = normalize_path(PathBuf::from(&cleaned));
+        let key = path.to_string_lossy().replace('/', "\\").to_lowercase();
+        if seen.insert(key) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn required_user_paths(work_context: &Value) -> Vec<PathBuf> {
+    let prompt = latest_user_prompt_from_context(work_context);
+    extract_windows_paths_from_text(&prompt)
+}
+
+fn path_anchor_instructions(work_context: &Value) -> String {
+    let paths = required_user_paths(work_context);
+    if paths.is_empty() {
+        return String::new();
+    }
+    let list = paths
+        .iter()
+        .map(|path| format!("- {}", path.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "User-specified required path anchors for this turn:\n{list}\nUse these exact paths first. Do not substitute workspace, memory, history, or other drive paths unless the user explicitly changes the target. For inventory/statistics/export tasks, enumerate the anchored input path and write outputs only to the user-requested output location or the active workspace."
+    )
+}
+
+fn path_drive_root(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    text.chars().take(2).collect::<String>()
+}
+
+fn path_matches_any_anchor(candidate: &Path, anchors: &[PathBuf]) -> bool {
+    anchors
+        .iter()
+        .any(|anchor| path_starts_with(candidate, anchor) || path_starts_with(anchor, candidate))
+}
+
+fn path_is_desktop_or_workspace(candidate: &Path, work_context: &Value) -> Result<bool, String> {
+    let desktop = normalize_path(desktop_dir());
+    let workspace = normalize_path(active_workspace_dir(work_context)?);
+    Ok(path_starts_with(candidate, &desktop) || path_starts_with(candidate, &workspace))
+}
+
+fn validate_path_anchor(
+    candidate: &Path,
+    work_context: &Value,
+    purpose: &str,
+) -> Result<(), String> {
+    let anchors = required_user_paths(work_context);
+    if anchors.is_empty() || path_matches_any_anchor(candidate, &anchors) {
+        return Ok(());
+    }
+    if purpose == "output" || path_is_desktop_or_workspace(candidate, work_context)? {
+        return Ok(());
+    }
+    let candidate_root = path_drive_root(candidate);
+    let has_different_root = anchors
+        .iter()
+        .any(|anchor| path_drive_root(anchor) != candidate_root);
+    if has_different_root {
+        let anchor_list = anchors
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "PATH_ANCHOR_MISMATCH: latest user request specified path anchor(s): {anchor_list}; this {purpose} targets {}. Use the user-specified path first, or ask for clarification before using another drive/root.",
+            candidate.to_string_lossy()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_shell_path_anchors(
+    command: &str,
+    cwd: &Path,
+    work_context: &Value,
+) -> Result<(), String> {
+    let anchors = required_user_paths(work_context);
+    if anchors.is_empty() {
+        return Ok(());
+    }
+    let command_paths = extract_windows_paths_from_text(command);
+    if command_paths.is_empty() {
+        return validate_path_anchor(cwd, work_context, "shell cwd");
+    }
+    if command_paths
+        .iter()
+        .any(|path| path_matches_any_anchor(path, &anchors))
+    {
+        return Ok(());
+    }
+    let paths_are_outputs = command_paths
+        .iter()
+        .map(|path| path_is_desktop_or_workspace(path, work_context))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .all(|ok| ok);
+    if paths_are_outputs && path_matches_any_anchor(cwd, &anchors) {
+        return Ok(());
+    }
+    let anchor_list = anchors
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let target_list = command_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "PATH_ANCHOR_MISMATCH: latest user request specified path anchor(s): {anchor_list}; this shell command targets {target_list}. Rewrite the command to use the user-specified path first, or ask for clarification."
+    ))
 }
 
 fn resolve_tool_path(path: PathBuf, work_context: &Value) -> Result<PathBuf, String> {
@@ -4535,7 +4693,11 @@ fn summarize_work_context(work_context: &Value) -> String {
     let generated_at = context_generated_at(work_context).unwrap_or_else(|| now_string());
     let beijing_time =
         add_hours_to_utc_iso(&generated_at, 8).unwrap_or_else(|| generated_at.clone());
-    let artifact_rule = artifact_instruction(&latest_prompt);
+    let artifact_rule = format!(
+        "{}\n{}",
+        artifact_instruction(&latest_prompt),
+        path_anchor_instructions(work_context)
+    );
     let permission_mode = session_permission_mode(work_context);
     let skill_hints = triggered_skill_hints(&latest_prompt);
     let dispatch_hints = triggered_dispatch_hints(&latest_prompt);
@@ -4722,7 +4884,7 @@ fn worksheet_xml(rows: &[Vec<String>]) -> String {
     for (row_idx, row) in rows.iter().enumerate() {
         xml.push_str(&format!(r#"<row r="{}">"#, row_idx + 1));
         for (col_idx, cell) in row.iter().enumerate() {
-            let col = ((b'A' + col_idx as u8) as char).to_string();
+            let col = excel_column_name(col_idx);
             xml.push_str(&format!(
                 r#"<c r="{}{}" t="inlineStr"><is><t>{}</t></is></c>"#,
                 col,
@@ -4734,6 +4896,19 @@ fn worksheet_xml(rows: &[Vec<String>]) -> String {
     }
     xml.push_str("</sheetData></worksheet>");
     xml
+}
+
+fn excel_column_name(mut index: usize) -> String {
+    let mut chars = Vec::new();
+    loop {
+        let rem = index % 26;
+        chars.push((b'A' + rem as u8) as char);
+        if index < 26 {
+            break;
+        }
+        index = (index / 26) - 1;
+    }
+    chars.iter().rev().collect()
 }
 
 fn write_zip_file(
@@ -5370,6 +5545,65 @@ fn write_text_file(args: &Value, work_context: &Value) -> Result<Value, String> 
     }))
 }
 
+fn value_to_cell_string(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn write_table_xlsx(args: &Value, work_context: &Value) -> Result<Value, String> {
+    if setting_bool(work_context, "confirmFileWrite", true) {
+        return Err(permission_required_message("Excel 鏂囦欢鍐欏叆"));
+    }
+    let rows_value = args
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "missing rows".to_owned())?;
+    if rows_value.is_empty() {
+        return Err("rows must not be empty".to_owned());
+    }
+    if rows_value.len() > 20000 {
+        return Err(
+            "too many rows for write_table_xlsx; split the output or write a script".to_owned(),
+        );
+    }
+    let rows = rows_value
+        .iter()
+        .map(|row| {
+            row.as_array()
+                .map(|cells| cells.iter().map(value_to_cell_string).collect::<Vec<_>>())
+                .ok_or_else(|| "each row must be an array".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let path = safe_output_path(args, work_context)?;
+    let path = if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("xlsx"))
+        .unwrap_or(false)
+    {
+        path
+    } else {
+        path.with_extension("xlsx")
+    };
+    write_xlsx(&path, &rows)?;
+    let metadata = fs::metadata(&path).map_err(|e| format!("failed to verify xlsx: {e}"))?;
+    Ok(json!({
+        "ok": true,
+        "path": path.to_string_lossy(),
+        "exists": path.exists(),
+        "rowCount": rows.len(),
+        "columnCount": rows.iter().map(|row| row.len()).max().unwrap_or(0),
+        "actualByteSize": metadata.len(),
+        "mime": mime_for_path(&path),
+        "verificationNote": "write_table_xlsx creates a real .xlsx workbook from complete structured rows and verifies the file metadata. Use it for inventory/statistics/export tables instead of relying on truncated shell stdout."
+    }))
+}
+
 fn read_text_file(args: &Value, work_context: &Value) -> Result<Value, String> {
     let path = args
         .get("path")
@@ -5383,6 +5617,7 @@ fn read_text_file(args: &Value, work_context: &Value) -> Result<Value, String> {
         active_workspace_dir(work_context)?.join(path)
     };
     let path = resolve_tool_path(path, work_context)?;
+    validate_path_anchor(&path, work_context, "file read")?;
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -5495,6 +5730,7 @@ fn list_files(args: &Value, work_context: &Value) -> Result<Value, String> {
         .map(PathBuf::from)
         .unwrap_or(active_workspace_dir(work_context)?);
     let dir = resolve_tool_path(dir, work_context)?;
+    validate_path_anchor(&dir, work_context, "directory listing")?;
     let read_dir = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -5643,6 +5879,7 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
         .map(PathBuf::from)
         .unwrap_or(active_workspace_dir(work_context)?);
     let cwd = resolve_tool_path(cwd, work_context)?;
+    validate_shell_path_anchors(&command, &cwd, work_context)?;
     fs::create_dir_all(&cwd).map_err(|e| format!("failed to create cwd: {e}"))?;
     let command_for_status = command.clone();
     let shell_for_result = shell.clone();
@@ -7169,6 +7406,27 @@ fn agent_tools() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "write_table_xlsx",
+                "description": "Write structured rows to a real .xlsx workbook. Use for inventory, statistics, filename lists, and table exports instead of relying on truncated shell stdout. Outside-workspace output paths require Full Access.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": { "type": "string", "description": "Excel filename ending with .xlsx" },
+                        "path": { "type": "string", "description": "Optional exact target xlsx path. If provided, it overrides filename and directory." },
+                        "directory": { "type": "string", "description": "Optional output directory, such as the user's Desktop." },
+                        "rows": {
+                            "type": "array",
+                            "description": "Complete table rows. Include a header row as the first row.",
+                            "items": { "type": "array", "items": { "type": ["string", "number", "boolean", "null"] } }
+                        }
+                    },
+                    "required": ["rows"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "read_text_file",
                 "description": "Read a text file from the active workspace. Outside-workspace paths require current conversation permission mode Full Access.",
                 "parameters": {
@@ -7196,7 +7454,7 @@ fn agent_tools() -> Value {
             "type": "function",
             "function": {
                 "name": "list_files",
-                "description": "List files in the active workspace. Outside-workspace directories require current conversation permission mode Full Access.",
+                "description": "List files in a specified directory. If the latest user request contains an absolute path, use that path first. Outside-workspace directories require current conversation permission mode Full Access.",
                 "parameters": {
                     "type": "object",
                     "properties": { "directory": { "type": "string" } }
@@ -7207,7 +7465,7 @@ fn agent_tools() -> Value {
             "type": "function",
             "function": {
                 "name": "shell_exec",
-                "description": "Run a PowerShell or CMD command. Requires current conversation permission mode Full Access.",
+                "description": "Run a PowerShell or CMD command. Requires current conversation permission mode Full Access. If the latest user request contains an absolute path, commands must target that path first and should write large outputs to files instead of relying on stdout previews.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -7280,6 +7538,7 @@ fn compact_agent_tools() -> Value {
         {"type":"function","function":{"name":"task_plan_update","description":"Sync todo/task status to task center.","parameters":{"type":"object","properties":{"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"officeId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"ownerId":{"type":"string"},"status":{"type":"string","enum":["todo","doing","review","done","paused","stopped"]},"priority":{"type":"string","enum":["low","medium","high"]},"dueDate":{"type":"string"},"upstreamIds":{"type":"array","items":{"type":"string"}},"downstreamIds":{"type":"array","items":{"type":"string"}}},"required":["title","description","ownerId","status","priority"]}}},"required":["tasks"]}}},
         {"type":"function","function":{"name":"work_pool_update","description":"Create/update/delete projects, people and tasks.","parameters":{"type":"object","properties":{"upsertOffices":{"type":"array","items":{"type":"object"}},"deleteOfficeIds":{"type":"array","items":{"type":"string"}},"upsertAgents":{"type":"array","items":{"type":"object"}},"deleteAgentIds":{"type":"array","items":{"type":"string"}},"upsertTasks":{"type":"array","items":{"type":"object"}},"deleteTaskIds":{"type":"array","items":{"type":"string"}}}}}},
         {"type":"function","function":{"name":"write_text_file","description":"Write file. Prefer filename+directory, or path+content for an exact target path. Outside-workspace paths require Full Access. Overwrite writes are atomic; set append=true only when extending an existing log/data file.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"content":{"type":"string"},"directory":{"type":"string"},"path":{"type":"string"},"append":{"type":"boolean"}},"required":["content"]}}},
+        {"type":"function","function":{"name":"write_table_xlsx","description":"Write structured rows to a real .xlsx workbook. Use for inventory/statistics/table exports and include a header row.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"path":{"type":"string"},"directory":{"type":"string"},"rows":{"type":"array","items":{"type":"array","items":{"type":["string","number","boolean","null"]}}}},"required":["rows"]}}},
         {"type":"function","function":{"name":"read_text_file","description":"Read text file in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
         {"type":"function","function":{"name":"read_attachment_text","description":"Read UTF-8 text from a user-uploaded attachment in current conversation by attachmentId.","parameters":{"type":"object","properties":{"attachmentId":{"type":"string"},"path":{"type":"string"}}}}},
         {"type":"function","function":{"name":"list_files","description":"List files in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"directory":{"type":"string"}}}}},
@@ -7392,7 +7651,12 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
         || lower.contains("screenshot");
 
     if asks_file {
-        names.extend(["write_text_file", "read_text_file", "list_files"]);
+        names.extend([
+            "write_text_file",
+            "write_table_xlsx",
+            "read_text_file",
+            "list_files",
+        ]);
     }
     if asks_attachment {
         names.insert("read_attachment_text");
@@ -7486,6 +7750,7 @@ async fn execute_tool(
         "news_to_excel" => news_to_excel(client, args, work_context).await,
         "web_fetch" => web_fetch(client, args).await,
         "write_text_file" => write_text_file(args, work_context),
+        "write_table_xlsx" => write_table_xlsx(args, work_context),
         "read_text_file" => read_text_file(args, work_context),
         "read_attachment_text" => read_attachment_text(args, work_context),
         "list_files" => list_files(args, work_context),
