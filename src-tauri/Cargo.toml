@@ -1,6 +1,6 @@
 [package]
 name = "xiaoheng-workbuddy"
-version = "0.6.30-alpha.0"
+version = "0.6.31-alpha.0"
 description = "Harmony Xiaoheng AI desktop workbench"
 authors = ["Harmony"]
 edition = "2021"

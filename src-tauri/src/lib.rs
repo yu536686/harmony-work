@@ -236,15 +236,15 @@ struct OpenAiMessage {
 const MAX_INITIAL_CHAT_MESSAGES: usize = 4;
 const MAX_CHAT_MESSAGE_CHARS: usize = 1600;
 const MAX_ASSISTANT_TOOL_ARG_CHARS: usize = 600;
-const MAX_TOOL_RESULT_CHARS_FOR_MODEL: usize = 500;
-const MAX_TOOL_RESULT_CHARS_FOR_UI: usize = 4000;
+const MAX_TOOL_RESULT_CHARS_FOR_MODEL: usize = 1600;
+const MAX_TOOL_RESULT_CHARS_FOR_UI: usize = 12000;
 const MAX_PAYLOAD_MESSAGE_CHARS: usize = 3800;
 const READ_TEXT_FILE_CONTENT_LIMIT: usize = 30000;
 const TEXT_PREVIEW_CHARS: usize = 1200;
 const SHELL_OUTPUT_LIMIT: usize = 20000;
-const HARD_MAX_AGENT_ITERATIONS: u32 = 80;
+const HARD_MAX_AGENT_ITERATIONS: u32 = 160;
 const SOFT_FINAL_MIN_ITERATIONS: u32 = 6;
-const SOFT_FINAL_MAX_ITERATIONS: u32 = 18;
+const SOFT_FINAL_MAX_ITERATIONS: u32 = 60;
 const MAX_REPEAT_TOOL_CALLS: u32 = 2;
 
 fn truncate_chars(value: &str, limit: usize) -> String {
@@ -353,6 +353,9 @@ fn compact_tool_result_for_model(name: &str, result: &Value, limit: usize) -> St
         "stderrReturnedChars",
         "stdoutTruncated",
         "stderrTruncated",
+        "returnedCount",
+        "entriesTruncated",
+        "extensionCounts",
         "verificationNote",
     ] {
         if let Some(value) = result.get(key) {
@@ -430,12 +433,15 @@ fn compact_tool_step_for_ui(
 }
 
 fn effective_agent_max_iterations(settings: &AppSettings) -> u32 {
-    let provider_cap = if settings.provider == "siliconflow" {
-        18
+    let floor = if settings.provider == "siliconflow" {
+        64
     } else {
-        HARD_MAX_AGENT_ITERATIONS
+        24
     };
-    settings.agent_max_iterations.clamp(1, provider_cap)
+    settings
+        .agent_max_iterations
+        .max(floor)
+        .clamp(1, HARD_MAX_AGENT_ITERATIONS)
 }
 
 fn soft_final_iteration(max_iterations: u32) -> u32 {
@@ -454,6 +460,101 @@ fn final_summary_message(reason: &str) -> OpenAiMessage {
         tool_call_id: None,
         tool_calls: None,
     }
+}
+
+fn tool_result_is_error(step: &Value) -> bool {
+    step.get("isError").and_then(Value::as_bool) == Some(true)
+}
+
+fn tool_step_name(step: &Value) -> &str {
+    step.get("name").and_then(Value::as_str).unwrap_or_default()
+}
+
+fn tool_result_text(step: &Value) -> String {
+    step.get("result")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+fn has_verified_artifact_evidence(tool_steps: &[Value]) -> bool {
+    tool_steps.iter().any(|step| {
+        if tool_result_is_error(step) {
+            return false;
+        }
+        let name = tool_step_name(step);
+        let result = tool_result_text(step);
+        matches!(name, "news_to_excel" | "write_text_file")
+            || (name == "shell_exec"
+                && result.contains("\"ok\":true")
+                && (result.contains(".xlsx")
+                    || result.contains(".pptx")
+                    || result.contains(".docx")
+                    || result.contains(".pdf")
+                    || result.contains(".md")
+                    || result.contains(".csv")
+                    || result.contains(".txt")))
+            || (name == "list_files"
+                && result.contains("\"entries\"")
+                && (result.contains(".xlsx")
+                    || result.contains(".pptx")
+                    || result.contains(".docx")
+                    || result.contains(".pdf")
+                    || result.contains(".md")
+                    || result.contains(".csv")
+                    || result.contains(".txt")))
+            || (name == "read_text_file" && result.contains("\"exists\":true"))
+    })
+}
+
+fn has_state_change_evidence(tool_steps: &[Value]) -> bool {
+    tool_steps.iter().any(|step| {
+        if tool_result_is_error(step) {
+            return false;
+        }
+        matches!(
+            tool_step_name(step),
+            "task_plan_update"
+                | "work_pool_update"
+                | "memory_append"
+                | "computer_control"
+                | "browser_control"
+                | "shell_exec"
+        )
+    })
+}
+
+fn tool_results_have_truncation(tool_steps: &[Value]) -> bool {
+    tool_steps.iter().any(|step| {
+        let result = tool_result_text(step);
+        result.contains("\"stdouttruncated\":true")
+            || result.contains("\"stderrtruncated\":true")
+            || result.contains("\"contenttruncated\":true")
+            || result.contains("\"entriestruncated\":true")
+            || result.contains("...[truncated]")
+    })
+}
+
+fn should_force_final(
+    prompt: &str,
+    iteration: u32,
+    force_final_after: u32,
+    max_iterations: u32,
+    tool_steps: &[Value],
+) -> bool {
+    if tool_steps.is_empty() || iteration < force_final_after {
+        return false;
+    }
+    if iteration + 6 >= max_iterations {
+        return true;
+    }
+    if asks_artifact_generation(prompt) {
+        return has_verified_artifact_evidence(tool_steps);
+    }
+    if prompt_requires_real_tool_execution(prompt) {
+        return has_state_change_evidence(tool_steps) && !tool_results_have_truncation(tool_steps);
+    }
+    true
 }
 
 fn tool_call_fingerprint(name: &str, args: &Value) -> String {
@@ -806,6 +907,29 @@ fn guard_unverified_completion(answer: &str, tool_steps: &[Value]) -> String {
     } else {
         answer.to_owned()
     }
+}
+
+fn guard_completion_for_prompt(prompt: &str, answer: &str, tool_steps: &[Value]) -> String {
+    let guarded = guard_unverified_completion(answer, tool_steps);
+    if asks_artifact_generation(prompt)
+        && claims_completed_artifact_without_evidence(&guarded)
+        && !has_verified_artifact_evidence(tool_steps)
+    {
+        return format!(
+            "Gateway delivery validation failed: the reply claims completion or file generation, but tool records do not contain verified artifact evidence such as path, existence, size, page/row count, or content verification.\n\nThis task cannot be marked complete yet. Continue generation and verification, or state the blocking reason.\n\nOriginal reply summary: {}",
+            truncate_chars(guarded.trim(), 900)
+        );
+    }
+    if prompt_requires_real_tool_execution(prompt)
+        && claims_completed_artifact_without_evidence(&guarded)
+        && !has_state_change_evidence(tool_steps)
+    {
+        return format!(
+            "Gateway execution validation failed: the reply claims execution or state changes, but tool records do not contain reliable execution evidence.\n\nThis task cannot be marked complete yet. Continue real execution, or state the blocking reason.\n\nOriginal reply summary: {}",
+            truncate_chars(guarded.trim(), 900)
+        );
+    }
+    guarded
 }
 
 fn tool_execution_correction_message(prompt: &str, answer: &str) -> OpenAiMessage {
@@ -5355,9 +5479,25 @@ fn list_files(args: &Value, work_context: &Value) -> Result<Value, String> {
         }
         Err(error) => return Err(format!("failed to list directory: {error}")),
     };
-    let entries = read_dir
+    let all_entries = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+    let total_count = all_entries.len();
+    let mut extension_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in &all_entries {
+        let path = entry.path();
+        if path.is_file() {
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !extension.is_empty() {
+                *extension_counts.entry(extension).or_insert(0) += 1;
+            }
+        }
+    }
+    let entries = all_entries
+        .iter()
         .take(200)
-        .filter_map(Result::ok)
         .map(|entry| {
             let path = entry.path();
             let metadata = entry.metadata().ok();
@@ -5369,7 +5509,17 @@ fn list_files(args: &Value, work_context: &Value) -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({"ok": true, "exists": true, "directory": dir.to_string_lossy(), "entries": entries}))
+    Ok(json!({
+        "ok": true,
+        "exists": true,
+        "directory": dir.to_string_lossy(),
+        "count": total_count,
+        "returnedCount": entries.len(),
+        "entriesTruncated": total_count > entries.len(),
+        "extensionCounts": extension_counts,
+        "entries": entries,
+        "verificationNote": "entries is a preview when entriesTruncated=true. Use count/returnedCount/extensionCounts for summary, and use shell_exec scripts to process complete large file sets instead of relying on the preview list."
+    }))
 }
 
 fn decode_process_output(bytes: &[u8]) -> String {
@@ -7299,7 +7449,13 @@ async fn complete_openai_chat(
     let max_iterations = effective_agent_max_iterations(settings);
     let force_final_after = soft_final_iteration(max_iterations);
     for iteration in 0..max_iterations {
-        let force_final = iteration >= force_final_after && !tool_steps.is_empty();
+        let force_final = should_force_final(
+            &latest_prompt,
+            iteration,
+            force_final_after,
+            max_iterations,
+            &tool_steps,
+        );
         let mut next_messages = payload_messages.clone();
         if force_final {
             next_messages.push(final_summary_message(
@@ -7407,7 +7563,7 @@ async fn complete_openai_chat(
                 }
                 return Ok(blocked_unverified_execution_answer(&latest_prompt, &answer));
             }
-            let answer = guard_unverified_completion(&answer, &tool_steps);
+            let answer = guard_completion_for_prompt(&latest_prompt, &answer, &tool_steps);
             return Ok(append_hidden_updates(
                 &answer,
                 &task_updates,
@@ -7576,7 +7732,13 @@ async fn complete_openai_chat_stream(
             clear_run_stop(&run_id);
             return Ok(());
         }
-        let force_final = iteration >= force_final_after && !tool_steps.is_empty();
+        let force_final = should_force_final(
+            &latest_prompt,
+            iteration,
+            force_final_after,
+            max_iterations,
+            &tool_steps,
+        );
         let mut next_messages = payload_messages.clone();
         if force_final {
             next_messages.push(final_summary_message(
@@ -7869,7 +8031,8 @@ async fn complete_openai_chat_stream(
             );
         }
         if tool_calls.is_empty() || force_final {
-            let mut final_content = guard_unverified_completion(&final_content, &tool_steps);
+            let mut final_content =
+                guard_completion_for_prompt(&latest_prompt, &final_content, &tool_steps);
             if !force_final
                 && tool_steps.is_empty()
                 && unverified_execution_block(
