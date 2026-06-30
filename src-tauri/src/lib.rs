@@ -16,7 +16,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader, Cursor, ErrorKind, Write},
+    io::{Cursor, ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
@@ -264,7 +264,7 @@ const MAX_PAYLOAD_MESSAGE_CHARS: usize = 3800;
 const READ_TEXT_FILE_CONTENT_LIMIT: usize = 30000;
 const TEXT_PREVIEW_CHARS: usize = 1200;
 const SHELL_OUTPUT_LIMIT: usize = 20000;
-const HARD_MAX_AGENT_ITERATIONS: u32 = 160;
+const HARD_MAX_AGENT_ITERATIONS: u32 = 300;
 const SOFT_FINAL_MIN_ITERATIONS: u32 = 6;
 const SOFT_FINAL_MAX_ITERATIONS: u32 = 60;
 const MAX_REPEAT_TOOL_CALLS: u32 = 2;
@@ -333,6 +333,15 @@ fn persist_shell_output(
         "stderrPath": stderr_path.to_string_lossy(),
         "note": "Full shell output was persisted because stdout or stderr exceeded the preview limit."
     })))
+}
+
+fn persist_tool_json(app: &AppHandle, prefix: &str, value: &Value) -> Result<PathBuf, String> {
+    let dir = tool_output_dir(app)?;
+    let path = dir.join(format!("{prefix}-{}.json", now_string()));
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|e| format!("failed to serialize tool manifest: {e}"))?;
+    fs::write(&path, text).map_err(|e| format!("failed to persist tool manifest: {e}"))?;
+    Ok(path)
 }
 
 fn compact_chat_content(content: &str) -> String {
@@ -417,6 +426,7 @@ fn compact_tool_result_for_model(name: &str, result: &Value, limit: usize) -> St
         "charCount",
         "contentReturnedChars",
         "contentTruncated",
+        "linesTruncated",
         "stdoutChars",
         "stderrChars",
         "stdoutReturnedChars",
@@ -426,6 +436,10 @@ fn compact_tool_result_for_model(name: &str, result: &Value, limit: usize) -> St
         "returnedCount",
         "entriesTruncated",
         "extensionCounts",
+        "manifestPath",
+        "isBinaryOrNonUtf8",
+        "encoding",
+        "warning",
         "verificationNote",
     ] {
         if let Some(value) = result.get(key) {
@@ -492,11 +506,63 @@ fn compact_tool_step_for_ui(
     result: &Value,
     limit: usize,
 ) -> Value {
+    tool_step_for_history(id, name, args, result, limit)
+}
+
+fn selected_tool_result_fields(result: &Value) -> Value {
+    let mut compact = json!({});
+    for key in [
+        "ok",
+        "path",
+        "directory",
+        "exists",
+        "isFile",
+        "isDir",
+        "mime",
+        "extension",
+        "byteSize",
+        "actualByteSize",
+        "rowCount",
+        "columnCount",
+        "pageCount",
+        "charCount",
+        "count",
+        "returnedCount",
+        "entriesTruncated",
+        "contentTruncated",
+        "stdoutTruncated",
+        "stderrTruncated",
+        "manifestPath",
+        "persistedOutput",
+        "isBinaryOrNonUtf8",
+        "encoding",
+        "warning",
+        "error",
+        "verificationNote",
+    ] {
+        if let Some(value) = result.get(key) {
+            compact[key] = value.clone();
+        }
+    }
+    if let Some(entries) = result.get("entries").and_then(Value::as_array) {
+        compact["entries"] = json!(entries.iter().take(20).cloned().collect::<Vec<_>>());
+    }
+    compact
+}
+
+fn tool_step_for_history(
+    id: &str,
+    name: &str,
+    args: &Value,
+    result: &Value,
+    limit: usize,
+) -> Value {
     json!({
         "id": id,
         "name": name,
         "input": args,
         "result": truncate_chars(&result.to_string(), limit),
+        "resultMeta": selected_tool_result_fields(result),
         "isError": result.get("ok").and_then(Value::as_bool) == Some(false),
         "completed": true
     })
@@ -540,6 +606,16 @@ fn tool_step_name(step: &Value) -> &str {
     step.get("name").and_then(Value::as_str).unwrap_or_default()
 }
 
+fn tool_step_result_meta(step: &Value) -> Value {
+    if let Some(meta) = step.get("resultMeta") {
+        return meta.clone();
+    }
+    step.get("result")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or(Value::Null)
+}
+
 fn tool_result_text(step: &Value) -> String {
     step.get("result")
         .and_then(Value::as_str)
@@ -547,36 +623,166 @@ fn tool_result_text(step: &Value) -> String {
         .to_lowercase()
 }
 
-fn has_verified_artifact_evidence(tool_steps: &[Value]) -> bool {
-    tool_steps.iter().any(|step| {
-        if tool_result_is_error(step) {
-            return false;
+#[derive(Clone, Debug, Default)]
+struct ArtifactContract {
+    requires_file: bool,
+    extensions: BTreeSet<String>,
+}
+
+impl ArtifactContract {
+    fn describe(&self) -> String {
+        if !self.requires_file {
+            return "no file artifact required".to_owned();
         }
-        let name = tool_step_name(step);
-        let result = tool_result_text(step);
-        matches!(
-            name,
-            "news_to_excel" | "write_text_file" | "write_table_xlsx"
-        ) || (name == "shell_exec"
-            && result.contains("\"ok\":true")
-            && (result.contains(".xlsx")
-                || result.contains(".pptx")
-                || result.contains(".docx")
-                || result.contains(".pdf")
-                || result.contains(".md")
-                || result.contains(".csv")
-                || result.contains(".txt")))
-            || (name == "list_files"
-                && result.contains("\"entries\"")
-                && (result.contains(".xlsx")
-                    || result.contains(".pptx")
-                    || result.contains(".docx")
-                    || result.contains(".pdf")
-                    || result.contains(".md")
-                    || result.contains(".csv")
-                    || result.contains(".txt")))
-            || (name == "read_text_file" && result.contains("\"exists\":true"))
-    })
+        if self.extensions.is_empty() {
+            "a verified non-empty output file".to_owned()
+        } else {
+            format!(
+                "verified non-empty output file with extension: {}",
+                self.extensions
+                    .iter()
+                    .map(|ext| format!(".{ext}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+}
+
+fn artifact_contract_from_prompt(prompt: &str) -> ArtifactContract {
+    let lower = prompt.to_lowercase();
+    let mut extensions = BTreeSet::new();
+    let has = |needle: &str| lower.contains(needle) || prompt.contains(needle);
+    if has("xlsx") || has("excel") || has("电子表格") || has("表格") {
+        extensions.insert("xlsx".to_owned());
+    }
+    if has("pptx") || has("ppt") || has("powerpoint") || has("幻灯片") {
+        extensions.insert("pptx".to_owned());
+    }
+    if has("docx") || has("word") {
+        extensions.insert("docx".to_owned());
+    }
+    if has("pdf") {
+        extensions.insert("pdf".to_owned());
+    }
+    if has("markdown") || has(".md") {
+        extensions.insert("md".to_owned());
+    }
+    if has("csv") {
+        extensions.insert("csv".to_owned());
+    }
+    if has(".txt") || has("txt") {
+        extensions.insert("txt".to_owned());
+    }
+    if has("png") || has("jpg") || has("jpeg") || has("webp") || has("图片") || has("图像") {
+        for ext in ["png", "jpg", "jpeg", "webp"] {
+            extensions.insert(ext.to_owned());
+        }
+    }
+    if (has("mp4") || has("mov") || has("视频"))
+        && (has("生成") || has("制作") || has("导出") || has("保存"))
+        && extensions.is_empty()
+    {
+        for ext in ["mp4", "mov"] {
+            extensions.insert(ext.to_owned());
+        }
+    }
+    let requires_file = !extensions.is_empty()
+        || has("保存")
+        || has("导出")
+        || has("生成文件")
+        || has("写入")
+        || has("放在桌面")
+        || has("保存到桌面")
+        || has("save")
+        || has("export");
+    ArtifactContract {
+        requires_file,
+        extensions,
+    }
+}
+
+fn path_extension_text(value: &str) -> String {
+    Path::new(value)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
+fn result_file_size(result: &Value) -> u64 {
+    result
+        .get("actualByteSize")
+        .or_else(|| result.get("byteSize"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn result_has_verified_file(result: &Value, contract: &ArtifactContract) -> bool {
+    if result.get("exists").and_then(Value::as_bool) == Some(false) {
+        return false;
+    }
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if path.trim().is_empty() {
+        return false;
+    }
+    if result_file_size(result) == 0 {
+        return false;
+    }
+    if contract.extensions.is_empty() {
+        return true;
+    }
+    let ext = result
+        .get("extension")
+        .and_then(Value::as_str)
+        .map(|value| value.trim_start_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| path_extension_text(path));
+    contract.extensions.contains(&ext)
+}
+
+fn tool_step_has_verified_artifact(step: &Value, contract: &ArtifactContract) -> bool {
+    if tool_result_is_error(step) {
+        return false;
+    }
+    let result = tool_step_result_meta(step);
+    if result_has_verified_file(&result, contract) {
+        return true;
+    }
+    result
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .any(|entry| result_has_verified_file(entry, contract))
+        })
+        .unwrap_or(false)
+}
+
+fn has_verified_artifact_evidence_for_contract(
+    tool_steps: &[Value],
+    contract: &ArtifactContract,
+) -> bool {
+    if !contract.requires_file {
+        return true;
+    }
+    tool_steps
+        .iter()
+        .any(|step| tool_step_has_verified_artifact(step, contract))
+}
+
+fn artifact_contract_satisfied(prompt: &str, tool_steps: &[Value]) -> bool {
+    let contract = artifact_contract_from_prompt(prompt);
+    has_verified_artifact_evidence_for_contract(tool_steps, &contract)
+}
+
+fn artifact_contract_requires_file(prompt: &str) -> bool {
+    artifact_contract_from_prompt(prompt).requires_file
 }
 
 fn has_state_change_evidence(tool_steps: &[Value]) -> bool {
@@ -621,7 +827,7 @@ fn should_force_final(
         return true;
     }
     if asks_artifact_generation(prompt) {
-        return has_verified_artifact_evidence(tool_steps);
+        return artifact_contract_satisfied(prompt, tool_steps);
     }
     if prompt_requires_real_tool_execution(prompt) {
         return has_state_change_evidence(tool_steps) && !tool_results_have_truncation(tool_steps);
@@ -984,12 +1190,14 @@ fn guard_unverified_completion(answer: &str, tool_steps: &[Value]) -> String {
 
 fn guard_completion_for_prompt(prompt: &str, answer: &str, tool_steps: &[Value]) -> String {
     let guarded = guard_unverified_completion(answer, tool_steps);
-    if asks_artifact_generation(prompt)
+    if artifact_contract_requires_file(prompt)
         && claims_completed_artifact_without_evidence(&guarded)
-        && !has_verified_artifact_evidence(tool_steps)
+        && !artifact_contract_satisfied(prompt, tool_steps)
     {
+        let contract = artifact_contract_from_prompt(prompt);
         return format!(
-            "Gateway delivery validation failed: the reply claims completion or file generation, but tool records do not contain verified artifact evidence such as path, existence, size, page/row count, or content verification.\n\nThis task cannot be marked complete yet. Continue generation and verification, or state the blocking reason.\n\nOriginal reply summary: {}",
+            "Gateway delivery validation failed: the reply claims completion or file generation, but tool records do not contain {}.\n\nThis task cannot be marked complete yet. Continue generation and verification, or state the blocking reason.\n\nOriginal reply summary: {}",
+            contract.describe(),
             truncate_chars(guarded.trim(), 900)
         );
     }
@@ -1013,6 +1221,24 @@ fn tool_execution_correction_message(prompt: &str, answer: &str) -> OpenAiMessag
 原始用户请求：{}\n\
 上一轮回复摘要：{}\n\
 现在必须继续执行，不要再解释能力、不要询问用户想用哪个技能。请立即选择最少必要工具完成任务；如果是文件制品，写入/执行/验证真实文件；如果确实被权限阻止，只能明确请求用户提升权限。",
+            truncate_chars(prompt.trim(), 800),
+            truncate_chars(answer.trim(), 800)
+        )),
+        tool_call_id: None,
+        tool_calls: None,
+    }
+}
+
+fn artifact_delivery_correction_message(prompt: &str, answer: &str) -> OpenAiMessage {
+    let contract = artifact_contract_from_prompt(prompt);
+    OpenAiMessage {
+        role: "user".to_owned(),
+        content: Some(format!(
+            "Gateway delivery validation failed. The user request requires {}, but the tool history has not verified such an artifact yet.\n\
+Original user request: {}\n\
+Previous assistant reply summary: {}\n\
+Continue the same task now. Do not ask whether to continue. Do not report completion until a tool has created or located the requested output file and verified exists=true plus byteSize/actualByteSize > 0. If source data is large or tool output is truncated, use structured tools, scripts, persisted output paths, or bounded line reads; truncation is not a reason to stop.",
+            contract.describe(),
             truncate_chars(prompt.trim(), 800),
             truncate_chars(answer.trim(), 800)
         )),
@@ -5692,8 +5918,8 @@ fn read_text_file(args: &Value, work_context: &Value) -> Result<Value, String> {
     };
     let path = resolve_tool_path(path, work_context)?;
     validate_path_anchor(&path, work_context, "file read")?;
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             return Ok(json!({
                 "ok": true,
@@ -5705,8 +5931,30 @@ fn read_text_file(args: &Value, work_context: &Value) -> Result<Value, String> {
         }
         Err(error) => return Err(format!("failed to read file: {error}")),
     };
+    let byte_size = bytes.len() as u64;
+    let content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(error) => {
+            let bytes = error.into_bytes();
+            let lossy = String::from_utf8_lossy(&bytes).into_owned();
+            return Ok(json!({
+                "ok": true,
+                "exists": true,
+                "path": path.to_string_lossy(),
+                "byteSize": byte_size,
+                "isBinaryOrNonUtf8": true,
+                "encoding": "unknown-or-non-utf8",
+                "contentReturnedChars": first_chars(&lossy, READ_TEXT_FILE_CONTENT_LIMIT).chars().count(),
+                "contentTruncated": lossy.chars().count() > READ_TEXT_FILE_CONTENT_LIMIT,
+                "contentPreview": first_chars(&lossy, TEXT_PREVIEW_CHARS),
+                "contentTail": last_chars(&lossy, TEXT_PREVIEW_CHARS),
+                "content": first_chars(&lossy, READ_TEXT_FILE_CONTENT_LIMIT),
+                "warning": "file is not valid UTF-8; returned a lossy preview and metadata instead of failing. Use shell conversion, structured tools, or a format parser when exact text is required.",
+                "verificationNote": "Non-UTF8 input is recoverable metadata, not task completion. Do not stop solely because this preview is lossy; use byteSize/path or a conversion/parser for the next step."
+            }));
+        }
+    };
     let char_count = content.chars().count();
-    let byte_size = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
     let content_returned = first_chars(&content, READ_TEXT_FILE_CONTENT_LIMIT);
     let content_returned_chars = content_returned.chars().count();
     let content_truncated = char_count > content_returned_chars;
@@ -5794,8 +6042,8 @@ fn read_text_lines(args: &Value, work_context: &Value) -> Result<Value, String> 
     };
     let path = resolve_tool_path(path, work_context)?;
     validate_path_anchor(&path, work_context, "file line read")?;
-    let file = match fs::File::open(&path) {
-        Ok(file) => file,
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             return Ok(json!({
                 "ok": true,
@@ -5807,12 +6055,13 @@ fn read_text_lines(args: &Value, work_context: &Value) -> Result<Value, String> 
         }
         Err(error) => return Err(format!("failed to open file: {error}")),
     };
+    let is_binary_or_non_utf8 = std::str::from_utf8(&bytes).is_err();
+    let content = String::from_utf8_lossy(&bytes);
     let mut total_seen = 0usize;
     let mut lines = Vec::new();
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|e| format!("failed to read line: {e}"))?;
+    for line in content.lines() {
         if total_seen >= skip_lines && lines.len() < max_lines {
-            lines.push(line);
+            lines.push(line.to_owned());
         }
         total_seen += 1;
         if lines.len() >= max_lines {
@@ -5828,11 +6077,14 @@ fn read_text_lines(args: &Value, work_context: &Value) -> Result<Value, String> 
         "returnedCount": lines.len(),
         "lines": lines,
         "linesTruncated": lines.len() >= max_lines,
-        "verificationNote": "read_text_lines returns a bounded line window. Increase skipLines to continue; do not assume the file ended when linesTruncated=true."
+        "isBinaryOrNonUtf8": is_binary_or_non_utf8,
+        "byteSize": bytes.len(),
+        "warning": if is_binary_or_non_utf8 { "file is not valid UTF-8; returned lossy decoded lines" } else { "" },
+        "verificationNote": "read_text_lines returns a bounded line window. Increase skipLines to continue; do not assume the file ended when linesTruncated=true. Non-UTF8 files return lossy lines plus byteSize instead of failing."
     }))
 }
 
-fn scan_files(args: &Value, work_context: &Value) -> Result<Value, String> {
+fn scan_files(app: &AppHandle, args: &Value, work_context: &Value) -> Result<Value, String> {
     let dir = args
         .get("directory")
         .or_else(|| args.get("dir"))
@@ -5866,6 +6118,7 @@ fn scan_files(args: &Value, work_context: &Value) -> Result<Value, String> {
     let mut stack = vec![dir.clone()];
     let mut total_count = 0usize;
     let mut returned = Vec::new();
+    let mut manifest_entries = Vec::new();
     let mut extension_counts: BTreeMap<String, usize> = BTreeMap::new();
     while let Some(current) = stack.pop() {
         let entries = match fs::read_dir(&current) {
@@ -5898,17 +6151,29 @@ fn scan_files(args: &Value, work_context: &Value) -> Result<Value, String> {
             }
             total_count += 1;
             *extension_counts.entry(extension.clone()).or_insert(0) += 1;
+            let item = json!({
+                "name": path.file_name().and_then(|value| value.to_str()).unwrap_or(""),
+                "path": path.to_string_lossy(),
+                "extension": extension,
+                "byteSize": metadata.len(),
+                "modifiedMs": metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_millis())
+            });
+            manifest_entries.push(item.clone());
             if returned.len() < limit {
-                returned.push(json!({
-                    "name": path.file_name().and_then(|value| value.to_str()).unwrap_or(""),
-                    "path": path.to_string_lossy(),
-                    "extension": extension,
-                    "byteSize": metadata.len(),
-                    "modifiedMs": metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_millis())
-                }));
+                returned.push(item);
             }
         }
     }
+    let manifest = json!({
+        "ok": true,
+        "directory": dir.to_string_lossy(),
+        "recursive": recursive,
+        "extensions": extensions.clone(),
+        "count": total_count,
+        "extensionCounts": extension_counts.clone(),
+        "entries": manifest_entries
+    });
+    let manifest_path = persist_tool_json(app, "scan-files", &manifest)?;
     Ok(json!({
         "ok": true,
         "directory": dir.to_string_lossy(),
@@ -5918,8 +6183,9 @@ fn scan_files(args: &Value, work_context: &Value) -> Result<Value, String> {
         "returnedCount": returned.len(),
         "entriesTruncated": total_count > returned.len(),
         "extensionCounts": extension_counts,
+        "manifestPath": manifest_path.to_string_lossy(),
         "entries": returned,
-        "verificationNote": "scan_files returns structured metadata and count for full matching set; entries is a preview when entriesTruncated=true. Use write_table_xlsx or a script for full exports."
+        "verificationNote": "scan_files returns structured metadata and count; entries is a preview when entriesTruncated=true. manifestPath contains the complete JSON result for generic downstream processing. Use write_table_xlsx/write_text_file/shell scripts plus final file verification for requested exports."
     }))
 }
 
@@ -8144,7 +8410,7 @@ async fn execute_tool(
         "read_text_file" => read_text_file(args, work_context),
         "read_text_lines" => read_text_lines(args, work_context),
         "file_info" => file_info(args, work_context),
-        "scan_files" => scan_files(args, work_context),
+        "scan_files" => scan_files(app, args, work_context),
         "read_attachment_text" => read_attachment_text(args, work_context),
         "list_files" => list_files(args, work_context),
         "shell_exec" => shell_exec(app, args, work_context).await,
@@ -8184,6 +8450,7 @@ async fn complete_openai_chat(
     let latest_prompt = effective_user_prompt_from_messages(messages);
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
+    let mut forced_artifact_corrections = 0u32;
 
     let use_tools = settings.provider != "ollama";
     let max_iterations = effective_agent_max_iterations(settings);
@@ -8302,6 +8569,19 @@ async fn complete_openai_chat(
                     continue;
                 }
                 return Ok(blocked_unverified_execution_answer(&latest_prompt, &answer));
+            }
+            if !force_final
+                && artifact_contract_requires_file(&latest_prompt)
+                && !artifact_contract_satisfied(&latest_prompt, &tool_steps)
+            {
+                if forced_artifact_corrections < 3 {
+                    forced_artifact_corrections += 1;
+                    payload_messages.push(artifact_delivery_correction_message(
+                        &latest_prompt,
+                        &answer,
+                    ));
+                    continue;
+                }
             }
             let answer = guard_completion_for_prompt(&latest_prompt, &answer, &tool_steps);
             return Ok(append_hidden_updates(
@@ -8456,6 +8736,7 @@ async fn complete_openai_chat_stream(
     let latest_prompt = effective_user_prompt_from_messages(messages);
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
+    let mut forced_artifact_corrections = 0u32;
     emit_stream(
         &app,
         &run_id,
@@ -8812,6 +9093,27 @@ async fn complete_openai_chat_stream(
                 );
                 return Ok(());
             }
+            if !force_final
+                && artifact_contract_requires_file(&latest_prompt)
+                && !artifact_contract_satisfied(&latest_prompt, &tool_steps)
+            {
+                if forced_artifact_corrections < 3 {
+                    forced_artifact_corrections += 1;
+                    emit_stream(&app, &run_id, "content_reset", json!({"content": ""}));
+                    emit_stream(
+                        &app,
+                        &run_id,
+                        "assistant_note",
+                        json!({"content": "Gateway detected that the requested file artifact has not been verified yet. Continuing the task instead of marking it complete."}),
+                    );
+                    payload_messages.push(artifact_delivery_correction_message(
+                        &latest_prompt,
+                        &final_content,
+                    ));
+                    final_content.clear();
+                    continue;
+                }
+            }
             emit_stream(
                 &app,
                 &run_id,
@@ -8895,14 +9197,15 @@ async fn complete_openai_chat_stream(
                     }
                 }
             }
-            let step = json!({
-                "id": id,
-                "name": name,
-                "input": args,
-                "result": truncate_chars(&result.to_string(), (settings.tool_result_token_limit as usize).max(MAX_TOOL_RESULT_CHARS_FOR_UI).min(12000)),
-                "isError": result.get("ok").and_then(Value::as_bool) == Some(false),
-                "completed": true
-            });
+            let step = tool_step_for_history(
+                &id,
+                name,
+                &args,
+                &result,
+                (settings.tool_result_token_limit as usize)
+                    .max(MAX_TOOL_RESULT_CHARS_FOR_UI)
+                    .min(12000),
+            );
             tool_steps.push(step.clone());
             emit_stream(
                 &app,
