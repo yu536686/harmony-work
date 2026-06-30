@@ -438,6 +438,8 @@ fn compact_tool_result_for_model(name: &str, result: &Value, limit: usize) -> St
         "exists",
         "count",
         "source",
+        "query",
+        "url",
         "status",
         "error",
         "messageId",
@@ -456,6 +458,8 @@ fn compact_tool_result_for_model(name: &str, result: &Value, limit: usize) -> St
         "entriesTruncated",
         "extensionCounts",
         "manifestPath",
+        "sourceEvidence",
+        "textChars",
         "isBinaryOrNonUtf8",
         "encoding",
         "warning",
@@ -534,6 +538,8 @@ fn selected_tool_result_fields(result: &Value) -> Value {
         "ok",
         "path",
         "directory",
+        "query",
+        "url",
         "exists",
         "isFile",
         "isDir",
@@ -553,6 +559,8 @@ fn selected_tool_result_fields(result: &Value) -> Value {
         "stderrTruncated",
         "manifestPath",
         "persistedOutput",
+        "sourceEvidence",
+        "textChars",
         "isBinaryOrNonUtf8",
         "encoding",
         "warning",
@@ -804,6 +812,77 @@ fn artifact_contract_requires_file(prompt: &str) -> bool {
     artifact_contract_from_prompt(prompt).requires_file
 }
 
+fn prompt_requires_source_grounding(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    let asks_subject_matter = lower.contains("介绍")
+        || lower.contains("分析")
+        || lower.contains("调研")
+        || lower.contains("研究")
+        || lower.contains("核心技术")
+        || lower.contains("项目")
+        || lower.contains("产品")
+        || lower.contains("公司")
+        || lower.contains("开源")
+        || lower.contains("github")
+        || lower.contains("官网")
+        || lower.contains("project")
+        || lower.contains("product")
+        || lower.contains("company")
+        || lower.contains("technology")
+        || lower.contains("technical")
+        || lower.contains("openclaw");
+    let asks_deliverable = artifact_contract_requires_file(prompt)
+        || lower.contains("ppt")
+        || lower.contains("pptx")
+        || lower.contains("报告")
+        || lower.contains("文档")
+        || lower.contains("材料")
+        || lower.contains("presentation")
+        || lower.contains("slides")
+        || lower.contains("report");
+    let user_supplied_source = lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("readme")
+        || lower.contains(".md")
+        || lower.contains(".pdf")
+        || lower.contains(".doc")
+        || lower.contains(".ppt")
+        || lower.contains("我提供")
+        || lower.contains("附件")
+        || lower.contains("根据这份")
+        || lower.contains("基于这份");
+    asks_subject_matter && asks_deliverable && !user_supplied_source
+}
+
+fn has_source_evidence(tool_steps: &[Value]) -> bool {
+    tool_steps.iter().any(|step| {
+        if tool_result_is_error(step) {
+            return false;
+        }
+        let name = tool_step_name(step);
+        let result = tool_step_result_meta(step);
+        let explicit = result
+            .get("sourceEvidence")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text_chars = result
+            .get("textChars")
+            .or_else(|| result.get("charCount"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        (explicit && name != "web_search")
+            || matches!(
+                name,
+                "web_fetch"
+                    | "browser_control"
+                    | "read_attachment_text"
+                    | "read_text_file"
+                    | "skill_read"
+                    | "memory_search"
+            ) && text_chars > 200
+    })
+}
+
 fn has_state_change_evidence(tool_steps: &[Value]) -> bool {
     tool_steps.iter().any(|step| {
         if tool_result_is_error(step) {
@@ -844,6 +923,9 @@ fn should_force_final(
     }
     if iteration + 6 >= max_iterations {
         return true;
+    }
+    if prompt_requires_source_grounding(prompt) && !has_source_evidence(tool_steps) {
+        return false;
     }
     if asks_artifact_generation(prompt) {
         return artifact_contract_satisfied(prompt, tool_steps);
@@ -1209,6 +1291,12 @@ fn guard_unverified_completion(answer: &str, tool_steps: &[Value]) -> String {
 
 fn guard_completion_for_prompt(prompt: &str, answer: &str, tool_steps: &[Value]) -> String {
     let guarded = guard_unverified_completion(answer, tool_steps);
+    if prompt_requires_source_grounding(prompt) && !has_source_evidence(tool_steps) {
+        return format!(
+            "Gateway source validation failed: this request asks for a factual project/product/technology deliverable, but tool records do not contain source evidence from web_search/web_fetch/browser/read_attachment/read_text_file or another grounded source.\n\nDo not invent architecture, data, roadmap, benchmark numbers, URLs, or claims. Search/read sources first, then generate the artifact from those sources.\n\nOriginal reply summary: {}",
+            truncate_chars(guarded.trim(), 900)
+        );
+    }
     if artifact_contract_requires_file(prompt)
         && claims_completed_artifact_without_evidence(&guarded)
         && !artifact_contract_satisfied(prompt, tool_steps)
@@ -1266,11 +1354,35 @@ Continue the same task now. Do not ask whether to continue. Do not report comple
     }
 }
 
+fn source_grounding_correction_message(prompt: &str, answer: &str) -> OpenAiMessage {
+    OpenAiMessage {
+        role: "user".to_owned(),
+        content: Some(format!(
+            "Gateway source validation failed. The user requested a factual deliverable about a real project/product/technology, but no source evidence was found in tool history.\n\
+Original user request: {}\n\
+Previous assistant reply summary: {}\n\
+Continue now by searching or reading real sources first. Use web_search, web_fetch, browser_control, read_attachment_text, read_text_file, skill_read, or memory_search as appropriate. Do not invent architecture, benchmark data, roadmap, URLs, GitHub facts, or claims. Only after source evidence exists may you create the requested artifact.",
+            truncate_chars(prompt.trim(), 800),
+            truncate_chars(answer.trim(), 800)
+        )),
+        tool_call_id: None,
+        tool_calls: None,
+    }
+}
+
 fn blocked_unverified_execution_answer(prompt: &str, answer: &str) -> String {
     format!(
         "Gateway 已拦截本轮回复：这条请求需要真实执行，但模型连续没有调用工具。\n\n用户请求：{}\n\n被拦截的模型回复摘要：{}\n\n请重试，或切换到更稳定支持 tool_calls 的模型；WorkBuddy 不会把未执行的说明当作完成结果。",
         truncate_chars(prompt.trim(), 500),
         truncate_chars(answer.trim(), 500)
+    )
+}
+
+fn blocked_unverified_source_answer(prompt: &str, answer: &str) -> String {
+    format!(
+        "本次任务未交付：这是一个需要真实资料支撑的项目/技术介绍任务，但执行记录里没有搜索、网页读取、附件读取或本地资料读取等来源证据。\n\n我已经阻止模型继续编造内容。请重新运行任务，WorkBuddy 会先检索或读取真实来源，再基于来源生成文件；如果你有指定资料，也可以直接给链接或文件。\n\n用户请求摘要：{}\n\n最后一次模型回复摘要：{}",
+        truncate_chars(prompt.trim(), 500),
+        truncate_chars(strip_hidden_agent_markers(answer).trim(), 500)
     )
 }
 
@@ -2803,6 +2915,7 @@ fn concise_gateway_execution_system(work_context: &Value, latest_prompt: &str) -
 1. 如果需要工具，先在 assistant content 中用 1 句话确认收到任务，并列出 3-5 个简短步骤，然后同时发出最少必要工具调用。\n\
 2. 文件制品任务应像 OpenClaw 一样执行：确认目标路径/环境 -> 一次性写完整脚本或文件 -> 执行 -> 验证输出 -> 最终汇报。\n\
 2b. For inventory/statistics/export/report tasks, source folders are read-only. Do not move, delete, rename, copy, mkdir, archive, or reorganize source files unless the user explicitly asks for that structural change. Only write the requested output artifact to Desktop/workspace/explicit output path.\n\
+2c. For factual deliverables about real projects/products/companies/technologies, search or read real sources before writing. Do not invent architecture, roadmap, benchmark numbers, URLs, GitHub facts, or claims. If no sources can be found, stop and report that the artifact cannot be grounded.\n\
 3. 不要把大纲、分块阅读或询问是否继续当作交付；能一次性生成就一次性生成。\n\
 4. 简单聊天不调用工具；只有真实文件、Shell、网页、技能读取、项目状态变更才调用工具。\n\
 5. 普通问答不要创建任务中心 todo；但用户明确要求调度、分配、分别执行、多人协作或任务空间可视化时，必须同步任务中心和人员工作状态。\n\
@@ -4031,7 +4144,7 @@ fn install_default_skills(_app: AppHandle) -> Result<Value, String> {
     Ok(json!({
         "message": "Default skills installed.",
         "skills": [
-            { "id": "skill-web-fetch", "name": "Web Fetch", "description": "Read public web pages for Agent research.", "enabled": true, "category": "research", "source": "builtin", "tools": ["web_fetch"] },
+            { "id": "skill-web-fetch", "name": "Web Research", "description": "Search and read public web pages for Agent research.", "enabled": true, "category": "research", "source": "builtin", "tools": ["web_search", "web_fetch"] },
             { "id": "skill-file-write", "name": "Local File IO", "description": "Read, write, scan and list files in the active workspace or permitted target directories.", "enabled": true, "category": "file", "source": "builtin", "tools": ["write_text_file", "write_table_xlsx", "read_text_file", "read_text_lines", "file_info", "scan_files", "list_files"] },
             { "id": "skill-shell-exec", "name": "Shell Exec", "description": "Run PowerShell or CMD commands in the active workspace.", "enabled": true, "category": "system", "source": "builtin", "tools": ["shell_exec"] },
             { "id": "skill-desktop-control", "name": "Desktop Control", "description": "Expose browser and computer control tool interfaces.", "enabled": true, "category": "automation", "source": "builtin", "tools": ["browser_control", "computer_control"] },
@@ -4069,6 +4182,7 @@ fn builtin_tools() -> Vec<Value> {
         json!({"id":"memory_append","name":"Memory Append","category":"memory","description":"Append stable facts to MEMORY.md.","enabled":true}),
         json!({"id":"team_roster","name":"Team Roster","category":"team","description":"Read people, projects and task relationships.","enabled":true}),
         json!({"id":"news_to_excel","name":"News Excel","category":"office","description":"Fetch headlines and generate an Excel workbook.","enabled":true}),
+        json!({"id":"web_search","name":"Web Search","category":"browser","description":"Search public web pages for factual grounding.","enabled":true}),
         json!({"id":"web_fetch","name":"Web Fetch","category":"browser","description":"Read public web page text.","enabled":true}),
         json!({"id":"write_text_file","name":"Write Text File","category":"filesystem","description":"Write text files in workspace.","enabled":true}),
         json!({"id":"write_table_xlsx","name":"Write Table XLSX","category":"filesystem","description":"Write structured rows to a real Excel workbook.","enabled":true}),
@@ -5472,7 +5586,85 @@ async fn web_fetch(client: &reqwest::Client, args: &Value) -> Result<Value, Stri
     Ok(json!({
         "ok": true,
         "url": url,
-        "text": clean.chars().take(12000).collect::<String>()
+        "textChars": clean.chars().count(),
+        "text": clean.chars().take(12000).collect::<String>(),
+        "sourceEvidence": true
+    }))
+}
+
+async fn web_search(client: &reqwest::Client, args: &Value) -> Result<Value, String> {
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing query".to_owned())?;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(8)
+        .clamp(1, 10) as usize;
+    let encoded_query =
+        reqwest::Url::parse_with_params("https://duckduckgo.com/html/", &[("q", query)])
+            .map_err(|e| format!("failed to build search url: {e}"))?;
+    let url = encoded_query.to_string();
+    let html = client
+        .get(&url)
+        .header("user-agent", "Mozilla/5.0 Xiaoheng WorkBuddy")
+        .send()
+        .await
+        .map_err(|e| format!("failed to search web: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("failed to read search response: {e}"))?;
+    let mut results = Vec::new();
+    for segment in html.split("result__a").skip(1) {
+        if results.len() >= limit {
+            break;
+        }
+        let Some(href_pos) = segment.find("href=\"") else {
+            continue;
+        };
+        let href_start = href_pos + "href=\"".len();
+        let Some(href_end) = segment[href_start..].find('"') else {
+            continue;
+        };
+        let raw_url = html_unescape(&segment[href_start..href_start + href_end]);
+        let title = segment
+            .find('>')
+            .and_then(|start| {
+                segment[start + 1..]
+                    .find("</a>")
+                    .map(|end| strip_html_tags(&segment[start + 1..start + 1 + end]))
+            })
+            .unwrap_or_default();
+        if title.trim().is_empty() || raw_url.trim().is_empty() {
+            continue;
+        }
+        let snippet = segment
+            .find("result__snippet")
+            .and_then(|start| {
+                segment[start..].find('>').and_then(|gt| {
+                    segment[start + gt + 1..]
+                        .find("</")
+                        .map(|end| (start, gt, end))
+                })
+            })
+            .map(|(start, gt, end)| strip_html_tags(&segment[start + gt + 1..start + gt + 1 + end]))
+            .unwrap_or_default();
+        results.push(json!({
+            "title": title,
+            "url": raw_url,
+            "snippet": snippet
+        }));
+    }
+    Ok(json!({
+        "ok": true,
+        "query": query,
+        "url": url,
+        "count": results.len(),
+        "results": results,
+        "sourceEvidence": !results.is_empty(),
+        "verificationNote": "web_search returns real search results. Fetch promising URLs with web_fetch before making detailed factual claims."
     }))
 }
 
@@ -8120,6 +8312,21 @@ fn agent_tools() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "web_search",
+                "description": "Search public web pages for factual grounding. Use before creating factual project/product/company/technology presentations when the user did not provide source material.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 10 }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "web_fetch",
                 "description": "Fetch a public URL and return cleaned text.",
                 "parameters": {
@@ -8336,6 +8543,7 @@ fn compact_agent_tools() -> Value {
         {"type":"function","function":{"name":"list_files","description":"List files in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"directory":{"type":"string"}}}}},
         {"type":"function","function":{"name":"shell_exec","description":"Run PowerShell or CMD. Requires current conversation permission mode Full Access. Prefer cmd for cmd/batch syntax and PowerShell for PowerShell syntax; use timeoutSeconds for long tasks.","parameters":{"type":"object","properties":{"command":{"type":"string"},"shell":{"type":"string","enum":["powershell","cmd"]},"cwd":{"type":"string"},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":900}},"required":["command"]}}},
         {"type":"function","function":{"name":"browser_control","description":"Control Edge/Chrome via DevTools: open/navigate/read/screenshot/click selector/type selector.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["open","navigate","fetch","extract","read","screenshot","click","type","fill"]},"url":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string"},"filename":{"type":"string"},"append":{"type":"boolean"},"port":{"type":"integer"}},"required":["action"]}}},
+        {"type":"function","function":{"name":"web_search","description":"Search public web pages for factual grounding before creating factual deliverables.","parameters":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":["query"]}}},
         {"type":"function","function":{"name":"web_fetch","description":"Fetch URL text.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
         {"type":"function","function":{"name":"news_to_excel","description":"Fetch news and save xlsx.","parameters":{"type":"object","properties":{"sourceName":{"type":"string"},"url":{"type":"string"},"limit":{"type":"integer","minimum":3,"maximum":50},"filename":{"type":"string"}},"required":["sourceName","url","limit","filename"]}}},
         {"type":"function","function":{"name":"skill_market_search","description":"Search skill markets.","parameters":{"type":"object","properties":{"source":{"type":"string","enum":["harmony","clawhub","skillhub"]},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"}},"required":["source","query"]}}},
@@ -8418,6 +8626,7 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
         || lower.contains("web")
         || lower.contains("url")
         || lower.contains("search")
+        || prompt_requires_source_grounding(prompt)
         || prompt.contains("网页")
         || prompt.contains("网址")
         || prompt.contains("搜索")
@@ -8460,6 +8669,7 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
         names.insert("shell_exec");
     }
     if asks_web {
+        names.insert("web_search");
         names.insert("web_fetch");
         names.insert("browser_control");
     }
@@ -8544,6 +8754,7 @@ async fn execute_tool(
         "task_plan_update" => Ok(task_plan_update(args, work_context)),
         "work_pool_update" => Ok(work_pool_update(args, work_context)),
         "news_to_excel" => news_to_excel(client, args, work_context).await,
+        "web_search" => web_search(client, args).await,
         "web_fetch" => web_fetch(client, args).await,
         "write_text_file" => write_text_file(args, work_context),
         "write_table_xlsx" => write_table_xlsx(args, work_context),
@@ -8592,6 +8803,7 @@ async fn complete_openai_chat(
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
     let mut forced_artifact_corrections = 0u32;
+    let mut forced_source_corrections = 0u32;
 
     let use_tools = settings.provider != "ollama";
     let max_iterations = effective_agent_max_iterations(settings);
@@ -8710,6 +8922,18 @@ async fn complete_openai_chat(
                     continue;
                 }
                 return Ok(blocked_unverified_execution_answer(&latest_prompt, &answer));
+            }
+            if !force_final
+                && prompt_requires_source_grounding(&latest_prompt)
+                && !has_source_evidence(&tool_steps)
+            {
+                if forced_source_corrections < 3 {
+                    forced_source_corrections += 1;
+                    payload_messages
+                        .push(source_grounding_correction_message(&latest_prompt, &answer));
+                    continue;
+                }
+                return Ok(blocked_unverified_source_answer(&latest_prompt, &answer));
             }
             if !force_final
                 && artifact_contract_requires_file(&latest_prompt)
@@ -8880,6 +9104,7 @@ async fn complete_openai_chat_stream(
     let tool_catalog = compact_agent_tools_for_prompt(&latest_prompt);
     let mut forced_execution_corrections = 0u32;
     let mut forced_artifact_corrections = 0u32;
+    let mut forced_source_corrections = 0u32;
     emit_stream(
         &app,
         &run_id,
@@ -9228,6 +9453,41 @@ async fn complete_openai_chat_stream(
                     "done",
                     json!({
                         "content": blocked_unverified_execution_answer(&latest_prompt, &final_content),
+                        "tasks": task_updates,
+                        "workPoolUpdates": work_pool_updates,
+                        "todos": run_todos,
+                        "toolSteps": tool_steps
+                    }),
+                );
+                return Ok(());
+            }
+            if !force_final
+                && prompt_requires_source_grounding(&latest_prompt)
+                && !has_source_evidence(&tool_steps)
+            {
+                if forced_source_corrections < 3 {
+                    forced_source_corrections += 1;
+                    emit_stream(&app, &run_id, "content_reset", json!({"content": ""}));
+                    emit_stream(
+                        &app,
+                        &run_id,
+                        "assistant_note",
+                        json!({"content": "Gateway detected that this factual deliverable has no source evidence yet. Searching or reading real sources before generation."}),
+                    );
+                    payload_messages.push(source_grounding_correction_message(
+                        &latest_prompt,
+                        &final_content,
+                    ));
+                    final_content.clear();
+                    continue;
+                }
+                emit_stream(&app, &run_id, "content_reset", json!({"content": ""}));
+                emit_stream(
+                    &app,
+                    &run_id,
+                    "done",
+                    json!({
+                        "content": blocked_unverified_source_answer(&latest_prompt, &final_content),
                         "tasks": task_updates,
                         "workPoolUpdates": work_pool_updates,
                         "todos": run_todos,
@@ -9700,5 +9960,32 @@ mod tests {
         assert!(!prompt_is_readonly_inventory_or_export(
             "把这些文件按类型移动到不同文件夹"
         ));
+    }
+
+    #[test]
+    fn factual_project_deck_requires_source_grounding() {
+        let prompt = "生成一个介绍openclaw的核心技术的ppt，放在我桌面";
+        assert!(prompt_requires_source_grounding(prompt));
+        assert!(!has_source_evidence(&[]));
+        let tools = compact_agent_tools_for_prompt(prompt).expect("tools should be routed");
+        let names = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(compact_tool_name)
+            .collect::<BTreeSet<_>>();
+        assert!(names.contains("web_search"));
+        assert!(names.contains("web_fetch"));
+        assert!(names.contains("write_text_file") || names.contains("shell_exec"));
+        let search_step = json!({
+            "name": "web_search",
+            "resultMeta": { "ok": true, "sourceEvidence": true, "textChars": 0 }
+        });
+        assert!(!has_source_evidence(&[search_step]));
+        let fetch_step = json!({
+            "name": "web_fetch",
+            "resultMeta": { "ok": true, "sourceEvidence": true, "textChars": 800 }
+        });
+        assert!(has_source_evidence(&[fetch_step]));
     }
 }
