@@ -5331,13 +5331,42 @@ fn write_text_file(args: &Value, work_context: &Value) -> Result<Value, String> 
         .and_then(Value::as_str)
         .ok_or_else(|| "missing content".to_owned())?;
     let path = safe_output_path(args, work_context)?;
-    fs::write(&path, content).map_err(|e| format!("failed to write text file: {e}"))?;
+    let append = args.get("append").and_then(Value::as_bool).unwrap_or(false);
+    if append {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("failed to open text file for append: {e}"))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("failed to append text file: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("failed to sync appended text file: {e}"))?;
+    } else {
+        let temp_path = path.with_extension(format!(
+            "{}.tmp",
+            path.extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("xiaoheng")
+        ));
+        fs::write(&temp_path, content)
+            .map_err(|e| format!("failed to write temporary text file: {e}"))?;
+        fs::rename(&temp_path, &path).map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            format!("failed to commit text file atomically: {e}")
+        })?;
+    }
+    let metadata = fs::metadata(&path).map_err(|e| format!("failed to verify text file: {e}"))?;
     Ok(json!({
         "ok": true,
         "path": path.to_string_lossy(),
+        "exists": path.exists(),
+        "append": append,
+        "mime": mime_for_path(&path),
+        "actualByteSize": metadata.len(),
         "byteSize": content.as_bytes().len(),
         "charCount": content.chars().count(),
-        "verificationNote": "write_text_file writes the complete content supplied by the model; use byteSize/charCount and list_files/read_text_file metadata to verify, not truncated UI output."
+        "verificationNote": "write_text_file writes the complete content supplied by the model and verifies the target path. For overwrite writes it uses a temporary file plus rename. Use actualByteSize/exists and list_files/read_text_file metadata to verify, not truncated UI output."
     }))
 }
 
@@ -5543,6 +5572,34 @@ fn normalize_shell_success(
         && !combined.contains("failed")
 }
 
+fn normalize_shell_command(command: &str, shell: &str) -> (String, Vec<String>) {
+    let trimmed = command.trim();
+    let lower = trimmed.to_lowercase();
+    let mut notes = Vec::new();
+    if lower.starts_with("pip install ") || lower == "pip install" {
+        notes.push(
+            "Normalized `pip install` to `python -m pip install` for stable Windows execution."
+                .to_owned(),
+        );
+        let rest = trimmed
+            .strip_prefix("pip")
+            .or_else(|| trimmed.strip_prefix("PIP"))
+            .unwrap_or(trimmed)
+            .trim_start();
+        return (format!("python -m pip {rest}"), notes);
+    }
+    if shell.eq_ignore_ascii_case("powershell")
+        && (trimmed.contains(" | Select-Object ") || trimmed.contains("2>&1"))
+    {
+        notes.push("PowerShell native stderr redirection can turn successful native command stderr into NativeCommandError. WorkBuddy treats known benign pip notices with normalizeShellSuccess.".to_owned());
+    }
+    (command.to_owned(), notes)
+}
+
+fn remove_file_quiet(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
 async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String> {
     if setting_bool(work_context, "confirmShell", true) {
         return Err(permission_required_message("Shell 命令执行"));
@@ -5557,6 +5614,13 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
         .and_then(Value::as_str)
         .unwrap_or("powershell");
     let shell = shell.to_owned();
+    let timeout_seconds = args
+        .get("timeoutSeconds")
+        .or_else(|| args.get("timeout_seconds"))
+        .and_then(Value::as_u64)
+        .unwrap_or(120)
+        .clamp(1, 900);
+    let (command, command_notes) = normalize_shell_command(command, &shell);
     if shell.eq_ignore_ascii_case("powershell")
         && (command.contains(" || ") || command.contains(" && "))
     {
@@ -5580,8 +5644,10 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
         .unwrap_or(active_workspace_dir(work_context)?);
     let cwd = resolve_tool_path(cwd, work_context)?;
     fs::create_dir_all(&cwd).map_err(|e| format!("failed to create cwd: {e}"))?;
-    let command = command.to_owned();
     let command_for_status = command.clone();
+    let shell_for_result = shell.clone();
+    let cwd_for_result = cwd.clone();
+    let started = SystemTime::now();
     let output = tokio::task::spawn_blocking(move || {
         let mut cmd = if shell.eq_ignore_ascii_case("cmd") {
             let script_path = env::temp_dir().join(format!("xiaoheng-shell-{}.cmd", now_string()));
@@ -5590,7 +5656,9 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
             let mut cmd = Command::new("cmd");
             cmd.args(["/D", "/C", &script_path.to_string_lossy()]);
             hide_command_window(&mut cmd);
-            cmd
+            let output = cmd.current_dir(&cwd).output();
+            remove_file_quiet(&script_path);
+            return output;
         } else {
             let mut cmd = Command::new("powershell.exe");
             let wrapped = format!(
@@ -5607,10 +5675,16 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
             cmd
         };
         cmd.current_dir(cwd).output()
-    })
-    .await
-    .map_err(|e| format!("failed to join shell task: {e}"))?
-    .map_err(|e| format!("failed to run shell command: {e}"))?;
+    });
+    let output = tokio::time::timeout(Duration::from_secs(timeout_seconds), output)
+        .await
+        .map_err(|_| format!("shell command timed out after {timeout_seconds}s"))?
+        .map_err(|e| format!("failed to join shell task: {e}"))?
+        .map_err(|e| format!("failed to run shell command: {e}"))?;
+    let duration_ms = started
+        .elapsed()
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
     let stdout = decode_process_output(&output.stdout);
     let stderr = decode_process_output(&output.stderr);
     let ok = normalize_shell_success(
@@ -5626,6 +5700,12 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
     Ok(json!({
         "ok": ok,
         "status": output.status.code(),
+        "shell": shell_for_result,
+        "cwd": cwd_for_result.to_string_lossy(),
+        "command": command_for_status,
+        "timeoutSeconds": timeout_seconds,
+        "durationMs": duration_ms,
+        "notes": command_notes,
         "stdoutChars": stdout_chars,
         "stderrChars": stderr_chars,
         "stdoutReturnedChars": stdout_returned.chars().count(),
@@ -7079,7 +7159,8 @@ fn agent_tools() -> Value {
                         "filename": { "type": "string" },
                         "content": { "type": "string" },
                         "path": { "type": "string", "description": "Optional exact target file path. If provided, it overrides filename and directory." },
-                        "directory": { "type": "string", "description": "Optional output directory. Writing files or using outside-workspace paths requires current conversation permission mode Full Access." }
+                        "directory": { "type": "string", "description": "Optional output directory. Writing files or using outside-workspace paths requires current conversation permission mode Full Access." },
+                        "append": { "type": "boolean", "description": "Append to the target file instead of atomically overwriting it." }
                     },
                     "required": ["content"]
                 }
@@ -7132,7 +7213,8 @@ fn agent_tools() -> Value {
                     "properties": {
                         "command": { "type": "string" },
                         "shell": { "type": "string", "enum": ["powershell", "cmd"] },
-                        "cwd": { "type": "string", "description": "Optional working directory. Default is active workspace." }
+                        "cwd": { "type": "string", "description": "Optional working directory. Default is active workspace." },
+                        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 900, "description": "Optional timeout. Default 120 seconds." }
                     },
                     "required": ["command"]
                 }
@@ -7197,11 +7279,11 @@ fn compact_agent_tools() -> Value {
         {"type":"function","function":{"name":"team_roster","description":"Read people, projects and tasks.","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"task_plan_update","description":"Sync todo/task status to task center.","parameters":{"type":"object","properties":{"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"officeId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"ownerId":{"type":"string"},"status":{"type":"string","enum":["todo","doing","review","done","paused","stopped"]},"priority":{"type":"string","enum":["low","medium","high"]},"dueDate":{"type":"string"},"upstreamIds":{"type":"array","items":{"type":"string"}},"downstreamIds":{"type":"array","items":{"type":"string"}}},"required":["title","description","ownerId","status","priority"]}}},"required":["tasks"]}}},
         {"type":"function","function":{"name":"work_pool_update","description":"Create/update/delete projects, people and tasks.","parameters":{"type":"object","properties":{"upsertOffices":{"type":"array","items":{"type":"object"}},"deleteOfficeIds":{"type":"array","items":{"type":"string"}},"upsertAgents":{"type":"array","items":{"type":"object"}},"deleteAgentIds":{"type":"array","items":{"type":"string"}},"upsertTasks":{"type":"array","items":{"type":"object"}},"deleteTaskIds":{"type":"array","items":{"type":"string"}}}}}},
-        {"type":"function","function":{"name":"write_text_file","description":"Write file. Prefer filename+directory, or path+content for an exact target path. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"content":{"type":"string"},"directory":{"type":"string"},"path":{"type":"string"}},"required":["content"]}}},
+        {"type":"function","function":{"name":"write_text_file","description":"Write file. Prefer filename+directory, or path+content for an exact target path. Outside-workspace paths require Full Access. Overwrite writes are atomic; set append=true only when extending an existing log/data file.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"content":{"type":"string"},"directory":{"type":"string"},"path":{"type":"string"},"append":{"type":"boolean"}},"required":["content"]}}},
         {"type":"function","function":{"name":"read_text_file","description":"Read text file in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
         {"type":"function","function":{"name":"read_attachment_text","description":"Read UTF-8 text from a user-uploaded attachment in current conversation by attachmentId.","parameters":{"type":"object","properties":{"attachmentId":{"type":"string"},"path":{"type":"string"}}}}},
         {"type":"function","function":{"name":"list_files","description":"List files in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"directory":{"type":"string"}}}}},
-        {"type":"function","function":{"name":"shell_exec","description":"Run PowerShell or CMD. Requires current conversation permission mode Full Access.","parameters":{"type":"object","properties":{"command":{"type":"string"},"shell":{"type":"string","enum":["powershell","cmd"]},"cwd":{"type":"string"}},"required":["command"]}}},
+        {"type":"function","function":{"name":"shell_exec","description":"Run PowerShell or CMD. Requires current conversation permission mode Full Access. Prefer cmd for cmd/batch syntax and PowerShell for PowerShell syntax; use timeoutSeconds for long tasks.","parameters":{"type":"object","properties":{"command":{"type":"string"},"shell":{"type":"string","enum":["powershell","cmd"]},"cwd":{"type":"string"},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":900}},"required":["command"]}}},
         {"type":"function","function":{"name":"browser_control","description":"Control Edge/Chrome via DevTools: open/navigate/read/screenshot/click selector/type selector.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["open","navigate","fetch","extract","read","screenshot","click","type","fill"]},"url":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string"},"filename":{"type":"string"},"append":{"type":"boolean"},"port":{"type":"integer"}},"required":["action"]}}},
         {"type":"function","function":{"name":"web_fetch","description":"Fetch URL text.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
         {"type":"function","function":{"name":"news_to_excel","description":"Fetch news and save xlsx.","parameters":{"type":"object","properties":{"sourceName":{"type":"string"},"url":{"type":"string"},"limit":{"type":"integer","minimum":3,"maximum":50},"filename":{"type":"string"}},"required":["sourceName","url","limit","filename"]}}},
