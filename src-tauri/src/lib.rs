@@ -16,7 +16,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     hash::{Hash, Hasher},
-    io::{Cursor, ErrorKind, Write},
+    io::{BufRead, BufReader, Cursor, ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
@@ -67,6 +67,25 @@ fn hide_command_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+fn kill_process_tree(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("taskkill");
+        command.args(["/F", "/T", "/PID", &pid.to_string()]);
+        hide_command_window(&mut command);
+        let _ = command.output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
     }
 }
 
@@ -266,6 +285,54 @@ fn last_chars(value: &str, limit: usize) -> String {
     let mut chars = value.chars().rev().take(limit).collect::<Vec<_>>();
     chars.reverse();
     chars.into_iter().collect()
+}
+
+fn line_count(value: &str) -> usize {
+    if value.is_empty() {
+        0
+    } else {
+        value.lines().count()
+    }
+}
+
+fn first_bytes_lossy(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit;
+    while !value.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
+fn tool_output_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = data_dir(app)?.join("tool-output");
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create tool output dir: {e}"))?;
+    Ok(dir)
+}
+
+fn persist_shell_output(
+    app: &AppHandle,
+    stdout: &str,
+    stderr: &str,
+) -> Result<Option<Value>, String> {
+    let stdout_large = stdout.as_bytes().len() > SHELL_OUTPUT_LIMIT;
+    let stderr_large = stderr.as_bytes().len() > SHELL_OUTPUT_LIMIT;
+    if !stdout_large && !stderr_large {
+        return Ok(None);
+    }
+    let dir = tool_output_dir(app)?;
+    let base = format!("shell-{}", now_string());
+    let stdout_path = dir.join(format!("{base}.stdout.txt"));
+    let stderr_path = dir.join(format!("{base}.stderr.txt"));
+    fs::write(&stdout_path, stdout).map_err(|e| format!("failed to persist stdout: {e}"))?;
+    fs::write(&stderr_path, stderr).map_err(|e| format!("failed to persist stderr: {e}"))?;
+    Ok(Some(json!({
+        "stdoutPath": stdout_path.to_string_lossy(),
+        "stderrPath": stderr_path.to_string_lossy(),
+        "note": "Full shell output was persisted because stdout or stderr exceeded the preview limit."
+    })))
 }
 
 fn compact_chat_content(content: &str) -> String {
@@ -487,16 +554,18 @@ fn has_verified_artifact_evidence(tool_steps: &[Value]) -> bool {
         }
         let name = tool_step_name(step);
         let result = tool_result_text(step);
-        matches!(name, "news_to_excel" | "write_text_file")
-            || (name == "shell_exec"
-                && result.contains("\"ok\":true")
-                && (result.contains(".xlsx")
-                    || result.contains(".pptx")
-                    || result.contains(".docx")
-                    || result.contains(".pdf")
-                    || result.contains(".md")
-                    || result.contains(".csv")
-                    || result.contains(".txt")))
+        matches!(
+            name,
+            "news_to_excel" | "write_text_file" | "write_table_xlsx"
+        ) || (name == "shell_exec"
+            && result.contains("\"ok\":true")
+            && (result.contains(".xlsx")
+                || result.contains(".pptx")
+                || result.contains(".docx")
+                || result.contains(".pdf")
+                || result.contains(".md")
+                || result.contains(".csv")
+                || result.contains(".txt")))
             || (name == "list_files"
                 && result.contains("\"entries\"")
                 && (result.contains(".xlsx")
@@ -581,6 +650,7 @@ fn mutates_tool_observable_state(name: &str, result: &Value) -> bool {
         && matches!(
             name,
             "write_text_file"
+                | "write_table_xlsx"
                 | "shell_exec"
                 | "task_plan_update"
                 | "work_pool_update"
@@ -3603,7 +3673,7 @@ fn install_default_skills(_app: AppHandle) -> Result<Value, String> {
         "message": "Default skills installed.",
         "skills": [
             { "id": "skill-web-fetch", "name": "Web Fetch", "description": "Read public web pages for Agent research.", "enabled": true, "category": "research", "source": "builtin", "tools": ["web_fetch"] },
-            { "id": "skill-file-write", "name": "Local File IO", "description": "Read, write and list files in the active workspace.", "enabled": true, "category": "file", "source": "builtin", "tools": ["write_text_file", "read_text_file", "list_files"] },
+            { "id": "skill-file-write", "name": "Local File IO", "description": "Read, write, scan and list files in the active workspace or permitted target directories.", "enabled": true, "category": "file", "source": "builtin", "tools": ["write_text_file", "write_table_xlsx", "read_text_file", "read_text_lines", "file_info", "scan_files", "list_files"] },
             { "id": "skill-shell-exec", "name": "Shell Exec", "description": "Run PowerShell or CMD commands in the active workspace.", "enabled": true, "category": "system", "source": "builtin", "tools": ["shell_exec"] },
             { "id": "skill-desktop-control", "name": "Desktop Control", "description": "Expose browser and computer control tool interfaces.", "enabled": true, "category": "automation", "source": "builtin", "tools": ["browser_control", "computer_control"] },
             { "id": "skill-news-xlsx", "name": "News Excel", "description": "Fetch news headlines and generate a real .xlsx file.", "enabled": true, "category": "office", "source": "builtin", "tools": ["news_to_excel"] },
@@ -3642,7 +3712,11 @@ fn builtin_tools() -> Vec<Value> {
         json!({"id":"news_to_excel","name":"News Excel","category":"office","description":"Fetch headlines and generate an Excel workbook.","enabled":true}),
         json!({"id":"web_fetch","name":"Web Fetch","category":"browser","description":"Read public web page text.","enabled":true}),
         json!({"id":"write_text_file","name":"Write Text File","category":"filesystem","description":"Write text files in workspace.","enabled":true}),
+        json!({"id":"write_table_xlsx","name":"Write Table XLSX","category":"filesystem","description":"Write structured rows to a real Excel workbook.","enabled":true}),
         json!({"id":"read_text_file","name":"Read Text File","category":"filesystem","description":"Read workspace or absolute text files.","enabled":true}),
+        json!({"id":"read_text_lines","name":"Read Text Lines","category":"filesystem","description":"Read bounded line windows from text files.","enabled":true}),
+        json!({"id":"file_info","name":"File Info","category":"filesystem","description":"Read file or directory metadata.","enabled":true}),
+        json!({"id":"scan_files","name":"Scan Files","category":"filesystem","description":"Recursively scan files with structured metadata and extension filters.","enabled":true}),
         json!({"id":"list_files","name":"List Files","category":"filesystem","description":"List files in workspace or target directory.","enabled":true}),
         json!({"id":"shell_exec","name":"Shell Exec","category":"system","description":"Run PowerShell or CMD commands.","enabled":true}),
         json!({"id":"browser_control","name":"Browser Control","category":"browser","description":"Browser tool interface.","enabled":true}),
@@ -5651,6 +5725,204 @@ fn read_text_file(args: &Value, work_context: &Value) -> Result<Value, String> {
     }))
 }
 
+fn file_info(args: &Value, work_context: &Value) -> Result<Value, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing path".to_owned())?;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        active_workspace_dir(work_context)?.join(path)
+    };
+    let path = resolve_tool_path(path, work_context)?;
+    validate_path_anchor(&path, work_context, "file metadata")?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            let modified_ms = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis());
+            Ok(json!({
+                "ok": true,
+                "exists": true,
+                "path": path.to_string_lossy(),
+                "name": path.file_name().and_then(|value| value.to_str()).unwrap_or(""),
+                "isFile": metadata.is_file(),
+                "isDir": metadata.is_dir(),
+                "isSymlink": metadata.file_type().is_symlink(),
+                "byteSize": metadata.len(),
+                "modifiedMs": modified_ms,
+                "extension": path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase()
+            }))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(json!({
+            "ok": true,
+            "exists": false,
+            "path": path.to_string_lossy(),
+            "warning": "path not found"
+        })),
+        Err(error) => Err(format!("failed to read file metadata: {error}")),
+    }
+}
+
+fn read_text_lines(args: &Value, work_context: &Value) -> Result<Value, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing path".to_owned())?;
+    let max_lines = args
+        .get("maxLines")
+        .or_else(|| args.get("max_lines"))
+        .and_then(Value::as_u64)
+        .unwrap_or(200)
+        .min(5000) as usize;
+    let skip_lines = args
+        .get("skipLines")
+        .or_else(|| args.get("skip_lines"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        active_workspace_dir(work_context)?.join(path)
+    };
+    let path = resolve_tool_path(path, work_context)?;
+    validate_path_anchor(&path, work_context, "file line read")?;
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(json!({
+                "ok": true,
+                "exists": false,
+                "path": path.to_string_lossy(),
+                "lines": [],
+                "warning": "file not found"
+            }));
+        }
+        Err(error) => return Err(format!("failed to open file: {error}")),
+    };
+    let mut total_seen = 0usize;
+    let mut lines = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|e| format!("failed to read line: {e}"))?;
+        if total_seen >= skip_lines && lines.len() < max_lines {
+            lines.push(line);
+        }
+        total_seen += 1;
+        if lines.len() >= max_lines {
+            break;
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "exists": true,
+        "path": path.to_string_lossy(),
+        "skipLines": skip_lines,
+        "maxLines": max_lines,
+        "returnedCount": lines.len(),
+        "lines": lines,
+        "linesTruncated": lines.len() >= max_lines,
+        "verificationNote": "read_text_lines returns a bounded line window. Increase skipLines to continue; do not assume the file ended when linesTruncated=true."
+    }))
+}
+
+fn scan_files(args: &Value, work_context: &Value) -> Result<Value, String> {
+    let dir = args
+        .get("directory")
+        .or_else(|| args.get("dir"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing directory".to_owned())?;
+    let recursive = args
+        .get("recursive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(500)
+        .min(5000) as usize;
+    let extensions = args
+        .get("extensions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|item| item.trim().trim_start_matches('.').to_ascii_lowercase())
+                .filter(|item| !item.is_empty())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let dir = resolve_tool_path(dir, work_context)?;
+    validate_path_anchor(&dir, work_context, "file scan")?;
+    let mut stack = vec![dir.clone()];
+    let mut total_count = 0usize;
+    let mut returned = Vec::new();
+    let mut extension_counts: BTreeMap<String, usize> = BTreeMap::new();
+    while let Some(current) = stack.pop() {
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("failed to scan directory: {error}")),
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.is_dir() {
+                if recursive {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !extensions.is_empty() && !extensions.contains(&extension) {
+                continue;
+            }
+            total_count += 1;
+            *extension_counts.entry(extension.clone()).or_insert(0) += 1;
+            if returned.len() < limit {
+                returned.push(json!({
+                    "name": path.file_name().and_then(|value| value.to_str()).unwrap_or(""),
+                    "path": path.to_string_lossy(),
+                    "extension": extension,
+                    "byteSize": metadata.len(),
+                    "modifiedMs": metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_millis())
+                }));
+            }
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "directory": dir.to_string_lossy(),
+        "recursive": recursive,
+        "extensions": extensions,
+        "count": total_count,
+        "returnedCount": returned.len(),
+        "entriesTruncated": total_count > returned.len(),
+        "extensionCounts": extension_counts,
+        "entries": returned,
+        "verificationNote": "scan_files returns structured metadata and count for full matching set; entries is a preview when entriesTruncated=true. Use write_table_xlsx or a script for full exports."
+    }))
+}
+
 fn attachment_items_from_context(work_context: &Value) -> Vec<Value> {
     work_context
         .get("attachments")
@@ -5836,7 +6108,90 @@ fn remove_file_quiet(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
-async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String> {
+struct ShellRunOutput {
+    status: Option<i32>,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+    killed: bool,
+}
+
+fn run_shell_command_blocking(
+    command: String,
+    shell: String,
+    cwd: PathBuf,
+    timeout_seconds: u64,
+) -> Result<ShellRunOutput, String> {
+    let mut script_path_to_remove: Option<PathBuf> = None;
+    let mut cmd = if shell.eq_ignore_ascii_case("cmd") {
+        let script_path = env::temp_dir().join(format!("xiaoheng-shell-{}.cmd", now_string()));
+        let script = format!("@echo off\r\nchcp 65001 >NUL\r\n{command}\r\n");
+        fs::write(&script_path, script).map_err(|e| format!("failed to write cmd script: {e}"))?;
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/D", "/C", &script_path.to_string_lossy()]);
+        script_path_to_remove = Some(script_path);
+        cmd
+    } else {
+        let mut cmd = Command::new("powershell.exe");
+        let wrapped = format!(
+            "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; {command}"
+        );
+        cmd.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &wrapped,
+        ]);
+        cmd
+    };
+    hide_command_window(&mut cmd);
+    cmd.current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn shell command: {e}"))?;
+    let pid = child.id();
+    let start = SystemTime::now();
+    let mut timed_out = false;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("failed to poll shell command: {e}"))?
+            .is_some()
+        {
+            break;
+        }
+        if start
+            .elapsed()
+            .map(|elapsed| elapsed >= Duration::from_secs(timeout_seconds))
+            .unwrap_or(false)
+        {
+            timed_out = true;
+            kill_process_tree(pid);
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to collect shell output: {e}"))?;
+    if let Some(path) = script_path_to_remove {
+        remove_file_quiet(&path);
+    }
+    Ok(ShellRunOutput {
+        status: output.status.code(),
+        stdout: decode_process_output(&output.stdout),
+        stderr: decode_process_output(&output.stderr),
+        timed_out,
+        killed: timed_out,
+    })
+}
+
+async fn shell_exec(app: &AppHandle, args: &Value, work_context: &Value) -> Result<Value, String> {
     if setting_bool(work_context, "confirmShell", true) {
         return Err(permission_required_message("Shell 命令执行"));
     }
@@ -5886,76 +6241,60 @@ async fn shell_exec(args: &Value, work_context: &Value) -> Result<Value, String>
     let cwd_for_result = cwd.clone();
     let started = SystemTime::now();
     let output = tokio::task::spawn_blocking(move || {
-        let mut cmd = if shell.eq_ignore_ascii_case("cmd") {
-            let script_path = env::temp_dir().join(format!("xiaoheng-shell-{}.cmd", now_string()));
-            let script = format!("@echo off\r\nchcp 65001 >NUL\r\n{command}\r\n");
-            fs::write(&script_path, script)?;
-            let mut cmd = Command::new("cmd");
-            cmd.args(["/D", "/C", &script_path.to_string_lossy()]);
-            hide_command_window(&mut cmd);
-            let output = cmd.current_dir(&cwd).output();
-            remove_file_quiet(&script_path);
-            return output;
-        } else {
-            let mut cmd = Command::new("powershell.exe");
-            let wrapped = format!(
-                "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; {command}"
-            );
-            cmd.args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &wrapped,
-            ]);
-            hide_command_window(&mut cmd);
-            cmd
-        };
-        cmd.current_dir(cwd).output()
-    });
-    let output = tokio::time::timeout(Duration::from_secs(timeout_seconds), output)
-        .await
-        .map_err(|_| format!("shell command timed out after {timeout_seconds}s"))?
-        .map_err(|e| format!("failed to join shell task: {e}"))?
-        .map_err(|e| format!("failed to run shell command: {e}"))?;
+        run_shell_command_blocking(command, shell, cwd, timeout_seconds)
+    })
+    .await
+    .map_err(|e| format!("failed to join shell task: {e}"))??;
     let duration_ms = started
         .elapsed()
         .map(|value| value.as_millis())
         .unwrap_or(0);
-    let stdout = decode_process_output(&output.stdout);
-    let stderr = decode_process_output(&output.stderr);
     let ok = normalize_shell_success(
         &command_for_status,
-        output.status.success(),
-        &stdout,
-        &stderr,
-    );
+        output.status == Some(0),
+        &output.stdout,
+        &output.stderr,
+    ) && !output.timed_out;
+    let persisted_output = persist_shell_output(app, &output.stdout, &output.stderr)?;
+    let stdout = output.stdout;
+    let stderr = output.stderr;
     let stdout_chars = stdout.chars().count();
     let stderr_chars = stderr.chars().count();
-    let stdout_returned = first_chars(&stdout, SHELL_OUTPUT_LIMIT);
-    let stderr_returned = first_chars(&stderr, SHELL_OUTPUT_LIMIT);
+    let stdout_bytes = stdout.as_bytes().len();
+    let stderr_bytes = stderr.as_bytes().len();
+    let stdout_returned = first_bytes_lossy(&stdout, SHELL_OUTPUT_LIMIT);
+    let stderr_returned = first_bytes_lossy(&stderr, SHELL_OUTPUT_LIMIT);
     Ok(json!({
         "ok": ok,
-        "status": output.status.code(),
+        "status": output.status,
         "shell": shell_for_result,
         "cwd": cwd_for_result.to_string_lossy(),
         "command": command_for_status,
         "timeoutSeconds": timeout_seconds,
         "durationMs": duration_ms,
+        "timedOut": output.timed_out,
+        "killed": output.killed,
         "notes": command_notes,
         "stdoutChars": stdout_chars,
         "stderrChars": stderr_chars,
+        "stdoutBytes": stdout_bytes,
+        "stderrBytes": stderr_bytes,
+        "stdoutLines": line_count(&stdout),
+        "stderrLines": line_count(&stderr),
         "stdoutReturnedChars": stdout_returned.chars().count(),
         "stderrReturnedChars": stderr_returned.chars().count(),
-        "stdoutTruncated": stdout_chars > stdout_returned.chars().count(),
-        "stderrTruncated": stderr_chars > stderr_returned.chars().count(),
+        "stdoutReturnedBytes": stdout_returned.as_bytes().len(),
+        "stderrReturnedBytes": stderr_returned.as_bytes().len(),
+        "stdoutTruncated": stdout_bytes > stdout_returned.as_bytes().len(),
+        "stderrTruncated": stderr_bytes > stderr_returned.as_bytes().len(),
         "stdoutPreview": first_chars(&stdout, TEXT_PREVIEW_CHARS),
         "stderrPreview": first_chars(&stderr, TEXT_PREVIEW_CHARS),
         "stdoutTail": last_chars(&stdout, TEXT_PREVIEW_CHARS),
         "stderrTail": last_chars(&stderr, TEXT_PREVIEW_CHARS),
         "stdout": stdout_returned,
         "stderr": stderr_returned,
-        "verificationNote": "stdout/stderr may be previews when stdoutTruncated or stderrTruncated is true. Do not infer file contents or command side effects only from truncated shell output; verify with list_files or read_text_file metadata."
+        "persistedOutput": persisted_output,
+        "verificationNote": "stdout/stderr may be previews when stdoutTruncated or stderrTruncated is true. Full output is persisted when large. Do not infer file contents or command side effects only from truncated shell output; verify with list_files/read_text_file/file_info metadata."
     }))
 }
 
@@ -7439,6 +7778,51 @@ fn agent_tools() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "read_text_lines",
+                "description": "Read a bounded line window from a UTF-8 text file. Use for large files instead of repeatedly reading full content.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "skipLines": { "type": "integer", "minimum": 0 },
+                        "maxLines": { "type": "integer", "minimum": 1, "maximum": 5000 }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "file_info",
+                "description": "Return structured metadata for a file or directory without reading its full content.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_files",
+                "description": "Recursively scan files with structured metadata, optional extension filters, counts and preview entries. Prefer this for folder inventories before exporting to Excel.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": { "type": "string" },
+                        "extensions": { "type": "array", "items": { "type": "string" } },
+                        "recursive": { "type": "boolean" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 5000 }
+                    },
+                    "required": ["directory"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "read_attachment_text",
                 "description": "Read UTF-8 text from a user-uploaded attachment already registered in the current conversation. Prefer attachmentId from the user message.",
                 "parameters": {
@@ -7540,6 +7924,9 @@ fn compact_agent_tools() -> Value {
         {"type":"function","function":{"name":"write_text_file","description":"Write file. Prefer filename+directory, or path+content for an exact target path. Outside-workspace paths require Full Access. Overwrite writes are atomic; set append=true only when extending an existing log/data file.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"content":{"type":"string"},"directory":{"type":"string"},"path":{"type":"string"},"append":{"type":"boolean"}},"required":["content"]}}},
         {"type":"function","function":{"name":"write_table_xlsx","description":"Write structured rows to a real .xlsx workbook. Use for inventory/statistics/table exports and include a header row.","parameters":{"type":"object","properties":{"filename":{"type":"string"},"path":{"type":"string"},"directory":{"type":"string"},"rows":{"type":"array","items":{"type":"array","items":{"type":["string","number","boolean","null"]}}}},"required":["rows"]}}},
         {"type":"function","function":{"name":"read_text_file","description":"Read text file in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+        {"type":"function","function":{"name":"read_text_lines","description":"Read bounded line windows from large UTF-8 text files.","parameters":{"type":"object","properties":{"path":{"type":"string"},"skipLines":{"type":"integer","minimum":0},"maxLines":{"type":"integer","minimum":1,"maximum":5000}},"required":["path"]}}},
+        {"type":"function","function":{"name":"file_info","description":"Read file or directory metadata without loading content.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+        {"type":"function","function":{"name":"scan_files","description":"Scan files with structured metadata, filters and counts. Prefer for folder inventories.","parameters":{"type":"object","properties":{"directory":{"type":"string"},"extensions":{"type":"array","items":{"type":"string"}},"recursive":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":5000}},"required":["directory"]}}},
         {"type":"function","function":{"name":"read_attachment_text","description":"Read UTF-8 text from a user-uploaded attachment in current conversation by attachmentId.","parameters":{"type":"object","properties":{"attachmentId":{"type":"string"},"path":{"type":"string"}}}}},
         {"type":"function","function":{"name":"list_files","description":"List files in workspace. Outside-workspace paths require Full Access.","parameters":{"type":"object","properties":{"directory":{"type":"string"}}}}},
         {"type":"function","function":{"name":"shell_exec","description":"Run PowerShell or CMD. Requires current conversation permission mode Full Access. Prefer cmd for cmd/batch syntax and PowerShell for PowerShell syntax; use timeoutSeconds for long tasks.","parameters":{"type":"object","properties":{"command":{"type":"string"},"shell":{"type":"string","enum":["powershell","cmd"]},"cwd":{"type":"string"},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":900}},"required":["command"]}}},
@@ -7655,6 +8042,9 @@ fn compact_agent_tools_for_prompt(prompt: &str) -> Option<Value> {
             "write_text_file",
             "write_table_xlsx",
             "read_text_file",
+            "read_text_lines",
+            "file_info",
+            "scan_files",
             "list_files",
         ]);
     }
@@ -7752,9 +8142,12 @@ async fn execute_tool(
         "write_text_file" => write_text_file(args, work_context),
         "write_table_xlsx" => write_table_xlsx(args, work_context),
         "read_text_file" => read_text_file(args, work_context),
+        "read_text_lines" => read_text_lines(args, work_context),
+        "file_info" => file_info(args, work_context),
+        "scan_files" => scan_files(args, work_context),
         "read_attachment_text" => read_attachment_text(args, work_context),
         "list_files" => list_files(args, work_context),
-        "shell_exec" => shell_exec(args, work_context).await,
+        "shell_exec" => shell_exec(app, args, work_context).await,
         "browser_control" => browser_control(client, args, work_context).await,
         "computer_control" => computer_control(args, work_context).await,
         "im_channel_status" => Ok(im_channel_status_tool()),
