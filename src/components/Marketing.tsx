@@ -6,6 +6,7 @@ import {
   chatApi,
   marketingApi,
   marketingUserContext,
+  openPath,
   readRememberedMarketingUser,
   sessionsApi,
   type MarketingAsset,
@@ -33,8 +34,62 @@ function metric(value: unknown) {
   return Number(value ?? 0).toLocaleString("zh-CN");
 }
 
+function formatDuration(seconds: number | string | null | undefined) {
+  const value = Number(seconds ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return "0:00";
+  const mins = Math.floor(value / 60);
+  const secs = Math.floor(value % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function assetDimensions(asset: MarketingAsset) {
+  return asset.width && asset.height ? `${asset.width}x${asset.height}` : "";
+}
+
 function field<T = unknown>(source: Record<string, unknown> | undefined, camel: string, snake: string): T | undefined {
   return (source?.[camel] ?? source?.[snake]) as T | undefined;
+}
+
+const FORMAT_FILTERS = [
+  { id: "image", label: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "svg"] },
+  { id: "video", label: "视频", extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v"] },
+  { id: "audio", label: "音频", extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg"] },
+  { id: "document", label: "文档", extensions: ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv"] },
+] as const;
+
+const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.map((item) => item.id);
+const MARKETING_ASSET_BASE = "http://61.150.31.150:8090";
+
+function selectedExtensions(groups: string[]) {
+  return new Set<string>(
+    FORMAT_FILTERS
+      .filter((item) => groups.includes(item.id))
+      .flatMap((item) => item.extensions),
+  );
+}
+
+function assetMatchesFormat(asset: MarketingAsset, groups: string[]) {
+  if (!groups.length) return false;
+  const extensions = selectedExtensions(groups);
+  const ext = (asset.extension || asset.fileName.split(".").pop() || "").replace(/^\./, "").toLowerCase();
+  if (extensions.has(ext)) return true;
+  return groups.includes(asset.assetType);
+}
+
+function assetKindIcon(asset: MarketingAsset) {
+  if (asset.assetType === "image") return "🖼";
+  if (asset.assetType === "video") return "▶";
+  if (asset.assetType === "audio") return "♪";
+  if (asset.assetType === "document") return "DOC";
+  return (asset.extension || "FILE").slice(0, 4).toUpperCase();
+}
+
+function assetPreviewUrl(asset: MarketingAsset) {
+  const raw = asset.previewUrl;
+  if (!raw) return "";
+  return raw.startsWith("http://") || raw.startsWith("https://")
+    ? raw
+    : `${MARKETING_ASSET_BASE}${raw.startsWith("/") ? raw : `/${raw}`}`;
 }
 
 export default function Marketing({ view, user, onUserChange, onNavigateToChat }: {
@@ -60,6 +115,9 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [selectedAsset, setSelectedAsset] = useState<MarketingAsset | null>(null);
   const [preview, setPreview] = useState<MarketingPreparedAsset | null>(null);
   const [message, setMessage] = useState("");
+  const [formatGroups, setFormatGroups] = useState<string[]>(DEFAULT_FORMAT_GROUPS);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
 
   const active = user?.approvalStatus === "active";
 
@@ -68,19 +126,38 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     setLoading(true);
     setMessage("");
     try {
-      const [nextSummary, nextFolders, nextAssets, nextCampaign] = await Promise.all([
+      const selectedGroups = formatGroups.length ? formatGroups : [];
+      const assetRequests = selectedGroups.length
+        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, limit: 96, sort: "modified_desc" }))
+        : [Promise.resolve({ assets: [], total: 0 })];
+      const [nextSummary, nextFolders, nextAssetGroups, nextCampaign] = await Promise.all([
         marketingApi.summary(),
         marketingApi.folders(),
-        marketingApi.assets({ folder, q: query, limit: 48, sort: "modified_desc" }),
+        Promise.all(assetRequests),
         marketingApi.campaignSummary(1440),
       ]);
+      const merged = new Map<string, MarketingAsset>();
+      let total = 0;
+      for (const groupResult of nextAssetGroups) {
+        total += Number(groupResult.total ?? 0);
+        for (const asset of groupResult.assets ?? []) {
+          merged.set(asset.id, asset);
+        }
+      }
+      const filteredAssets = Array.from(merged.values()).filter((asset) => assetMatchesFormat(asset, selectedGroups));
+      const nextAssets = filteredAssets
+        .sort((a, b) => String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? "")))
+        .slice(0, 48);
       setSummary(nextSummary);
       setFolders(nextFolders.folders ?? []);
-      setAssets(nextAssets.assets ?? []);
-      setAssetTotal(nextAssets.total ?? 0);
+      setAssets(nextAssets);
+      setAssetTotal(filteredAssets.length || total);
       setCampaign(nextCampaign);
-      if (!selectedAsset && nextAssets.assets?.[0]) {
-        setSelectedAsset(nextAssets.assets[0]);
+      if (selectedAsset && !merged.has(selectedAsset.id)) {
+        setSelectedAsset(nextAssets[0] ?? null);
+        setPreview(null);
+      } else if (!selectedAsset && nextAssets[0]) {
+        setSelectedAsset(nextAssets[0]);
       }
     } catch (error) {
       setMessage(String(error));
@@ -92,7 +169,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   useEffect(() => {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, folder, view]);
+  }, [active, folder, view, formatGroups]);
 
   const totals = summary?.totals ?? {};
   const platformTotals = useMemo(() => {
@@ -131,18 +208,34 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   };
 
   const prepareAsset = async (asset: MarketingAsset) => {
-    const prepared = await marketingApi.prepareAssetForChat(asset.id, asset.fileName, settings?.workspace_root);
-    setPreview(prepared);
-    return prepared;
+    setPreviewLoading(true);
+    setPreviewError("");
+    try {
+      const prepared = await marketingApi.prepareAssetForChat(asset.id, asset.fileName, settings?.workspace_root);
+      setPreview(prepared);
+      return prepared;
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const toggleFormatGroup = (group: string) => {
+    setFormatGroups((prev) => (
+      prev.includes(group)
+        ? prev.filter((item) => item !== group)
+        : [...prev, group]
+    ));
   };
 
   const selectAsset = async (asset: MarketingAsset) => {
     setSelectedAsset(asset);
     setPreview(null);
+    setPreviewError("");
     if (asset.assetType === "image" || asset.assetType === "video") {
       try {
         await prepareAsset(asset);
       } catch (error) {
+        setPreviewError(String(error));
         setMessage(String(error));
       }
     }
@@ -178,6 +271,18 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     }));
     setMessage("素材已放入会话输入框附件区，请在聊天窗口补充需求后手动发送。");
     onNavigateToChat();
+  };
+
+  const openSelectedAsset = async (asset: MarketingAsset) => {
+    setMessage(`正在准备打开：${asset.fileName}`);
+    try {
+      const prepared = preview?.assetId === asset.id ? preview : await prepareAsset(asset);
+      await openPath(prepared.localPath);
+      setMessage("");
+    } catch (error) {
+      setPreviewError(String(error));
+      setMessage(String(error));
+    }
   };
 
   const sendDashboardToChat = async () => {
@@ -253,15 +358,23 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const renderAssetPreview = () => {
     if (!selectedAsset) return <div className="empty-state">选择一个素材查看详情和预览。</div>;
     const src = preview?.localPath ? convertFileSrc(preview.localPath) : "";
+    const canInlinePreview = selectedAsset.assetType === "image" || selectedAsset.assetType === "video";
     return (
       <aside className="card marketing-preview">
         <div className="marketing-preview-media">
-          {src && selectedAsset.assetType === "image" && <img src={src} alt={selectedAsset.fileName} />}
-          {src && selectedAsset.assetType === "video" && <video src={src} controls />}
-          {!src && <div className="marketing-preview-empty">{selectedAsset.extension || selectedAsset.assetType}</div>}
+          {previewLoading && <div className="marketing-preview-empty">加载预览...</div>}
+          {!previewLoading && src && selectedAsset.assetType === "image" && (
+            <img src={src} alt={selectedAsset.fileName} onError={() => setPreviewError("图片预览加载失败，可点击打开文件用系统应用查看。")} />
+          )}
+          {!previewLoading && src && selectedAsset.assetType === "video" && (
+            <video src={src} controls preload="metadata" onError={() => setPreviewError("视频预览加载失败，可点击打开文件用系统播放器查看。")} />
+          )}
+          {!previewLoading && !src && <div className="marketing-preview-empty">{assetKindIcon(selectedAsset)}</div>}
         </div>
         <div className="marketing-preview-info">
           <h3>{selectedAsset.fileName}</h3>
+          {canInlinePreview && !preview && !previewLoading && !previewError && <p className="marketing-preview-hint">选择素材后会先缓存到本地，再使用本地文件进行安全预览。</p>}
+          {previewError && <div className="marketing-preview-warning">{previewError}</div>}
           <dl>
             <dt>类型</dt><dd>{selectedAsset.assetType} / {selectedAsset.mimeType}</dd>
             <dt>大小</dt><dd>{formatBytes(selectedAsset.fileSize)}</dd>
@@ -270,7 +383,15 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             {(selectedAsset.width || selectedAsset.height) && <><dt>尺寸</dt><dd>{selectedAsset.width ?? "-"} × {selectedAsset.height ?? "-"}</dd></>}
             {selectedAsset.durationSeconds && <><dt>时长</dt><dd>{selectedAsset.durationSeconds}s</dd></>}
           </dl>
-          <button className="btn-primary" onClick={() => void stageAssetToChat(selectedAsset)}>放入会话输入框</button>
+          <div className="marketing-preview-actions">
+            <button className="btn-primary" onClick={() => void stageAssetToChat(selectedAsset)}>放入会话输入框</button>
+            <button
+              className="btn-secondary"
+              onClick={() => void openSelectedAsset(selectedAsset)}
+            >
+              打开文件
+            </button>
+          </div>
         </div>
       </aside>
     );
@@ -307,15 +428,43 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                 <input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名、路径" />
                 <button className="btn-secondary" onClick={() => void loadAll()}>搜索</button>
               </div>
-              <div className="marketing-asset-cards">
-                {assets.map((asset) => (
-                  <button className={`marketing-asset-card ${selectedAsset?.id === asset.id ? "active" : ""}`} key={asset.id} onClick={() => void selectAsset(asset)}>
-                    <span className="marketing-asset-type">{asset.assetType}</span>
-                    <strong>{asset.fileName}</strong>
-                    <small>{asset.rootFolder}</small>
-                    <small>{formatBytes(asset.fileSize)} · {asset.extension || "file"}</small>
-                  </button>
+              <div className="marketing-filter-caption">文件类型</div>
+              <div className="marketing-format-filter" aria-label="格式筛选">
+                {FORMAT_FILTERS.map((item) => (
+                  <label key={item.id} title={item.extensions.join(", ")}>
+                    <input
+                      type="checkbox"
+                      checked={formatGroups.includes(item.id)}
+                      onChange={() => toggleFormatGroup(item.id)}
+                    />
+                    <span>{item.label}</span>
+                    <small>{item.extensions.slice(0, 4).join("/")}</small>
+                  </label>
                 ))}
+              </div>
+              <div className="marketing-asset-cards">
+                {assets.map((asset) => {
+                  const previewUrl = assetPreviewUrl(asset);
+                  const dimensions = assetDimensions(asset);
+                  return (
+                  <button className={`marketing-asset-card asset-${asset.assetType} ${selectedAsset?.id === asset.id ? "active" : ""}`} key={asset.id} title={`${asset.fileName}\n${asset.rootFolder}/${asset.relativePath}`} onClick={() => void selectAsset(asset)}>
+                    <span className="marketing-asset-select"><i />选择</span>
+                    <span className="marketing-asset-media">
+                      {previewUrl ? (
+                        <span className="marketing-asset-thumb" style={{ backgroundImage: `url("${previewUrl}")` }} />
+                      ) : (
+                        <span className="marketing-asset-placeholder">{assetKindIcon(asset)}</span>
+                      )}
+                      <span className="marketing-asset-type">{asset.assetType}</span>
+                    </span>
+                    <span className="marketing-asset-info">
+                      <strong>{asset.fileName}</strong>
+                      <small>{asset.rootFolder || "素材库"}</small>
+                      <small>{[formatBytes(asset.fileSize), formatDuration(asset.durationSeconds), dimensions].filter(Boolean).join(" · ")}</small>
+                    </span>
+                  </button>
+                  );
+                })}
                 {!assets.length && <div className="empty-state">没有匹配素材。</div>}
               </div>
             </section>

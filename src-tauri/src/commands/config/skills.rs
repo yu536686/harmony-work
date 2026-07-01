@@ -1,12 +1,15 @@
 use crate::skills::loader::check_skill_compatibility;
 use crate::store::{db::Skill, AppState};
 use serde::Serialize;
-use tauri::Manager;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use tracing::{info, warn};
 
 // reqwest is available as a transitive dependency from other tools
 use reqwest;
+
+fn notify_skills_changed(state: &State<'_, AppState>) {
+    let _ = state.app_handle.emit("skills_changed", ());
+}
 
 /// Perform a GET request with automatic retry on 429 (rate-limit) and 5xx errors.
 ///
@@ -97,6 +100,7 @@ pub async fn toggle_skill(
     let db = state.db.lock().await;
     db.set_skill_enabled(&skill_id, enabled)
         .map_err(|e| e.to_string())
+        .map(|_| notify_skills_changed(&state))
 }
 
 #[derive(Debug, Serialize)]
@@ -246,6 +250,9 @@ pub async fn sync_skills_from_disk(state: State<'_, AppState>) -> Result<SyncSki
         }
     }
 
+    if synced > 0 {
+        notify_skills_changed(&state);
+    }
     Ok(SyncSkillsResult {
         synced,
         already_registered,
@@ -359,6 +366,7 @@ async fn install_skill_from_content_sourced(
         }
     }
 
+    notify_skills_changed(state);
     Ok(SkillCatalogItem {
         name: skill.name,
         description: skill.description,
@@ -699,6 +707,7 @@ async fn install_skill_from_zip(
         skill.name, extracted_count, skill_dir
     );
 
+    notify_skills_changed(state);
     Ok(SkillCatalogItem {
         name: skill.name,
         description: skill.description,
@@ -788,6 +797,7 @@ pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> 
     }
 
     info!("Uninstalled skill '{}'", skill_name);
+    notify_skills_changed(&state);
     Ok(())
 }
 

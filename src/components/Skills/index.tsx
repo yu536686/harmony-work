@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { RootState, skillsActions, sessionsActions } from "../../store";
@@ -118,6 +119,14 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   useEffect(() => {
     loadSkills();
     loadEvolution();
+  }, [loadSkills, loadEvolution]);
+
+  useEffect(() => {
+    const unlisten = listen("skills_changed", () => {
+      loadSkills();
+      loadEvolution();
+    });
+    return () => { unlisten.then((fn) => fn()).catch(() => {}); };
   }, [loadSkills, loadEvolution]);
 
   const handleSyncFromDisk = useCallback(async () => {

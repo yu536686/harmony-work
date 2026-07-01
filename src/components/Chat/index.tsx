@@ -1346,10 +1346,15 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   }, [sessionFilter]);
 
   useEffect(() => {
-    skillsApi.list()
-      .then((r) => dispatch(skillsActions.setSkills(r.skills)))
-      .catch(() => dispatch(skillsActions.setSkills([])));
+    const refreshSkills = () => {
+      skillsApi.list()
+        .then((r) => dispatch(skillsActions.setSkills(r.skills)))
+        .catch(() => dispatch(skillsActions.setSkills([])));
+    };
+    refreshSkills();
+    const unlistenSkills = listen("skills_changed", refreshSkills);
     koiApi.list().then(setKoiList).catch(() => setKoiList([]));
+    return () => { unlistenSkills.then((fn) => fn()).catch(() => {}); };
   }, [dispatch]);
 
   useEffect(() => {
@@ -1534,7 +1539,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
       ...(currentSettings.enabled_models ?? []),
       currentSettings.model,
     ].filter(Boolean) as string[]));
-    globalModels.forEach((m) => addModel(currentSettings.provider || "anthropic", m));
+    globalModels.forEach((m) => addModel("current", m));
     for (const p of currentSettings.llm_providers ?? []) {
       const models = [p.model, ...(p.enabled_models ?? [])].filter(Boolean) as string[];
       models.forEach((m) => addModel(`named:${p.id}`, m, p.label || p.id));

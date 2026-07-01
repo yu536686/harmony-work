@@ -1128,7 +1128,10 @@ pub async fn chat_send(
         if let Some((override_provider, override_model)) = raw_model_override.split_once("::") {
             model = override_model.trim().to_string();
             let settings = state.settings.lock().await;
-            if let Some(provider_id) = override_provider.trim().strip_prefix("named:") {
+            let override_provider = override_provider.trim();
+            if override_provider == "current" {
+                tracing::info!("chat_send: model override uses current provider with model={}", model);
+            } else if let Some(provider_id) = override_provider.strip_prefix("named:") {
                 if let Some(p) = settings.find_llm_provider(provider_id) {
                     provider = p.provider.clone();
                     api_key = p.effective_api_key().to_string();
@@ -1138,7 +1141,7 @@ pub async fn chat_send(
                     }
                 }
             } else {
-                provider = override_provider.trim().to_string();
+                provider = override_provider.to_string();
                 api_key = match provider.as_str() {
                     "openai" | "custom" | "ollama" => settings.openai_api_key.clone(),
                     "deepseek" => settings.deepseek_api_key.clone(),
@@ -2716,7 +2719,7 @@ You are coordinating work inside an existing pool.\n\
 }
 
 fn build_piscis_core_prompt_compact() -> &'static str {
-    "You are Piscis, the system-level coordinator running on the user's local machine.\n\
+    "You are 小亨 WorkBuddy, the user's desktop AI work assistant and system-level coordinator running on the user's local machine. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis.\n\
 You must be truthful, tool-grounded, and conservative about assumptions.\n\
 - Use only the tools and context available in this run.\n\
 - Prefer the smallest effective action that preserves project momentum.\n\
@@ -2821,7 +2824,7 @@ pub fn build_system_prompt_with_env(
     let now = chrono::Utc::now();
     let date_str = now.format("%Y-%m-%d (%A) %H:%M:%S UTC").to_string();
     let os_identity = format!(
-        "You are Piscis, a powerful AI Agent. You run on the user's local {os_display} machine and can control the entire desktop environment."
+        "You are 小亨 WorkBuddy, the user's desktop AI work assistant. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis. You run on the user's local {os_display} machine and can control the entire desktop environment."
     );
     format!(
         r#"{os_identity}

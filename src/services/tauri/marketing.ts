@@ -14,7 +14,7 @@ export interface MarketingAsset {
   rootFolder: string;
   relativePath: string;
   extension: string;
-  assetType: "video" | "image" | "document" | "archive" | "other";
+  assetType: "video" | "image" | "audio" | "document" | "archive" | "other";
   mimeType: string;
   fileSize: number;
   modifiedAt: string;
@@ -67,6 +67,69 @@ export interface MarketingPreparedAsset {
 
 const USER_STORAGE_KEY = "workbuddy.marketingUser";
 
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "svg"]);
+const VIDEO_EXTS = new Set(["mp4", "mov", "mkv", "avi", "webm", "m4v"]);
+const AUDIO_EXTS = new Set(["mp3", "wav", "m4a", "aac", "flac", "ogg"]);
+const DOC_EXTS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv"]);
+const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz"]);
+
+function value<T = unknown>(source: Record<string, unknown>, camel: string, snake: string): T | undefined {
+  return (source[camel] ?? source[snake]) as T | undefined;
+}
+
+function inferAssetType(extension: string, rawType?: string): MarketingAsset["assetType"] {
+  const type = String(rawType || "").toLowerCase();
+  if (type === "image" || type === "video" || type === "audio" || type === "document" || type === "archive" || type === "other") {
+    if (type === "video" && !VIDEO_EXTS.has(extension)) {
+      return inferAssetType(extension);
+    }
+    return type as MarketingAsset["assetType"];
+  }
+  if (IMAGE_EXTS.has(extension)) return "image";
+  if (VIDEO_EXTS.has(extension)) return "video";
+  if (AUDIO_EXTS.has(extension)) return "audio";
+  if (DOC_EXTS.has(extension)) return "document";
+  if (ARCHIVE_EXTS.has(extension)) return "archive";
+  return "other";
+}
+
+function normalizeAsset(raw: MarketingAsset | Record<string, unknown>): MarketingAsset {
+  const source = raw as Record<string, unknown>;
+  const extension = String(value(source, "extension", "extension") ?? "").replace(/^\./, "").toLowerCase();
+  const fileName = String(value(source, "fileName", "file_name") ?? value(source, "name", "name") ?? "");
+  return {
+    id: String(value(source, "id", "id") ?? ""),
+    fileName,
+    rootFolder: String(value(source, "rootFolder", "root_folder") ?? ""),
+    relativePath: String(value(source, "relativePath", "relative_path") ?? ""),
+    extension,
+    assetType: inferAssetType(extension, String(value(source, "assetType", "asset_type") ?? "")),
+    mimeType: String(value(source, "mimeType", "mime_type") ?? ""),
+    fileSize: Number(value(source, "fileSize", "file_size") ?? 0),
+    modifiedAt: String(value(source, "modifiedAt", "modified_at") ?? ""),
+    width: value<number | null>(source, "width", "width") ?? null,
+    height: value<number | null>(source, "height", "height") ?? null,
+    durationSeconds: value<number | null>(source, "durationSeconds", "duration_seconds") ?? null,
+    previewUrl: value<string | undefined>(source, "previewUrl", "preview_url"),
+  };
+}
+
+function normalizeAssetList(raw: MarketingAssetList | Record<string, unknown>): MarketingAssetList {
+  const source = raw as Record<string, unknown>;
+  const rawAssets = (source.assets ?? []) as Array<MarketingAsset | Record<string, unknown>>;
+  return {
+    total: Number(source.total ?? rawAssets.length ?? 0),
+    assets: rawAssets.map(normalizeAsset),
+  };
+}
+
+function normalizeSummary(raw: MarketingAssetSummary): MarketingAssetSummary {
+  return {
+    ...raw,
+    recent: (raw.recent ?? []).map(normalizeAsset),
+  };
+}
+
 function rememberUser(user: MarketingUser | null) {
   if (user) localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
   else localStorage.removeItem(USER_STORAGE_KEY);
@@ -106,10 +169,10 @@ export const marketingApi = {
     rememberUser(result.user);
     return result.user;
   },
-  summary: () => invoke<MarketingAssetSummary>("marketing_asset_summary"),
+  summary: async () => normalizeSummary(await invoke<MarketingAssetSummary>("marketing_asset_summary")),
   folders: () => invoke<{ folders: string[] }>("marketing_asset_folders"),
   formats: () => invoke<{ existing: Array<{ extension: string; count: number }>; common: string[] }>("marketing_asset_formats"),
-  assets: (query: MarketingAssetQuery) => invoke<MarketingAssetList>("marketing_assets", { query }),
+  assets: async (query: MarketingAssetQuery) => normalizeAssetList(await invoke<MarketingAssetList>("marketing_assets", { query })),
   campaignSummary: (minutes = 1440, platform = "") =>
     invoke<MarketingCampaignSummary>("marketing_campaign_summary", { minutes, platform: platform || null }),
   douyinAccounts: () => invoke<{ accounts: Array<Record<string, string | number | boolean | null>> }>("marketing_douyin_accounts"),
