@@ -1,6 +1,6 @@
 //! Marketing portal integration.
 //!
-//! WorkBuddy keeps the marketing portal service on 192.168.11.29 as the
+//! WorkBuddy keeps the marketing portal service on the public marketing host as the
 //! source of truth for users, asset indexes, and campaign metrics. These
 //! commands proxy authenticated requests from the desktop app so the WebView
 //! does not have to fight CORS or browser cookie rules.
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-const DEFAULT_MARKETING_BASE: &str = "http://192.168.11.29:8090";
+const DEFAULT_MARKETING_BASE: &str = "http://61.150.31.150:8090";
 
 static MARKETING_COOKIE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 

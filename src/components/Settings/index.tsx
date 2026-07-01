@@ -479,19 +479,33 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
     setSaving(true);
     setSaveError(null);
     try {
+      const normalizeModelSelection = (model: string | undefined, enabled: string[] | undefined) => {
+        const enabledModels = uniqStrings(enabled ?? []);
+        const defaultModel = (model ?? "").trim() || enabledModels[0] || "";
+        return {
+          model: defaultModel,
+          enabled_models: defaultModel ? uniqStrings([defaultModel, ...enabledModels]) : enabledModels,
+        };
+      };
+      const globalModels = normalizeModelSelection(form.model, form.enabled_models);
       const updated = await settingsApi.save({
         ...form,
-        enabled_models: uniqStrings([form.model, ...(form.enabled_models ?? [])]),
+        model: globalModels.model,
+        enabled_models: globalModels.enabled_models,
         compaction_micro_percent: micro,
         compaction_auto_percent: auto,
         compaction_full_percent: full,
         max_tool_result_tokens: Math.max(1000, Number(form.max_tool_result_tokens) || 8000),
         summary_model: (form.summary_model ?? "").trim() || null,
         ssh_servers: sshServers,
-        llm_providers: llmProviders.map((p) => ({
-          ...p,
-          enabled_models: uniqStrings([p.model, ...(p.enabled_models ?? [])]),
-        })),
+        llm_providers: llmProviders.map((p) => {
+          const providerModels = normalizeModelSelection(p.model, p.enabled_models);
+          return {
+            ...p,
+            model: providerModels.model,
+            enabled_models: providerModels.enabled_models,
+          };
+        }),
       });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key)));
@@ -537,7 +551,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       setForm((prev) => ({
         ...prev,
         available_models: ids,
-        enabled_models: uniqStrings([prev.model, ...(prev.enabled_models ?? []), ...ids.slice(0, 1)]),
+        enabled_models: uniqStrings([...(prev.enabled_models ?? []), ...ids.slice(0, 1)]),
         model: prev.model || ids[0] || "",
       }));
     } catch (e) {
@@ -553,7 +567,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       const enabled = current.includes(model)
         ? current.filter((m) => m !== model)
         : [...current, model];
-      const nextEnabled = uniqStrings([...(enabled.length ? enabled : [model]), prev.model]);
+      const nextEnabled = uniqStrings(enabled.length ? enabled : [model]);
       return {
         ...prev,
         enabled_models: nextEnabled,
@@ -581,7 +595,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       setLlmEditForm((prev) => ({
         ...prev,
         available_models: ids,
-        enabled_models: uniqStrings([prev.model, ...(prev.enabled_models ?? []), ...ids.slice(0, 1)]),
+        enabled_models: uniqStrings([...(prev.enabled_models ?? []), ...ids.slice(0, 1)]),
         model: prev.model || ids[0] || "",
       }));
     } catch (e) {
@@ -597,7 +611,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       const enabled = current.includes(model)
         ? current.filter((m) => m !== model)
         : [...current, model];
-      const nextEnabled = uniqStrings([...(enabled.length ? enabled : [model]), prev.model]);
+      const nextEnabled = uniqStrings(enabled.length ? enabled : [model]);
       return {
         ...prev,
         enabled_models: nextEnabled,
@@ -777,7 +791,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
           </div>
 
           <div className="form-group">
-            <label className="label">{t("settings.model")}</label>
+            <label className="label">{t("settings.defaultModel")}</label>
             <div style={{ display: "flex", gap: 8 }}>
               <select
                 className="input"
@@ -788,7 +802,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                   setForm((prev) => ({
                     ...prev,
                     model: next,
-                    enabled_models: uniqStrings([next, ...(prev.enabled_models ?? [])]),
+                    enabled_models: uniqStrings([...(prev.enabled_models ?? []), next]),
                   }));
                 }}
               >
@@ -814,7 +828,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                     <label key={m} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-primary)" }}>
                       <input
                         type="checkbox"
-                        checked={(form.enabled_models ?? []).includes(m) || form.model === m}
+                        checked={(form.enabled_models ?? []).includes(m)}
                         onChange={() => toggleGlobalModel(m)}
                       />
                       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{m}</span>
@@ -822,7 +836,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                         type="radio"
                         name="global-default-model"
                         checked={form.model === m}
-                        onChange={() => setForm((prev) => ({ ...prev, model: m, enabled_models: uniqStrings([m, ...(prev.enabled_models ?? [])]) }))}
+                        onChange={() => setForm((prev) => ({ ...prev, model: m, enabled_models: uniqStrings([...(prev.enabled_models ?? []), m]) }))}
                       />
                       <span style={{ color: "var(--text-muted)" }}>{t("settings.defaultModel")}</span>
                     </label>
@@ -1121,10 +1135,10 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                     </select>
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">{t("settings.namedLlmModelLabel")}</label>
+                    <label className="label">{t("settings.defaultModel")}</label>
                     <select className="input" value={llmEditForm.model} onChange={e => {
                       const next = e.target.value;
-                      setLlmEditForm(f => ({ ...f, model: next, enabled_models: uniqStrings([next, ...(f.enabled_models ?? [])]) }));
+                      setLlmEditForm(f => ({ ...f, model: next, enabled_models: uniqStrings([...(f.enabled_models ?? []), next]) }));
                     }}>
                       <option value="">{llmProviderMeta.placeholder}</option>
                       {llmModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -1173,7 +1187,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                             <label key={m} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-primary)" }}>
                               <input
                                 type="checkbox"
-                                checked={(llmEditForm.enabled_models ?? []).includes(m) || llmEditForm.model === m}
+                                checked={(llmEditForm.enabled_models ?? []).includes(m)}
                                 onChange={() => toggleNamedModel(m)}
                               />
                               <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{m}</span>
@@ -1181,7 +1195,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                                 type="radio"
                                 name="named-default-model"
                                 checked={llmEditForm.model === m}
-                                onChange={() => setLlmEditForm((f) => ({ ...f, model: m, enabled_models: uniqStrings([m, ...(f.enabled_models ?? [])]) }))}
+                                onChange={() => setLlmEditForm((f) => ({ ...f, model: m, enabled_models: uniqStrings([...(f.enabled_models ?? []), m]) }))}
                               />
                               <span style={{ color: "var(--text-muted)" }}>{t("settings.defaultModel")}</span>
                             </label>
@@ -1203,7 +1217,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                       const nextProvider = {
                         ...llmEditForm,
                         id: llmEditForm.id.trim(),
-                        enabled_models: uniqStrings([llmEditForm.model, ...(llmEditForm.enabled_models ?? [])]),
+                        enabled_models: uniqStrings([...(llmEditForm.enabled_models ?? []), llmEditForm.model]),
                       };
                       if (llmEditIdx === -1) {
                         if (llmProviders.some(p => p.id === nextProvider.id)) return;

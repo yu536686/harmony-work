@@ -13,7 +13,7 @@
  * they all map to `commands/chat/*` on the Rust side.
  */
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import type { Session, ChatMessage, ScheduledTask } from "../../services/tauri";
+import type { Session, ChatMessage, ScheduledTask, ChatAttachment } from "../../services/tauri";
 import { isInternalSession, type MainChatSessionKind } from "../../utils/session";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,7 @@ interface SessionsState {
     filter: MainChatSessionKind;
     sessionId?: string | null;
     composerDraft?: string;
+    composerAttachments?: ChatAttachment[];
     autoSend?: boolean;
   } | null;
 }
@@ -89,6 +90,7 @@ export const sessionsSlice = createSlice({
         filter: MainChatSessionKind;
         sessionId?: string | null;
         composerDraft?: string;
+        composerAttachments?: ChatAttachment[];
         autoSend?: boolean;
       }>,
     ) => {
@@ -96,6 +98,7 @@ export const sessionsSlice = createSlice({
         filter: action.payload.filter,
         sessionId: action.payload.sessionId ?? null,
         composerDraft: action.payload.composerDraft,
+        composerAttachments: action.payload.composerAttachments,
         autoSend: action.payload.autoSend,
       };
       if (action.payload.sessionId) {

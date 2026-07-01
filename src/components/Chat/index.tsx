@@ -402,6 +402,26 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
         pendingAutoSendRef.current = pendingMainChatNav.composerDraft;
       }
     }
+    if (pendingMainChatNav.composerAttachments?.length) {
+      void (async () => {
+        const next: PendingAttachmentItem[] = [];
+        for (const attachment of pendingMainChatNav.composerAttachments ?? []) {
+          if (attachment.path) {
+            try {
+              next.push(await buildAttachmentFromPath(attachment.path));
+              continue;
+            } catch {
+              // Fall through to the raw attachment if the local preview cannot be read.
+            }
+          }
+          next.push({
+            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            attachment,
+          });
+        }
+        setPendingAttachments((prev) => [...prev, ...next]);
+      })();
+    }
     dispatch(sessionsActions.clearPendingMainChatNav());
   }, [pendingMainChatNav, dispatch]);
 
@@ -1510,10 +1530,10 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
         selected: selectedModelOverride === itemId,
       });
     };
-    const globalModels = [
-      currentSettings.model,
+    const globalModels = Array.from(new Set([
       ...(currentSettings.enabled_models ?? []),
-    ].filter(Boolean) as string[];
+      currentSettings.model,
+    ].filter(Boolean) as string[]));
     globalModels.forEach((m) => addModel(currentSettings.provider || "anthropic", m));
     for (const p of currentSettings.llm_providers ?? []) {
       const models = [p.model, ...(p.enabled_models ?? [])].filter(Boolean) as string[];

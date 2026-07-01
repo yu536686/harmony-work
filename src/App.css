@@ -269,6 +269,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
 }
 
 .minimal-mode-btn,
@@ -314,6 +315,172 @@ body {
   font-size: 16px;
   width: 20px;
   text-align: center;
+}
+
+.nav-caret {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.nav-subitems {
+  display: grid;
+  gap: 4px;
+  padding: 0 0 2px 42px;
+}
+
+.nav-subitem {
+  height: 30px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.nav-subitem:hover,
+.nav-subitem.active {
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.user-footer {
+  gap: 8px;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.user-card:hover {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #b98a34, #f2d08a);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-card-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.18;
+}
+
+.user-card-text strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-card-text small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.user-menu {
+  position: absolute;
+  left: 0;
+  bottom: 58px;
+  width: 250px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(22px);
+  z-index: 20;
+}
+
+.user-menu-email {
+  padding: 7px 8px 10px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu button {
+  width: 100%;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  padding: 9px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.user-menu button:hover {
+  background: var(--bg-hover);
+}
+
+.user-menu-separator {
+  height: 1px;
+  margin: 7px 4px;
+  background: var(--border);
+}
+
+.locked-page {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.locked-card {
+  width: min(460px, 100%);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.locked-card h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 22px;
+}
+
+.locked-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .main-content {
@@ -814,7 +981,10 @@ select.form-select:focus {
   }
 
   .app-name,
-  .nav-label {
+  .nav-label,
+  .nav-caret,
+  .nav-subitems,
+  .user-card-text {
     display: none;
   }
 
@@ -825,6 +995,11 @@ select.form-select:focus {
   .nav-item {
     justify-content: center;
     padding: 12px;
+  }
+
+  .user-menu {
+    width: 230px;
+    left: 0;
   }
 
   .main-content {

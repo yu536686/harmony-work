@@ -27,7 +27,7 @@ const Onboarding = lazy(() => import("./components/Onboarding"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
 
-type Tab = "chat" | "marketing" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 type SchoolSubTab = "fish" | "koi";
 type MarketTab = "experts" | "team" | "skills";
 
@@ -41,6 +41,8 @@ function AppContent() {
   const pendingMainChatNav = useSelector((s: RootState) => s.sessions.pendingMainChatNav);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
+  const [marketingExpanded, setMarketingExpanded] = useState(true);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [schoolSubTab, setSchoolSubTab] = useState<SchoolSubTab>("fish");
   const [marketTab, setMarketTab] = useState<MarketTab>("experts");
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
@@ -76,13 +78,6 @@ function AppContent() {
   useEffect(() => {
     if (pendingMainChatNav) setActiveTab("chat");
   }, [pendingMainChatNav]);
-
-  useEffect(() => {
-    const highLevelUnlocked = marketingUser?.approvalStatus === "active";
-    if (!highLevelUnlocked && activeTab !== "chat" && activeTab !== "marketing") {
-      setActiveTab("marketing");
-    }
-  }, [activeTab, marketingUser?.approvalStatus]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -244,11 +239,6 @@ function AppContent() {
   }
 
   const navigateTab = (tab: Tab, opts?: { schoolSubTab?: SchoolSubTab }) => {
-    const highLevelUnlocked = marketingUser?.approvalStatus === "active";
-    if (!highLevelUnlocked && tab !== "chat" && tab !== "marketing") {
-      setActiveTab("marketing");
-      return;
-    }
     if (opts?.schoolSubTab) setSchoolSubTab(opts.schoolSubTab);
     if (tab === "skills") {
       setMarketTab("skills");
@@ -271,17 +261,28 @@ function AppContent() {
   const highLevelUnlocked = marketingUser?.approvalStatus === "active";
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: t("nav.chat"), icon: "💬" },
-    { id: "marketing", label: "线上营销", icon: "📈" },
-    ...(highLevelUnlocked ? [
-      { id: "market" as const, label: t("nav.market"), icon: "🏬" },
-      { id: "tools" as const, label: t("nav.tools"), icon: "🔧" },
-      { id: "scheduler" as const, label: t("nav.scheduler"), icon: "⏰" },
-      { id: "memory" as const, label: t("nav.memory"), icon: "💡" },
-      { id: "audit" as const, label: t("nav.audit"), icon: "🔍" },
-      { id: "settings" as const, label: t("nav.settings"), icon: "⚙️" },
-      { id: "about" as const, label: t("nav.about"), icon: "ℹ️" },
-    ] : []),
+    { id: "market", label: t("nav.market"), icon: "🏬" },
+    { id: "tools", label: t("nav.tools"), icon: "🔧" },
+    { id: "scheduler", label: t("nav.scheduler"), icon: "⏰" },
+    { id: "memory", label: t("nav.memory"), icon: "💡" },
+    { id: "audit", label: t("nav.audit"), icon: "🔍" },
   ];
+  const userInitial = (marketingUser?.name || marketingUser?.email || "YT").trim().slice(0, 2).toUpperCase();
+  const requireLoginPanel = (title: string) => (
+    <div className="locked-page">
+      <div className="locked-card card">
+        <span className="eyebrow">Login Required</span>
+        <h2>{title}</h2>
+        <p>登录线上营销工作台账号后可以访问该功能。当前未登录时仅开放基础对话。</p>
+        <button className="btn-primary" onClick={() => setActiveTab("marketing-assets")}>去登录</button>
+      </div>
+    </div>
+  );
+  const handleMarketingLogout = async () => {
+    await marketingApi.logout().catch(() => {});
+    setMarketingUser(null);
+    setUserMenuOpen(false);
+  };
 
   return (
     <div className="app">
@@ -305,6 +306,36 @@ function AppContent() {
           </button>
         </div>
         <nav className="sidebar-nav">
+          <button
+            className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" ? "active" : ""}`}
+            onClick={() => {
+              setMarketingExpanded((value) => !value);
+              if (activeTab !== "marketing-assets" && activeTab !== "marketing-dashboard") {
+                navigateTab("marketing-assets");
+              }
+            }}
+            title="线上营销工作台"
+          >
+            <span className="nav-icon">📈</span>
+            <span className="nav-label">线上营销工作台</span>
+            <span className="nav-caret">{marketingExpanded ? "⌄" : "›"}</span>
+          </button>
+          {marketingExpanded && (
+            <div className="nav-subitems">
+              <button
+                className={`nav-subitem ${activeTab === "marketing-assets" ? "active" : ""}`}
+                onClick={() => navigateTab("marketing-assets")}
+              >
+                素材库
+              </button>
+              <button
+                className={`nav-subitem ${activeTab === "marketing-dashboard" ? "active" : ""}`}
+                onClick={() => navigateTab("marketing-dashboard")}
+              >
+                数据看板
+              </button>
+            </div>
+          )}
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -317,16 +348,21 @@ function AppContent() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          {highLevelUnlocked && (
-            <button
-              className={`nav-item ${activeTab === "debug" ? "active" : ""}`}
-              title={t("nav.debug")}
-              onClick={() => setActiveTab("debug")}
-            >
-              <span className="nav-icon">🔬</span>
-              <span className="nav-label">{t("nav.debug")}</span>
-            </button>
+        <div className="sidebar-footer user-footer">
+          {userMenuOpen && (
+            <div className="user-menu">
+              <div className="user-menu-email">◎ {marketingUser?.email ?? "未登录"}</div>
+              <button onClick={() => { setActiveTab("marketing-assets"); setUserMenuOpen(false); }}>个人账户</button>
+              <button onClick={() => { setActiveTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
+              <button onClick={() => { setActiveTab("about"); setUserMenuOpen(false); }}>{t("nav.about")}</button>
+              <button onClick={() => { setActiveTab("debug"); setUserMenuOpen(false); }}>{t("nav.debug")}</button>
+              <div className="user-menu-separator" />
+              {marketingUser ? (
+                <button onClick={() => void handleMarketingLogout()}>退出登录</button>
+              ) : (
+                <button onClick={() => { setActiveTab("marketing-assets"); setUserMenuOpen(false); }}>登录账号</button>
+              )}
+            </div>
           )}
           <button
             className="nav-item minimal-mode-btn"
@@ -335,6 +371,13 @@ function AppContent() {
           >
             <span className="nav-icon">⚪</span>
             <span className="nav-label">{t("nav.minimalMode")}</span>
+          </button>
+          <button className="user-card" onClick={() => setUserMenuOpen((value) => !value)}>
+            <span className="user-avatar">{userInitial}</span>
+            <span className="user-card-text">
+              <strong>{marketingUser?.name || "登录账号"}</strong>
+              <small>{marketingUser ? marketingUser.userRole : "解锁工作台"}</small>
+            </span>
           </button>
         </div>
       </aside>
@@ -350,9 +393,20 @@ function AppContent() {
               />
             </div>
           )}
-          {mountedTabs.has("marketing") && (
-            <div className="tab-panel" hidden={activeTab !== "marketing"}>
+          {mountedTabs.has("marketing-assets") && (
+            <div className="tab-panel" hidden={activeTab !== "marketing-assets"}>
               <Marketing
+                view="assets"
+                user={marketingUser}
+                onUserChange={setMarketingUser}
+                onNavigateToChat={() => setActiveTab("chat")}
+              />
+            </div>
+          )}
+          {mountedTabs.has("marketing-dashboard") && (
+            <div className="tab-panel" hidden={activeTab !== "marketing-dashboard"}>
+              <Marketing
+                view="dashboard"
                 user={marketingUser}
                 onUserChange={setMarketingUser}
                 onNavigateToChat={() => setActiveTab("chat")}
@@ -360,43 +414,43 @@ function AppContent() {
             </div>
           )}
           {mountedTabs.has("memory") && (
-            <div className="tab-panel" hidden={activeTab !== "memory"}><Memory /></div>
+            <div className="tab-panel" hidden={activeTab !== "memory"}>{highLevelUnlocked ? <Memory /> : requireLoginPanel(t("nav.memory"))}</div>
           )}
           {mountedTabs.has("tools") && (
-            <div className="tab-panel" hidden={activeTab !== "tools"}><Tools /></div>
+            <div className="tab-panel" hidden={activeTab !== "tools"}>{highLevelUnlocked ? <Tools /> : requireLoginPanel(t("nav.tools"))}</div>
           )}
           {mountedTabs.has("market") && (
             <div className="tab-panel" hidden={activeTab !== "market"}>
-              <Market
+              {highLevelUnlocked ? <Market
                 initialTab={marketTab}
                 initialSchoolSubTab={schoolSubTab}
                 onNavigateToChat={() => setActiveTab("chat")}
-              />
+              /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
           {mountedTabs.has("pond") && (
             <div className="tab-panel" hidden={activeTab !== "pond"}>
-              <Pond
+              {highLevelUnlocked ? <Pond
                 visible={activeTab === "pond"}
                 onNavigateToSchoolKoi={() => navigateTab("school", { schoolSubTab: "koi" })}
-              />
+              /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
           {mountedTabs.has("school") && (
             <div className="tab-panel" hidden={activeTab !== "school"}>
-              <SchoolPage initialSubTab={schoolSubTab} />
+              {highLevelUnlocked ? <SchoolPage initialSubTab={schoolSubTab} /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
           {mountedTabs.has("skills") && (
             <div className="tab-panel" hidden={activeTab !== "skills"}>
-              <Skills onNavigateTab={() => setActiveTab("chat")} />
+              {highLevelUnlocked ? <Skills onNavigateTab={() => setActiveTab("chat")} /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
           {mountedTabs.has("scheduler") && (
-            <div className="tab-panel" hidden={activeTab !== "scheduler"}><Scheduler /></div>
+            <div className="tab-panel" hidden={activeTab !== "scheduler"}>{highLevelUnlocked ? <Scheduler /> : requireLoginPanel(t("nav.scheduler"))}</div>
           )}
           {mountedTabs.has("audit") && (
-            <div className="tab-panel" hidden={activeTab !== "audit"}><AuditLog /></div>
+            <div className="tab-panel" hidden={activeTab !== "audit"}>{highLevelUnlocked ? <AuditLog /> : requireLoginPanel(t("nav.audit"))}</div>
           )}
           {mountedTabs.has("settings") && (
             <div className="tab-panel" hidden={activeTab !== "settings"}>
