@@ -1,0 +1,38 @@
+[package]
+name = "robotz-browser"
+description = "Chrome DevTools Protocol web automation tool for RobotZ"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+robotz-core.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+base64.workspace = true
+futures = "0.3"
+once_cell = "1"
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+# Browser automation via Chrome DevTools Protocol (cross-platform).
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+# HTTP client for downloading Chrome for Testing.
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+# ZIP extraction for Chrome for Testing downloads.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.62", optional = true }
+
+[features]
+default = []
+piscis-kernel = ["dep:piscis-kernel"]
+
+[lints]
+workspace = true

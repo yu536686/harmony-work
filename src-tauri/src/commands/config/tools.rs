@@ -1,0 +1,185 @@
+use crate::store::AppState;
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltinToolInfo {
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub windows_only: bool,
+}
+
+/// Returns the list of system built-in tools with metadata.
+#[tauri::command]
+pub async fn list_builtin_tools(
+    _state: State<'_, AppState>,
+) -> Result<Vec<BuiltinToolInfo>, String> {
+    let tools = vec![
+        BuiltinToolInfo {
+            name: "file_read".into(),
+            description: "读取本地文件内容，支持文本和二进制文件".into(),
+            icon: "📄".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_write".into(),
+            description: "写入或修改本地文件，支持创建新文件和追加内容".into(),
+            icon: "✏️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "shell".into(),
+            description: "执行系统 Shell 命令（cmd.exe / bash）".into(),
+            icon: "⌨️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "powershell_query".into(),
+            description: "执行 PowerShell 脚本，支持 Windows 系统管理任务".into(),
+            icon: "🪟".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "web_search".into(),
+            description: "搜索互联网，获取最新信息".into(),
+            icon: "🔍".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "web_fetch".into(),
+            description: "抓取指定 URL 的正文（HTML 转纯文本），适合读文档与 changelogs".into(),
+            icon: "📰".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "browser".into(),
+            description: "控制 Chrome 浏览器，支持网页导航、点击、截图等操作".into(),
+            icon: "🌐".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "wmi".into(),
+            description: "通过 WMI 查询 Windows 系统信息（硬件、进程、服务等）".into(),
+            icon: "💻".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "office".into(),
+            description: "操作 Office 文档（Word、Excel、PowerPoint）".into(),
+            icon: "📊".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "email".into(),
+            description: "通过 SMTP 发送邮件（需在设置中配置）".into(),
+            icon: "📧".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "plan_todo".into(),
+            description: "维护当前复杂任务的可视化执行计划与待办状态".into(),
+            icon: "📋".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "vision_context".into(),
+            description: "管理可复用的视觉工件，并决定下一轮要送入多模态模型的图片".into(),
+            icon: "🖼️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "uia".into(),
+            description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
+            icon: "🖱️".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "screen_capture".into(),
+            description: "截取屏幕画面，用于视觉感知和 UI 状态分析".into(),
+            icon: "📸".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "com".into(),
+            description: "通过 COM/OLE 接口与 Windows 应用程序交互（如 Excel、IE 等）".into(),
+            icon: "🔌".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "call_fish".into(),
+            description: "委托子任务给专属 Fish 子代理，让专家处理特定领域任务".into(),
+            icon: "🐠".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "call_koi".into(),
+            description: "委托任务给持久化 Koi 代理，具备独立记忆与长期职责".into(),
+            icon: "🐟".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "pool_org".into(),
+            description: "创建和管理项目池与组织规范，由 Piscis 主动发起协作项目".into(),
+            icon: "🏊".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "im_channel_list".into(),
+            description: "查看当前已注册 IM 渠道的连接状态与可用性".into(),
+            icon: "📡".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "im_channel_connect".into(),
+            description: "连接设置中已启用的 IM 渠道，不提供断开能力".into(),
+            icon: "🔌".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "im_channel_binding_lookup".into(),
+            description: "按 session_id、pool_id 或 task_id 查询可用的 IM binding_key".into(),
+            icon: "🧭".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "im_channel_binding_list".into(),
+            description: "按 channel 名列出可用的 IM token 候选与 binding_key".into(),
+            icon: "🎯".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "skill_list".into(),
+            description: "列出已加载技能及触发条件，支持渐进式披露深读 SKILL.md".into(),
+            icon: "⚡".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "skill_manage".into(),
+            description: "创建/修改 Agent 草稿技能（installed/locked 技能受保护）".into(),
+            icon: "🧬".into(),
+            windows_only: false,
+        },
+    ];
+    Ok(tools)
+}
+
+/// Manually trigger a heartbeat agent run.
+#[tauri::command]
+pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String> {
+    let (prompt, enabled) = {
+        let settings = state.settings.lock().await;
+        (
+            settings.heartbeat_prompt.clone(),
+            settings.heartbeat_enabled,
+        )
+    };
+    if !enabled {
+        return Err("Heartbeat is not enabled in settings".into());
+    }
+    let state_ref = (*state).clone();
+    tokio::spawn(async move {
+        let _ = crate::piscis::heartbeat::dispatch_heartbeat(&state_ref, &prompt, "internal").await;
+    });
+    Ok(())
+}

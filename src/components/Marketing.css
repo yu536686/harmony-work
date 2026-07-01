@@ -1,0 +1,274 @@
+.marketing-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.marketing-auth {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.marketing-login {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+}
+
+.marketing-login h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+
+.marketing-login p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.marketing-login label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.marketing-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px 28px;
+}
+
+.marketing-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.marketing-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.marketing-pill,
+.marketing-notice,
+.marketing-error {
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.marketing-pill {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.marketing-notice {
+  display: inline-flex;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.marketing-error {
+  border-radius: 8px;
+  color: #b42318;
+  background: #fff1f0;
+  border: 1px solid #ffccc7;
+}
+
+.marketing-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.marketing-metric {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.marketing-metric span,
+.marketing-metric small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.marketing-metric strong {
+  font-size: 24px;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.marketing-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.35fr) minmax(360px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.marketing-panel {
+  padding: 18px;
+  min-width: 0;
+}
+
+.marketing-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.marketing-panel-head h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.marketing-filters {
+  display: grid;
+  grid-template-columns: 170px 1fr auto;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.marketing-assets,
+.marketing-platforms,
+.marketing-posts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.marketing-asset,
+.marketing-platform,
+.marketing-post {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.marketing-asset {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+}
+
+.marketing-asset strong {
+  display: block;
+  color: var(--text-primary);
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marketing-asset small {
+  display: block;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.marketing-platform {
+  padding: 12px;
+}
+
+.marketing-platform strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.marketing-platform div,
+.marketing-post {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.marketing-platform b,
+.marketing-post b {
+  color: var(--text-primary);
+}
+
+.marketing-posts {
+  margin-top: 18px;
+}
+
+.marketing-posts h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.marketing-post {
+  padding: 10px 12px;
+}
+
+.marketing-post span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marketing-panel-foot,
+.empty-state {
+  margin-top: 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+@media (max-width: 1180px) {
+  .marketing-metrics,
+  .marketing-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .marketing-body {
+    padding: 14px;
+  }
+
+  .marketing-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .marketing-asset,
+  .marketing-panel-head,
+  .marketing-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

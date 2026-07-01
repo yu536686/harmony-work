@@ -1,11 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main-capability",
-  "description": "小亨 WorkBuddy 主窗口最小权限",
-  "windows": ["main"],
+  "identifier": "default",
+  "description": "Default capabilities for Harmony WorkBuddy Desktop",
+  "windows": ["main", "overlay"],
   "permissions": [
     "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-title",
+    "shell:allow-open",
     "dialog:default",
+    "fs:default",
     "notification:default"
   ]
 }

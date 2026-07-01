@@ -1,0 +1,104 @@
+/* ============================================================
+   OpenPiscis — Theme System Entry Point
+   导入所有主题，默认激活 violet
+   ============================================================ */
+
+@import "./themes/violet.css";
+@import "./themes/gold.css";
+@import "./themes/light.css";
+
+/* 默认主题 = Harmony Light（在 :root 上直接应用，无需 data-theme） */
+:root {
+  /* 背景层次 */
+  --bg-primary:    #eef3ff;
+  --bg-secondary:  rgba(255, 255, 255, 0.86);
+  --bg-tertiary:   #f3f6ff;
+  --bg-hover:      #e9efff;
+
+  /* 边框 */
+  --border:        rgba(122, 137, 184, 0.18);
+  --border-color:  var(--border);
+
+  /* 主色调 — 紫罗兰 */
+  --accent:        #6658f6;
+  --accent-hover:  #5346db;
+  --accent-dim:    rgba(102, 88, 246, 0.12);
+  --accent-muted:  rgba(102, 88, 246, 0.10);
+  --accent-glow:   0 18px 42px rgba(102, 88, 246, 0.18);
+  --accent-color:  var(--accent);
+
+  /* 文字 */
+  --text-primary:   #202536;
+  --text-secondary: #667085;
+  --text-muted:     #9aa4ba;
+
+  /* 状态色 */
+  --success: #2fbd6f;
+  --warning: #e6a323;
+  --error:   #e25555;
+  --context-usage-caution: #9f91ff;
+  --context-usage-warn:    #8a78ff;
+  --context-usage-hot:     #7c6af7;
+
+  /* 消息气泡 */
+  --msg-user-bg:      rgba(102, 88, 246, 0.10);
+  --msg-user-border:  rgba(102, 88, 246, 0.20);
+  --msg-ai-bg:        rgba(255, 255, 255, 0.88);
+  --msg-ai-border:    rgba(122, 137, 184, 0.18);
+
+  /* 侧边栏 */
+  --sidebar-bg:     rgba(255, 255, 255, 0.66);
+  --sidebar-border: rgba(122, 137, 184, 0.16);
+
+  /* 顶栏 / 侧列面板（比 bg-secondary 更柔和，避免刺眼） */
+  --topbar-bg:         rgba(255, 255, 255, 0.72);
+  --panel-sidebar-bg:  rgba(255, 255, 255, 0.66);
+
+  /* 左侧品牌栏主导高度；右侧各页顶栏与之对齐（不压缩品牌区） */
+  --chrome-header-height: 56px;
+
+  /* 工具栏/输入行控件 — 与 btn-header、btn-icon 同高 */
+  --control-height:     32px;
+  --control-font-size:  12px;
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(137, 148, 186, 0.42);
+
+  /* 阴影 */
+  --shadow:    0 12px 28px rgba(82, 99, 151, 0.10);
+  --shadow-lg: 0 24px 60px rgba(82, 99, 151, 0.16);
+
+  /* 圆角 */
+  --radius:    12px;
+  --radius-lg: 20px;
+
+  /* 字体 — 包含 Segoe UI Emoji 确保 Windows 上 emoji 正常渲染 */
+  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
+
+  /* 界面字体缩放倍率（设置页可调，默认 1） */
+  --font-scale: 1;
+
+  /* accent-muted: 用于微弱高亮，各主题可覆盖 */
+  --accent-muted: rgba(124, 106, 247, 0.15);
+}
+
+/* 主题切换过渡动画 */
+*, *::before, *::after {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.2s ease,
+    box-shadow 0.25s ease;
+}
+
+/* 排除不需要过渡的元素（避免动画干扰） */
+.loading-spinner,
+input,
+textarea,
+select {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.15s ease,
+    color 0.2s ease;
+}

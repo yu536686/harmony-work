@@ -1,23 +1,73 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+const host = process.env.TAURI_DEV_HOST;
+
 export default defineConfig({
+  // Use relative asset paths so desktop builds can load bundled files
+  // regardless of how the app protocol/root is resolved at runtime.
+  base: "./",
   plugins: [react()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true },
-  envPrefix: ["VITE_", "TAURI_"],
   build: {
-    target: "chrome105",
-    minify: "esbuild",
-    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks: {
-          motion: ["framer-motion"],
-          charts: ["recharts"],
-          markdown: ["react-markdown", "remark-gfm"]
+          "app-vendor": [
+            "react",
+            "react-dom",
+            "react-redux",
+            "@reduxjs/toolkit",
+            "i18next",
+            "react-i18next",
+            "@tauri-apps/api",
+          ],
+          markdown: [
+            "react-markdown",
+            "remark-gfm",
+            "rehype-highlight",
+            "highlight.js",
+          ],
+          monaco: [
+            "monaco-editor",
+            "@monaco-editor/react",
+          ],
+        },
+      },
+    },
+  },
+  server: {
+    port: 5173,
+    strictPort: true,
+    host: host || false,
+    hmr: host
+      ? {
+          protocol: "ws",
+          host,
+          port: 5183,
         }
-      }
-    }
-  }
+      : undefined,
+    watch: {
+      ignored: ["**/src-tauri/**", "**/references/**"],
+    },
+    fs: {
+      deny: ["references"],
+    },
+  },
+  optimizeDeps: {
+    entries: ["src/main.tsx"],
+    exclude: ["references"],
+  },
+  test: {
+    environment: "happy-dom",
+    globals: true,
+    setupFiles: ["src/test/setup.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/main.tsx", "src/test/**"],
+    },
+  },
 });
