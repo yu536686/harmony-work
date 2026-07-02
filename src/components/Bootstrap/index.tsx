@@ -28,6 +28,8 @@ export default function Bootstrap({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const [actionError, setActionError] = useState("");
 
   const refresh = async () => {
     setRefreshing(true);
@@ -45,8 +47,20 @@ export default function Bootstrap({
   const installItem = async (item: EnvironmentBootstrapItem) => {
     if (item.available || installingKey) return;
     setInstallingKey(item.key);
+    setActionError("");
+    setActionMessage(`正在启动 ${item.name} 安装流程，请留意系统安装窗口或等待命令完成。`);
     try {
-      setStatus(await systemApi.installEnvironmentBootstrapItem(item.key));
+      const result = await systemApi.installEnvironmentBootstrapItem(item.key);
+      setStatus(result);
+      const latest = result.items.find((candidate) => candidate.key === item.key);
+      setActionMessage(
+        latest?.available
+          ? `${item.name} 已安装并通过检测。`
+          : `${item.name} 安装流程已结束，但还没有通过检测。请按日志提示处理后点击“重新检测”。`,
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+      setActionMessage("");
     } finally {
       setInstallingKey(null);
     }
@@ -131,6 +145,12 @@ export default function Bootstrap({
               {(status?.offline_dirs ?? []).map((dir) => <code key={dir}>{dir}</code>)}
               <p>支持：Git/Node/Python 的 .exe/.msi 安装包，以及 @wecom/cli 的 .tgz 包。</p>
             </div>
+
+            {(actionMessage || actionError) && (
+              <div className={`bootstrap-message ${actionError ? "error" : ""}`}>
+                {actionError || actionMessage}
+              </div>
+            )}
 
             <div className="bootstrap-actions">
               <button className="btn btn-secondary" onClick={() => void refresh()} disabled={refreshing || !!installingKey}>

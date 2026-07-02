@@ -1028,28 +1028,10 @@ fn run_local_installer(target: BootstrapTarget, path: &Path) -> Result<String, S
             .to_ascii_lowercase();
         let mut command = if ext == "msi" {
             let mut cmd = std_command("msiexec");
-            cmd.args(["/i", &path.to_string_lossy(), "/qn", "/norestart"]);
+            cmd.args(["/i", &path.to_string_lossy()]);
             cmd
         } else {
-            let mut cmd = std_command(path.as_os_str());
-            match target.key {
-                "git" => {
-                    cmd.args(["/VERYSILENT", "/NORESTART"]);
-                }
-                "node" => {
-                    cmd.args(["/quiet", "/norestart"]);
-                }
-                "python" => {
-                    cmd.args([
-                        "/quiet",
-                        "InstallAllUsers=0",
-                        "PrependPath=1",
-                        "Include_pip=1",
-                    ]);
-                }
-                _ => {}
-            }
-            cmd
+            std_command(path.as_os_str())
         };
         let output = command
             .output()

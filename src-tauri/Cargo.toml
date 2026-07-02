@@ -46,7 +46,7 @@ piscis-ide-tools = { path = "../third_party/piscis-engine/piscis-ide-tools" }
 
 [package]
 name = "xiaoheng-workbuddy"
-version = "0.7.6-alpha.6"
+version = "0.7.6-alpha.7"
 autobins = false
 default-run = "xiaoheng-workbuddy"
 description = "Harmony Xiaoheng AI desktop workbench"

@@ -161,6 +161,12 @@
   border-radius: 10px;
   background: rgba(212, 173, 91, 0.14);
   color: var(--text-primary);
+  margin-top: 14px;
+}
+
+.bootstrap-message.error {
+  background: rgba(216, 107, 95, 0.14);
+  color: #d86b5f;
 }
 
 .bootstrap-login-actions {
