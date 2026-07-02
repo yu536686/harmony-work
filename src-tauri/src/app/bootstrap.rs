@@ -1412,6 +1412,7 @@ fn run_impl() {
             commands::platform::system::check_runtimes,
             commands::platform::system::check_environment_bootstrap,
             commands::platform::system::run_environment_bootstrap,
+            commands::platform::system::install_environment_bootstrap_item,
             commands::platform::system::check_system_dependencies,
             commands::platform::system::check_privilege_elevation,
             commands::platform::system::run_system_dependency_action,

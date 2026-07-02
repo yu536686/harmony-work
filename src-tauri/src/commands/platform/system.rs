@@ -214,54 +214,30 @@ pub async fn run_environment_bootstrap(
     let settings = state.settings.lock().await.clone();
     let mut logs = Vec::new();
 
-    let workspace_root = if settings.workspace_root.trim().is_empty() {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("harmony")
-    } else {
-        PathBuf::from(&settings.workspace_root)
-    };
-    match std::fs::create_dir_all(&workspace_root) {
-        Ok(_) => logs.push(format!("Workspace ready: {}", workspace_root.display())),
-        Err(err) => logs.push(format!(
-            "Workspace create failed: {} ({err})",
-            workspace_root.display()
-        )),
-    }
+    ensure_bootstrap_workspace(&settings, &mut logs);
 
     for target in bootstrap_targets() {
-        if target_available(target).is_some() {
-            logs.push(format!("{} already available.", target.name));
-            continue;
-        }
-
-        if let Some(installer) = find_local_installer(target) {
-            logs.push(format!(
-                "Installing {} from local package: {}",
-                target.name,
-                installer.display()
-            ));
-            match run_local_installer(target, &installer) {
-                Ok(msg) => logs.push(msg),
-                Err(err) => logs.push(format!("{} local install failed: {err}", target.name)),
-            }
-            continue;
-        }
-
-        if let Some(command) = online_install_command(target) {
-            logs.push(format!("No local installer for {}; trying: {command}", target.name));
-            match run_shell_command(&command) {
-                Ok(msg) => logs.push(msg),
-                Err(err) => logs.push(format!("{} online install failed: {err}", target.name)),
-            }
-        } else {
-            logs.push(format!(
-                "No local installer and no assisted online installer for {}.",
-                target.name
-            ));
-        }
+        install_bootstrap_target(target, &mut logs);
     }
 
+    Ok(collect_environment_bootstrap(&settings, logs))
+}
+
+#[tauri::command]
+pub async fn install_environment_bootstrap_item(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<EnvironmentBootstrapResult, String> {
+    let settings = state.settings.lock().await.clone();
+    let mut logs = Vec::new();
+    ensure_bootstrap_workspace(&settings, &mut logs);
+
+    let target = bootstrap_targets()
+        .into_iter()
+        .find(|target| target.key == key)
+        .ok_or_else(|| format!("Unknown environment bootstrap target: {key}"))?;
+
+    install_bootstrap_target(target, &mut logs);
     Ok(collect_environment_bootstrap(&settings, logs))
 }
 
@@ -844,6 +820,59 @@ fn bootstrap_targets() -> Vec<BootstrapTarget> {
     ]
 }
 
+fn ensure_bootstrap_workspace(settings: &Settings, logs: &mut Vec<String>) {
+    let workspace_root = if settings.workspace_root.trim().is_empty() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("harmony")
+    } else {
+        PathBuf::from(&settings.workspace_root)
+    };
+    match std::fs::create_dir_all(&workspace_root) {
+        Ok(_) => logs.push(format!("Workspace ready: {}", workspace_root.display())),
+        Err(err) => logs.push(format!(
+            "Workspace create failed: {} ({err})",
+            workspace_root.display()
+        )),
+    }
+}
+
+fn install_bootstrap_target(target: BootstrapTarget, logs: &mut Vec<String>) {
+    if target_available(target).is_some() {
+        logs.push(format!("{} already available.", target.name));
+        return;
+    }
+
+    if let Some(installer) = find_local_installer(target) {
+        logs.push(format!(
+            "Installing {} from local package: {}",
+            target.name,
+            installer.display()
+        ));
+        match run_local_installer(target, &installer) {
+            Ok(msg) => logs.push(msg),
+            Err(err) => logs.push(format!("{} local install failed: {err}", target.name)),
+        }
+        return;
+    }
+
+    if let Some(command) = online_install_command(target) {
+        logs.push(format!(
+            "No local installer for {}; trying: {command}",
+            target.name
+        ));
+        match run_shell_command(&command) {
+            Ok(msg) => logs.push(msg),
+            Err(err) => logs.push(format!("{} online install failed: {err}", target.name)),
+        }
+    } else {
+        logs.push(format!(
+            "No local installer and no assisted online installer for {}.",
+            target.name
+        ));
+    }
+}
+
 fn collect_environment_bootstrap(
     settings: &Settings,
     logs: Vec<String>,
@@ -929,7 +958,11 @@ fn offline_installer_dirs() -> Vec<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         dirs.push(cwd.join("installers"));
         dirs.push(cwd.join("offline-installers"));
-        dirs.push(cwd.join("src-tauri").join("resources").join("offline-installers"));
+        dirs.push(
+            cwd.join("src-tauri")
+                .join("resources")
+                .join("offline-installers"),
+        );
     }
     dirs.sort();
     dirs.dedup();
@@ -1007,7 +1040,12 @@ fn run_local_installer(target: BootstrapTarget, path: &Path) -> Result<String, S
                     cmd.args(["/quiet", "/norestart"]);
                 }
                 "python" => {
-                    cmd.args(["/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_pip=1"]);
+                    cmd.args([
+                        "/quiet",
+                        "InstallAllUsers=0",
+                        "PrependPath=1",
+                        "Include_pip=1",
+                    ]);
                 }
                 _ => {}
             }
@@ -1058,7 +1096,13 @@ fn run_shell_command(command: &str) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let mut process = {
         let mut cmd = std_command("powershell");
-        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]);
+        cmd.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ]);
         cmd
     };
 

@@ -1130,7 +1130,10 @@ pub async fn chat_send(
             let settings = state.settings.lock().await;
             let override_provider = override_provider.trim();
             if override_provider == "current" {
-                tracing::info!("chat_send: model override uses current provider with model={}", model);
+                tracing::info!(
+                    "chat_send: model override uses current provider with model={}",
+                    model
+                );
             } else if let Some(provider_id) = override_provider.strip_prefix("named:") {
                 if let Some(p) = settings.find_llm_provider(provider_id) {
                     provider = p.provider.clone();

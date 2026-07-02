@@ -78,6 +78,8 @@ export const systemApi = {
     invoke<EnvironmentBootstrapResult>("check_environment_bootstrap"),
   runEnvironmentBootstrap: () =>
     invoke<EnvironmentBootstrapResult>("run_environment_bootstrap"),
+  installEnvironmentBootstrapItem: (key: string) =>
+    invoke<EnvironmentBootstrapResult>("install_environment_bootstrap_item", { key }),
   checkSystemDependencies: () =>
     invoke<SystemDependencyItem[]>("check_system_dependencies"),
   checkPrivilegeElevation: () =>

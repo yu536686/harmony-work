@@ -106,7 +106,8 @@ async fn json_or_error(resp: reqwest::Response, label: &str) -> Result<Value, St
     if !status.is_success() {
         return Err(format!("{label} returned HTTP {status}: {text}"));
     }
-    serde_json::from_str(&text).map_err(|e| format!("{label} response is not valid JSON: {e}; body={text}"))
+    serde_json::from_str(&text)
+        .map_err(|e| format!("{label} response is not valid JSON: {e}; body={text}"))
 }
 
 fn harmony_workspace_default() -> String {
@@ -303,13 +304,19 @@ pub async fn marketing_assets(query: MarketingAssetQuery) -> Result<Value, Strin
     if let Some(value) = query.sort.filter(|v| !v.trim().is_empty()) {
         params.push(("sort".to_string(), value));
     }
-    params.push(("limit".to_string(), query.limit.unwrap_or(36).min(120).to_string()));
+    params.push((
+        "limit".to_string(),
+        query.limit.unwrap_or(36).min(120).to_string(),
+    ));
     params.push(("offset".to_string(), query.offset.unwrap_or(0).to_string()));
     marketing_get_json("/api/assets", params).await
 }
 
 #[tauri::command]
-pub async fn marketing_campaign_summary(minutes: Option<u32>, platform: Option<String>) -> Result<Value, String> {
+pub async fn marketing_campaign_summary(
+    minutes: Option<u32>,
+    platform: Option<String>,
+) -> Result<Value, String> {
     let mut params = vec![(
         "minutes".to_string(),
         minutes.unwrap_or(1440).clamp(10, 10080).to_string(),
@@ -356,7 +363,9 @@ async fn download_marketing_asset(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Marketing asset download returned HTTP {status}: {body}"));
+        return Err(format!(
+            "Marketing asset download returned HTTP {status}: {body}"
+        ));
     }
     let content_type = resp
         .headers()

@@ -8,9 +8,13 @@
   overflow: auto;
 }
 
+.bootstrap-shell {
+  width: min(960px, 100%);
+  margin: 0 auto;
+}
+
 .bootstrap-hero {
-  max-width: 980px;
-  margin: 0 auto 28px;
+  margin: 0 0 28px;
 }
 
 .bootstrap-hero h1 {
@@ -32,22 +36,41 @@
   gap: 12px;
 }
 
+.bootstrap-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.bootstrap-steps span {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.bootstrap-steps span.active {
+  border-color: rgba(212, 173, 91, 0.7);
+  color: var(--text-primary);
+  background: rgba(212, 173, 91, 0.14);
+}
+
 .bootstrap-actions {
   flex-wrap: wrap;
   margin-top: 24px;
-}
-
-.bootstrap-grid {
-  max-width: 1180px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
-  gap: 18px;
+  justify-content: flex-end;
 }
 
 .bootstrap-panel {
   padding: 22px;
   border-radius: 12px;
+}
+
+.bootstrap-login-panel {
+  max-width: 560px;
 }
 
 .bootstrap-panel-head {
@@ -67,7 +90,7 @@
 
 .bootstrap-runtime {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(96px, auto);
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -81,16 +104,20 @@
   display: block;
 }
 
+.bootstrap-runtime-main {
+  min-width: 0;
+}
+
 .bootstrap-runtime small,
-.bootstrap-runtime em,
 .bootstrap-note,
 .bootstrap-paths p {
   color: var(--text-muted);
 }
 
-.bootstrap-runtime em {
-  font-style: normal;
-  font-size: 12px;
+.bootstrap-runtime-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  white-space: nowrap;
 }
 
 .bootstrap-dot {
@@ -136,13 +163,18 @@
   color: var(--text-primary);
 }
 
+.bootstrap-login-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .bootstrap-note {
   margin-top: 14px;
   line-height: 1.6;
 }
 
 .bootstrap-log {
-  max-width: 1180px;
   margin: 18px auto 0;
   padding: 18px;
 }
@@ -160,7 +192,16 @@
     padding: 28px;
   }
 
-  .bootstrap-grid {
-    grid-template-columns: 1fr;
+  .bootstrap-runtime {
+    grid-template-columns: 14px minmax(0, 1fr);
+  }
+
+  .bootstrap-runtime-btn {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .bootstrap-login-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
