@@ -224,7 +224,7 @@ impl Tool for ImSendMessageTool {
          \n- 'channel' + 'recipient': for proactive (unprompted) messages. 'channel' is a registered channel name ('wecom', 'feishu', 'dingtalk', 'wechat', ...). 'recipient' is the channel-native target id (WeCom userid / Feishu open_id / DingTalk staffId / etc.). Optional 'routing_state' is forwarded verbatim if you know the channel-specific shape.\
          \n- auto-resolve: when none of the above are provided, the tool automatically resolves the IM binding from the current session. This works when you are in an IM-driven conversation (e.g. replying to a WeChat/Feishu user) — no explicit addressing parameters are needed.\
          \n\nThis tool returns an error when the requested channel is not currently connected. Channels are configured separately under Settings → IM; this tool only consumes the existing transport, it does NOT enable a channel.\
-         \n\nOptional 'file_path' sends a local file attachment when the channel supports media upload. WeChat supports image/* and generic file attachments through iLink CDN upload. \
+         \n\nOptional 'file_path' sends a local file attachment when the channel supports media upload. WeCom supports image/video/voice/file media through the smart-robot WebSocket channel with WeCom size limits and file fallback; WeChat supports image/* and generic file attachments through iLink CDN upload. \
          \n\nKeep messages short and use Markdown for emphasis where the underlying channel supports it. Avoid sending walls of debug output."
     }
 

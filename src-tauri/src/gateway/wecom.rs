@@ -1,12 +1,14 @@
 use super::{Channel, ChannelStatus, InboundMessage, OutboundMessage};
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -15,6 +17,12 @@ const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 const OUTBOUND_BUFFER: usize = 64;
+const WECOM_IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
+const WECOM_VIDEO_MAX_BYTES: usize = 10 * 1024 * 1024;
+const WECOM_VOICE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const WECOM_FILE_MAX_BYTES: usize = 20 * 1024 * 1024;
+const WECOM_UPLOAD_CHUNK_BYTES: usize = 512 * 1024;
+const WECOM_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WecomConfig {
@@ -26,7 +34,8 @@ pub struct WecomChannel {
     config: WecomConfig,
     status: ChannelStatus,
     shutdown: Arc<AtomicBool>,
-    outbound_tx: Arc<RwLock<Option<mpsc::Sender<Value>>>>,
+    outbound_tx: Arc<RwLock<Option<mpsc::Sender<OutboundFrame>>>>,
+    pending_responses: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
 }
 
 impl WecomChannel {
@@ -36,6 +45,7 @@ impl WecomChannel {
             status: ChannelStatus::Disconnected,
             shutdown: Arc::new(AtomicBool::new(false)),
             outbound_tx: Arc::new(RwLock::new(None)),
+            pending_responses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -46,9 +56,184 @@ impl WecomChannel {
             .await
             .clone()
             .ok_or_else(|| anyhow::anyhow!("WeCom long connection is not ready yet"))?;
-        tx.send(frame)
+        tx.send(OutboundFrame { frame })
             .await
             .map_err(|_| anyhow::anyhow!("WeCom outbound queue is closed"))
+    }
+
+    async fn request_frame(&self, req_id: String, frame: Value) -> Result<Value> {
+        let tx = self
+            .outbound_tx
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("WeCom long connection is not ready yet"))?;
+        let (response_tx, response_rx) = oneshot::channel();
+        self.pending_responses
+            .lock()
+            .await
+            .insert(req_id.clone(), response_tx);
+        if let Err(err) = tx.send(OutboundFrame { frame }).await {
+            self.pending_responses.lock().await.remove(&req_id);
+            return Err(anyhow::anyhow!("WeCom outbound queue is closed: {}", err));
+        }
+        let response = match tokio::time::timeout(WECOM_REQUEST_TIMEOUT, response_rx).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => return Err(anyhow::anyhow!("WeCom response channel closed")),
+            Err(_) => {
+                self.pending_responses.lock().await.remove(&req_id);
+                return Err(anyhow::anyhow!("WeCom request {} timed out", req_id));
+            }
+        };
+        if let Some(errcode) = response["errcode"].as_i64().filter(|code| *code != 0) {
+            let errmsg = response["errmsg"].as_str().unwrap_or("unknown error");
+            return Err(anyhow::anyhow!(
+                "WeCom request {} failed with {}: {}",
+                req_id,
+                errcode,
+                errmsg
+            ));
+        }
+        Ok(response)
+    }
+
+    async fn send_media(&self, msg: &OutboundMessage) -> Result<()> {
+        let Some(media) = msg.media.as_ref() else {
+            return Ok(());
+        };
+        let data = media
+            .data
+            .as_ref()
+            .filter(|data| !data.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("WeCom media attachment data is empty"))?;
+        let filename = media
+            .filename
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("attachment.bin");
+        let content_type = media.media_type.trim();
+        let detected_type = detect_wecom_media_type(content_type);
+        let final_type = apply_wecom_media_limits(data.len(), detected_type, content_type)?;
+        let media_id = self
+            .upload_media(data, final_type.as_str(), filename)
+            .await?;
+        let (chatid, _chat_type) = parse_recipient(&msg.recipient)?;
+        let req_id = new_req_id();
+        let mut media_content = json!({ "media_id": media_id });
+        if final_type == WecomMediaType::Video {
+            if let Some(obj) = media_content.as_object_mut() {
+                obj.insert("title".to_string(), json!(filename));
+                obj.insert("description".to_string(), json!(""));
+            }
+        }
+        let mut body = json!({
+            "chatid": chatid,
+            "msgtype": final_type.as_str(),
+        });
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(final_type.as_str().to_string(), media_content);
+        }
+        let frame = json!({
+            "cmd": "aibot_send_msg",
+            "headers": {
+                "req_id": req_id,
+            },
+            "body": body
+        });
+        self.request_frame(req_id, frame).await?;
+        Ok(())
+    }
+
+    async fn upload_media(&self, data: &[u8], media_type: &str, filename: &str) -> Result<String> {
+        let total_size = data.len();
+        let total_chunks = total_size.div_ceil(WECOM_UPLOAD_CHUNK_BYTES);
+        if total_chunks > 100 {
+            return Err(anyhow::anyhow!(
+                "WeCom media upload has too many chunks: {}",
+                total_chunks
+            ));
+        }
+        let md5 = format!("{:x}", md5::compute(data));
+        let init_req_id = new_req_id();
+        let init_frame = json!({
+            "cmd": "aibot_upload_media_init",
+            "headers": {
+                "req_id": init_req_id,
+            },
+            "body": {
+                "type": media_type,
+                "filename": filename,
+                "total_size": total_size,
+                "total_chunks": total_chunks,
+                "md5": md5,
+            }
+        });
+        let init_response = self.request_frame(init_req_id, init_frame).await?;
+        let upload_id = init_response["body"]["upload_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("WeCom upload init returned no upload_id"))?
+            .to_string();
+
+        for (chunk_index, chunk) in data.chunks(WECOM_UPLOAD_CHUNK_BYTES).enumerate() {
+            let chunk_req_id = new_req_id();
+            let chunk_frame = json!({
+                "cmd": "aibot_upload_media_chunk",
+                "headers": {
+                    "req_id": chunk_req_id,
+                },
+                "body": {
+                    "upload_id": upload_id,
+                    "chunk_index": chunk_index,
+                    "base64_data": BASE64_STANDARD.encode(chunk),
+                }
+            });
+            self.request_frame(chunk_req_id, chunk_frame).await?;
+        }
+
+        let finish_req_id = new_req_id();
+        let finish_frame = json!({
+            "cmd": "aibot_upload_media_finish",
+            "headers": {
+                "req_id": finish_req_id,
+            },
+            "body": {
+                "upload_id": upload_id,
+            }
+        });
+        let finish_response = self.request_frame(finish_req_id, finish_frame).await?;
+        finish_response["body"]["media_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("WeCom upload finish returned no media_id"))
+    }
+}
+
+#[derive(Debug)]
+struct OutboundFrame {
+    frame: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WecomMediaType {
+    Image,
+    Video,
+    Voice,
+    File,
+}
+
+impl WecomMediaType {
+    fn as_str(self) -> &'static str {
+        match self {
+            WecomMediaType::Image => "image",
+            WecomMediaType::Video => "video",
+            WecomMediaType::Voice => "voice",
+            WecomMediaType::File => "file",
+        }
     }
 }
 
@@ -82,7 +267,11 @@ impl Channel for WecomChannel {
     }
 
     async fn send(&self, msg: &OutboundMessage) -> Result<()> {
-        self.enqueue_frame(build_outbound_frame(msg)?).await
+        self.enqueue_frame(build_outbound_frame(msg)?).await?;
+        if msg.media.is_some() {
+            self.send_media(msg).await?;
+        }
+        Ok(())
     }
 
     async fn listen(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()> {
@@ -96,7 +285,8 @@ impl Channel for WecomChannel {
                     backoff = std::time::Duration::from_secs(1);
 
                     let (mut ws_sink, mut ws_reader) = ws_stream.split();
-                    let (outbound_tx, mut outbound_rx) = mpsc::channel::<Value>(OUTBOUND_BUFFER);
+                    let (outbound_tx, mut outbound_rx) =
+                        mpsc::channel::<OutboundFrame>(OUTBOUND_BUFFER);
                     *self.outbound_tx.write().await = Some(outbound_tx);
 
                     let (subscribe_req_id, subscribe_frame) = build_subscribe_frame(&self.config);
@@ -113,7 +303,7 @@ impl Channel for WecomChannel {
                         while let Ok(frame) = outbound_rx.try_recv() {
                             ws_sink
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    frame.to_string(),
+                                    frame.frame.to_string(),
                                 ))
                                 .await
                                 .map_err(|e| {
@@ -151,6 +341,19 @@ impl Channel for WecomChannel {
                                         continue;
                                     }
                                 };
+
+                                if let Some(req_id) = frame["headers"]["req_id"]
+                                    .as_str()
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                {
+                                    if let Some(sender) =
+                                        self.pending_responses.lock().await.remove(req_id)
+                                    {
+                                        let _ = sender.send(frame);
+                                        continue;
+                                    }
+                                }
 
                                 if let Some(errcode) = frame["errcode"].as_i64() {
                                     let req_id =
@@ -359,6 +562,41 @@ fn parse_recipient(recipient: &str) -> Result<(String, u32)> {
         return Err(anyhow::anyhow!("WeCom recipient is empty"));
     }
     Ok((fallback.to_string(), 1))
+}
+
+fn detect_wecom_media_type(content_type: &str) -> WecomMediaType {
+    let mime = content_type.trim().to_ascii_lowercase();
+    if mime.starts_with("image/") {
+        WecomMediaType::Image
+    } else if mime.starts_with("video/") {
+        WecomMediaType::Video
+    } else if mime.starts_with("audio/") || mime == "application/ogg" {
+        WecomMediaType::Voice
+    } else {
+        WecomMediaType::File
+    }
+}
+
+fn apply_wecom_media_limits(
+    file_size: usize,
+    detected_type: WecomMediaType,
+    content_type: &str,
+) -> Result<WecomMediaType> {
+    if file_size > WECOM_FILE_MAX_BYTES {
+        return Err(anyhow::anyhow!(
+            "WeCom file is too large: {} bytes > {} bytes",
+            file_size,
+            WECOM_FILE_MAX_BYTES
+        ));
+    }
+    let mime = content_type.trim().to_ascii_lowercase();
+    Ok(match detected_type {
+        WecomMediaType::Image if file_size > WECOM_IMAGE_MAX_BYTES => WecomMediaType::File,
+        WecomMediaType::Video if file_size > WECOM_VIDEO_MAX_BYTES => WecomMediaType::File,
+        WecomMediaType::Voice if mime != "audio/amr" => WecomMediaType::File,
+        WecomMediaType::Voice if file_size > WECOM_VOICE_MAX_BYTES => WecomMediaType::File,
+        other => other,
+    })
 }
 
 fn parse_text_callback(frame: &Value) -> Option<InboundMessage> {
