@@ -22,6 +22,9 @@ export interface MarketingAsset {
   height?: number | null;
   durationSeconds?: number | null;
   previewUrl?: string;
+  thumbnailUrl?: string;
+  coverUrl?: string;
+  posterUrl?: string;
 }
 
 export interface MarketingAssetSummary {
@@ -62,6 +65,14 @@ export interface MarketingPreparedAsset {
   mediaType: string;
   localPath: string;
   sourceUrl: string;
+  byteSize: number;
+}
+
+export interface MarketingAssetDataUrl {
+  assetId: string;
+  fileName: string;
+  mediaType: string;
+  dataUrl: string;
   byteSize: number;
 }
 
@@ -110,7 +121,13 @@ function normalizeAsset(raw: MarketingAsset | Record<string, unknown>): Marketin
     width: value<number | null>(source, "width", "width") ?? null,
     height: value<number | null>(source, "height", "height") ?? null,
     durationSeconds: value<number | null>(source, "durationSeconds", "duration_seconds") ?? null,
-    previewUrl: value<string | undefined>(source, "previewUrl", "preview_url"),
+    previewUrl: value<string | undefined>(source, "previewUrl", "preview_url")
+      ?? value<string | undefined>(source, "thumbnailUrl", "thumbnail_url")
+      ?? value<string | undefined>(source, "coverUrl", "cover_url")
+      ?? value<string | undefined>(source, "posterUrl", "poster_url"),
+    thumbnailUrl: value<string | undefined>(source, "thumbnailUrl", "thumbnail_url"),
+    coverUrl: value<string | undefined>(source, "coverUrl", "cover_url"),
+    posterUrl: value<string | undefined>(source, "posterUrl", "poster_url"),
   };
 }
 
@@ -133,6 +150,10 @@ function normalizeSummary(raw: MarketingAssetSummary): MarketingAssetSummary {
 function rememberUser(user: MarketingUser | null) {
   if (user) localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
   else localStorage.removeItem(USER_STORAGE_KEY);
+}
+
+export function forgetRememberedMarketingUser() {
+  rememberUser(null);
 }
 
 export function readRememberedMarketingUser(): MarketingUser | null {
@@ -179,5 +200,9 @@ export const marketingApi = {
   prepareAssetForChat: (assetId: string, fileName: string, workspaceRoot?: string | null) =>
     invoke<MarketingPreparedAsset>("marketing_prepare_asset_for_chat", {
       request: { assetId, fileName, workspaceRoot: workspaceRoot || null },
+    }),
+  assetDataUrl: (assetId: string, fileName: string, maxBytes?: number) =>
+    invoke<MarketingAssetDataUrl>("marketing_asset_data_url", {
+      request: { assetId, fileName, maxBytes: maxBytes || null },
     }),
 };

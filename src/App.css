@@ -904,6 +904,73 @@ select.form-select:focus {
   box-shadow: var(--shadow);
 }
 
+@keyframes wb-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wb-soft-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .feature-topbar,
+  .card,
+  .market-card,
+  .skill-card,
+  .fish-card,
+  .koi-card,
+  .tool-card,
+  .marketing-asset-card {
+    animation: wb-fade-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .modal,
+  .dialog,
+  .popover,
+  .dropdown-menu,
+  .composer-menu,
+  .user-menu,
+  .confirm-dialog {
+    animation: wb-soft-pop 0.18s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-icon,
+  .input,
+  .card,
+  .marketing-asset-card {
+    transition:
+      transform 0.16s ease,
+      box-shadow 0.16s ease,
+      border-color 0.16s ease,
+      background 0.16s ease,
+      color 0.16s ease,
+      opacity 0.16s ease;
+  }
+
+  .btn:not(:disabled):active,
+  .btn-primary:not(:disabled):active,
+  .btn-secondary:not(:disabled):active {
+    transform: translateY(1px) scale(0.99);
+  }
+}
+
 .memory-item {
   background: var(--bg-secondary);
   border-color: var(--border);

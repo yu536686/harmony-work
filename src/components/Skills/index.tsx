@@ -495,10 +495,15 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   };
 
   const catalogByName = Object.fromEntries(catalog.map((c) => [c.name.toLowerCase(), c]));
+  const skillSource = (skill: { config: string; name: string }) => {
+    const meta = parseSkillConfig(skill.config);
+    const catalogSource = catalogByName[skill.name.toLowerCase()]?.source;
+    return meta.source || meta.lifecycle || catalogSource || "installed";
+  };
   const visibleSkills = skills.filter((skill) => {
     const meta = parseSkillConfig(skill.config);
-    if (meta.lifecycle === "builtin") return false;
-    const source = catalogByName[skill.name.toLowerCase()]?.source ?? meta.lifecycle ?? "builtin";
+    if (meta.lifecycle === "builtin" || meta.source === "builtin") return false;
+    const source = skillSource(skill);
     return source !== "builtin";
   });
 
@@ -745,7 +750,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
               {visibleSkills.map((skill) => {
                 const catalogEntry = catalogByName[skill.name.toLowerCase()];
-                const source = catalogEntry?.source ?? "builtin";
+                const source = skillSource(skill);
                 const badge = SOURCE_BADGE[source] ?? SOURCE_BADGE.builtin;
                 const canUninstall = source === "installed" || source === "workspace";
 

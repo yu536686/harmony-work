@@ -292,7 +292,7 @@ fn build_wecom_status(settings: &Settings) -> Result<EnterpriseCapabilityStatus,
     }
     let configured = missing.is_empty();
     let message = if configured {
-        "WeCom credentials are configured. Official enterprise capabilities are provided by @wecom/cli; click Test to verify Node/npx and CLI availability.".into()
+        "WeCom credentials are configured. Official enterprise capabilities are provided by @wecom/cli; click Test to verify Node/npx and CLI availability. @wecom/cli init remains an official local credential flow and cannot be replaced safely by writing Bot ID / Secret into an unknown private config file.".into()
     } else {
         format!("Missing credentials: {}", missing.join(", "))
     };
@@ -418,8 +418,9 @@ async fn test_wecom_cli() -> Result<(), String> {
 fn build_wecom_cli_diagnostics(success: bool) -> Vec<String> {
     if success {
         vec![
-            "企业微信官方 CLI 可启动；首次实际调用企业能力前仍需执行一次 wecom-cli init 完成官方本地凭据初始化。".into(),
-            "官方 CLI 会使用 @wecom/cli，并通过 contact/doc/meeting/msg/schedule/todo 等子命令提供能力。".into(),
+            "企业微信官方 CLI 可启动，并提供 contact/doc/meeting/msg/schedule/todo/cache 等子命令。".into(),
+            "这不是 MCP tools/list 结果；官方 @wecom/cli 当前仍需要按 wecom-cli init 流程完成本机凭据初始化。".into(),
+            "Bot ID / Secret 已保存在小亨设置中，可供 IM 通道和后续 WorkBuddy 版 CLI 桥复用；不会直接写入官方 CLI 私有配置文件。".into(),
         ]
     } else {
         vec![

@@ -3,7 +3,7 @@ import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { marketingApi, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type MarketingUser } from "./services/tauri";
+import { forgetRememberedMarketingUser, marketingApi, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import i18n, { setLanguage } from "./i18n";
@@ -62,7 +62,13 @@ function AppContent() {
   useEffect(() => {
     marketingApi.me()
       .then((user) => setMarketingUser(user))
-      .catch(() => setMarketingUser(null));
+      .catch((error) => {
+        const message = String(error);
+        if (message.includes("401") || message.includes("403")) {
+          forgetRememberedMarketingUser();
+          setMarketingUser(null);
+        }
+      });
   }, []);
 
   useEffect(() => {

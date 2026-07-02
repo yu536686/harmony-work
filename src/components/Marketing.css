@@ -11,6 +11,9 @@
   display: grid;
   place-items: center;
   padding: 32px;
+  background:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 30%),
+    radial-gradient(circle at 82% 10%, rgba(47, 112, 101, 0.15), transparent 28%);
 }
 
 .marketing-login {
@@ -18,7 +21,12 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 28px;
+  padding: 30px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 92%, transparent), var(--bg-secondary)),
+    var(--bg-secondary);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
 }
 
 .marketing-login h2 {
@@ -40,6 +48,11 @@
   gap: 8px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.marketing-login .btn {
+  justify-content: center;
+  margin-top: 4px;
 }
 
 .marketing-body {
@@ -342,6 +355,7 @@
   gap: 14px;
   position: sticky;
   top: 12px;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.12);
 }
 
 .marketing-preview-media {
@@ -387,6 +401,11 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.marketing-preview-actions .btn {
+  min-height: 36px;
 }
 
 .marketing-preview-hint,
@@ -415,6 +434,7 @@
   color: var(--text-primary);
   font-size: 18px;
   overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .marketing-preview-info dl {
@@ -521,6 +541,21 @@
 .empty-state {
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+:root[data-color-mode="dark"] .marketing-asset-card {
+  background: var(--bg-secondary);
+}
+
+:root[data-color-mode="dark"] .marketing-asset-info small {
+  color: var(--text-tertiary);
+}
+
+:root[data-color-mode="dark"] .marketing-preview-warning,
+:root[data-color-mode="dark"] .marketing-error {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.28);
+  border-color: rgba(248, 113, 113, 0.32);
 }
 
 @media (max-width: 1180px) {

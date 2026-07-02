@@ -1307,6 +1307,7 @@ fn run_impl() {
             commands::marketing::marketing_assets,
             commands::marketing::marketing_campaign_summary,
             commands::marketing::marketing_douyin_accounts,
+            commands::marketing::marketing_asset_data_url,
             commands::marketing::marketing_prepare_asset_for_chat,
             // chat/
             commands::chat::create_session,

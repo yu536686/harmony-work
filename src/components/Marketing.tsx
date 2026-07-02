@@ -114,6 +114,8 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [assetTotal, setAssetTotal] = useState(0);
   const [selectedAsset, setSelectedAsset] = useState<MarketingAsset | null>(null);
   const [preview, setPreview] = useState<MarketingPreparedAsset | null>(null);
+  const [previewDataUrl, setPreviewDataUrl] = useState("");
+  const [thumbnailDataUrls, setThumbnailDataUrls] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [formatGroups, setFormatGroups] = useState<string[]>(DEFAULT_FORMAT_GROUPS);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -171,6 +173,33 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, folder, view, formatGroups]);
 
+  useEffect(() => {
+    if (!assets.length) return;
+    let cancelled = false;
+    const missingImages = assets
+      .filter((asset) => asset.assetType === "image" && !thumbnailDataUrls[asset.id])
+      .slice(0, 24);
+    if (!missingImages.length) return;
+    void (async () => {
+      const next: Record<string, string> = {};
+      for (const asset of missingImages) {
+        try {
+          const data = await marketingApi.assetDataUrl(asset.id, asset.fileName, 2 * 1024 * 1024);
+          if (data.mediaType.startsWith("image/")) {
+            next[asset.id] = data.dataUrl;
+          }
+        } catch {
+          // Thumbnail generation is opportunistic; keep card usable with fallback art.
+        }
+        if (cancelled) return;
+      }
+      if (!cancelled && Object.keys(next).length) {
+        setThumbnailDataUrls((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [assets, thumbnailDataUrls]);
+
   const totals = summary?.totals ?? {};
   const platformTotals = useMemo(() => {
     const source = campaign?.platforms ?? [];
@@ -219,6 +248,23 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     }
   };
 
+  const prepareInlinePreview = async (asset: MarketingAsset) => {
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewDataUrl("");
+    try {
+      const maxBytes = asset.assetType === "video" ? 32 * 1024 * 1024 : 16 * 1024 * 1024;
+      const data = await marketingApi.assetDataUrl(asset.id, asset.fileName, maxBytes);
+      setPreviewDataUrl(data.dataUrl);
+      if (data.mediaType.startsWith("image/")) {
+        setThumbnailDataUrls((prev) => ({ ...prev, [asset.id]: data.dataUrl }));
+      }
+      return data;
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const toggleFormatGroup = (group: string) => {
     setFormatGroups((prev) => (
       prev.includes(group)
@@ -230,13 +276,18 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const selectAsset = async (asset: MarketingAsset) => {
     setSelectedAsset(asset);
     setPreview(null);
+    setPreviewDataUrl("");
     setPreviewError("");
     if (asset.assetType === "image" || asset.assetType === "video") {
       try {
-        await prepareAsset(asset);
+        await prepareInlinePreview(asset);
       } catch (error) {
-        setPreviewError(String(error));
-        setMessage(String(error));
+        try {
+          await prepareAsset(asset);
+        } catch {
+          setPreviewError(String(error));
+          setMessage(String(error));
+        }
       }
     }
   };
@@ -330,7 +381,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             <label>邮箱<input className="input" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
             <label>密码<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label>
             {loginError && <div className="marketing-error">{loginError}</div>}
-            <button className="btn-primary" disabled={loading || !email.trim() || !password}>登录</button>
+            <button className="btn btn-primary" disabled={loading || !email.trim() || !password}>登录</button>
           </form>
         </div>
       </section>
@@ -342,7 +393,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       <section className="marketing-page">
         <header className="feature-topbar">
           <h1 className="feature-topbar-title">线上营销工作台</h1>
-          <button className="btn-secondary" onClick={handleLogout}>退出登录</button>
+          <button className="btn btn-secondary" onClick={handleLogout}>退出登录</button>
         </header>
         <div className="marketing-auth">
           <div className="card marketing-login">
@@ -357,7 +408,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
 
   const renderAssetPreview = () => {
     if (!selectedAsset) return <div className="empty-state">选择一个素材查看详情和预览。</div>;
-    const src = preview?.localPath ? convertFileSrc(preview.localPath) : "";
+    const src = previewDataUrl || (preview?.localPath ? convertFileSrc(preview.localPath) : "");
     const canInlinePreview = selectedAsset.assetType === "image" || selectedAsset.assetType === "video";
     return (
       <aside className="card marketing-preview">
@@ -384,12 +435,12 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             {selectedAsset.durationSeconds && <><dt>时长</dt><dd>{selectedAsset.durationSeconds}s</dd></>}
           </dl>
           <div className="marketing-preview-actions">
-            <button className="btn-primary" onClick={() => void stageAssetToChat(selectedAsset)}>放入会话输入框</button>
+            <button className="btn btn-primary" onClick={() => void stageAssetToChat(selectedAsset)}>放入会话输入框</button>
             <button
-              className="btn-secondary"
+              className="btn btn-secondary"
               onClick={() => void openSelectedAsset(selectedAsset)}
             >
-              打开文件
+              系统打开
             </button>
           </div>
         </div>
@@ -406,8 +457,8 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
         </div>
         <div className="marketing-actions">
           <span className="marketing-pill">{user.name} · {user.userRole}</span>
-          <button className="btn-secondary" onClick={() => void loadAll()} disabled={loading}>刷新</button>
-          <button className="btn-secondary" onClick={handleLogout}>退出</button>
+          <button className="btn btn-secondary" onClick={() => void loadAll()} disabled={loading}>刷新</button>
+          <button className="btn btn-secondary" onClick={handleLogout}>退出</button>
         </div>
       </header>
 
@@ -426,7 +477,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                   {folders.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
                 <input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名、路径" />
-                <button className="btn-secondary" onClick={() => void loadAll()}>搜索</button>
+                <button className="btn btn-secondary" onClick={() => void loadAll()}>搜索</button>
               </div>
               <div className="marketing-filter-caption">文件类型</div>
               <div className="marketing-format-filter" aria-label="格式筛选">
@@ -444,7 +495,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
               </div>
               <div className="marketing-asset-cards">
                 {assets.map((asset) => {
-                  const previewUrl = assetPreviewUrl(asset);
+                  const previewUrl = thumbnailDataUrls[asset.id] || assetPreviewUrl(asset);
                   const dimensions = assetDimensions(asset);
                   return (
                   <button className={`marketing-asset-card asset-${asset.assetType} ${selectedAsset?.id === asset.id ? "active" : ""}`} key={asset.id} title={`${asset.fileName}\n${asset.rootFolder}/${asset.relativePath}`} onClick={() => void selectAsset(asset)}>
@@ -481,7 +532,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             <section className="card marketing-panel">
               <div className="marketing-panel-head">
                 <div><span className="eyebrow">Dashboard</span><h2>数据看板</h2></div>
-                <button className="btn-primary" onClick={() => void sendDashboardToChat()}>新建会话分析</button>
+                <button className="btn btn-primary" onClick={() => void sendDashboardToChat()}>新建会话分析</button>
               </div>
               <div className="marketing-platforms">
                 {(campaign?.platforms ?? []).map((item) => (

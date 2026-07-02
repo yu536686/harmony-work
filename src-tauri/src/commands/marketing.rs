@@ -5,6 +5,7 @@
 //! commands proxy authenticated requests from the desktop app so the WebView
 //! does not have to fight CORS or browser cookie rules.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,6 +19,33 @@ static MARKETING_COOKIE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn cookie_store() -> &'static Mutex<Option<String>> {
     MARKETING_COOKIE.get_or_init(|| Mutex::new(None))
+}
+
+fn marketing_cookie_path() -> PathBuf {
+    crate::app::logging::default_app_data_dir().join("marketing.session.cookie")
+}
+
+async fn load_persisted_cookie() -> Option<String> {
+    let path = marketing_cookie_path();
+    let value = tokio::fs::read_to_string(path).await.ok()?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+async fn persist_cookie(cookie: &str) {
+    let path = marketing_cookie_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let _ = tokio::fs::write(path, cookie).await;
+}
+
+async fn clear_persisted_cookie() {
+    let _ = tokio::fs::remove_file(marketing_cookie_path()).await;
 }
 
 fn marketing_base_url() -> String {
@@ -37,7 +65,17 @@ fn marketing_client() -> Result<reqwest::Client, String> {
 }
 
 async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    if let Some(cookie) = cookie_store().lock().await.clone() {
+    let cookie = cookie_store().lock().await.clone();
+    let cookie = if cookie.is_some() {
+        cookie
+    } else {
+        let persisted = load_persisted_cookie().await;
+        if persisted.is_some() {
+            *cookie_store().lock().await = persisted.clone();
+        }
+        persisted
+    };
+    if let Some(cookie) = cookie {
         req.header(COOKIE, cookie)
     } else {
         req
@@ -56,7 +94,9 @@ async fn store_response_cookie(resp: &reqwest::Response) {
         .map(str::to_string)
         .collect::<Vec<_>>();
     if !cookies.is_empty() {
-        *cookie_store().lock().await = Some(cookies.join("; "));
+        let cookie = cookies.join("; ");
+        *cookie_store().lock().await = Some(cookie.clone());
+        persist_cookie(&cookie).await;
     }
 }
 
@@ -153,6 +193,14 @@ pub struct MarketingPrepareAssetRequest {
     workspace_root: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketingAssetDataUrlRequest {
+    asset_id: String,
+    file_name: Option<String>,
+    max_bytes: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketingPreparedAsset {
@@ -162,6 +210,23 @@ pub struct MarketingPreparedAsset {
     local_path: String,
     source_url: String,
     byte_size: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketingAssetDataUrl {
+    asset_id: String,
+    file_name: String,
+    media_type: String,
+    data_url: String,
+    byte_size: u64,
+}
+
+struct DownloadedMarketingAsset {
+    file_name: String,
+    media_type: String,
+    source_url: String,
+    bytes: Vec<u8>,
 }
 
 #[tauri::command]
@@ -186,6 +251,7 @@ pub async fn marketing_logout() -> Result<Value, String> {
         .await
         .map_err(|e| format!("Marketing logout request failed: {e}"))?;
     *cookie_store().lock().await = None;
+    clear_persisted_cookie().await;
     json_or_error(resp, "Marketing logout").await
 }
 
@@ -271,15 +337,15 @@ async fn marketing_get_json(path: &str, params: Vec<(String, String)>) -> Result
     json_or_error(resp, "Marketing API").await
 }
 
-#[tauri::command]
-pub async fn marketing_prepare_asset_for_chat(
-    request: MarketingPrepareAssetRequest,
-) -> Result<MarketingPreparedAsset, String> {
+async fn download_marketing_asset(
+    asset_id: &str,
+    requested_file_name: Option<&str>,
+) -> Result<DownloadedMarketingAsset, String> {
     let client = marketing_client()?;
     let source_url = format!(
         "{}/api/assets/{}/file",
         marketing_base_url(),
-        urlencoding::encode(&request.asset_id)
+        urlencoding::encode(asset_id)
     );
     let req = apply_cookie(client.get(&source_url)).await;
     let resp = req
@@ -305,14 +371,53 @@ pub async fn marketing_prepare_asset_for_chat(
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("Failed to read Marketing asset bytes: {e}"))?;
+        .map_err(|e| format!("Failed to read Marketing asset bytes: {e}"))?
+        .to_vec();
     let file_name = safe_file_name(
-        request
-            .file_name
-            .as_deref()
+        requested_file_name
             .or(disposition_name.as_deref())
             .unwrap_or("marketing-asset"),
     );
+    let media_type = media_type_for_name(&file_name, content_type.as_deref());
+    Ok(DownloadedMarketingAsset {
+        file_name,
+        media_type,
+        source_url,
+        bytes,
+    })
+}
+
+#[tauri::command]
+pub async fn marketing_asset_data_url(
+    request: MarketingAssetDataUrlRequest,
+) -> Result<MarketingAssetDataUrl, String> {
+    let asset = download_marketing_asset(&request.asset_id, request.file_name.as_deref()).await?;
+    let max_bytes = request
+        .max_bytes
+        .unwrap_or(12 * 1024 * 1024)
+        .clamp(128 * 1024, 40 * 1024 * 1024);
+    if asset.bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "素材过大，无法内联预览（{} bytes > {} bytes）。请使用“打开文件”。",
+            asset.bytes.len(),
+            max_bytes
+        ));
+    }
+    let encoded = BASE64_STANDARD.encode(&asset.bytes);
+    Ok(MarketingAssetDataUrl {
+        asset_id: request.asset_id,
+        file_name: asset.file_name,
+        media_type: asset.media_type.clone(),
+        data_url: format!("data:{};base64,{}", asset.media_type, encoded),
+        byte_size: asset.bytes.len() as u64,
+    })
+}
+
+#[tauri::command]
+pub async fn marketing_prepare_asset_for_chat(
+    request: MarketingPrepareAssetRequest,
+) -> Result<MarketingPreparedAsset, String> {
+    let asset = download_marketing_asset(&request.asset_id, request.file_name.as_deref()).await?;
     let workspace = request
         .workspace_root
         .as_deref()
@@ -324,16 +429,16 @@ pub async fn marketing_prepare_asset_for_chat(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("Failed to create marketing asset cache dir: {e}"))?;
-    let local_path = dir.join(&file_name);
-    tokio::fs::write(&local_path, &bytes)
+    let local_path = dir.join(&asset.file_name);
+    tokio::fs::write(&local_path, &asset.bytes)
         .await
         .map_err(|e| format!("Failed to save marketing asset: {e}"))?;
     Ok(MarketingPreparedAsset {
         asset_id: request.asset_id,
-        file_name: file_name.clone(),
-        media_type: media_type_for_name(&file_name, content_type.as_deref()),
+        file_name: asset.file_name,
+        media_type: asset.media_type,
         local_path: local_path.to_string_lossy().to_string(),
-        source_url,
-        byte_size: bytes.len() as u64,
+        source_url: asset.source_url,
+        byte_size: asset.bytes.len() as u64,
     })
 }

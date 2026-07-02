@@ -355,7 +355,9 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       setCapabilityStatus((prev) => ({ ...prev, [platform]: result.status }));
       setCapabilityTest((prev) => ({ ...prev, [platform]: result }));
       setCapabilityMsg((prev) => ({ ...prev, [platform]: result.success
-        ? t("settings.enterpriseCapabilityTestSuccess", { count: result.tools.length })
+        ? platform === "wecom"
+          ? t("settings.wecomEnterpriseTestSuccess")
+          : t("settings.enterpriseCapabilityTestSuccess", { count: result.tools.length })
         : t("settings.enterpriseCapabilityTestFailed", { error: result.error ?? "unknown" })
       }));
     } catch (e) {
