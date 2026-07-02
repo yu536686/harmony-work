@@ -21,6 +21,24 @@ export interface RuntimeCheckItem {
   hint: string;
 }
 
+export interface EnvironmentBootstrapItem {
+  key: string;
+  name: string;
+  available: boolean;
+  version: string | null;
+  local_installer: string | null;
+  source: "system" | "local" | "online" | "missing";
+  status: "ready" | "missing";
+  details: string;
+}
+
+export interface EnvironmentBootstrapResult {
+  items: EnvironmentBootstrapItem[];
+  logs: string[];
+  workspace_root: string;
+  offline_dirs: string[];
+}
+
 export interface SystemDependencyItem {
   key: string;
   name: string;
@@ -56,6 +74,10 @@ export const systemApi = {
   getVmStatus: () =>
     invoke<{ backend: string; available: boolean; description: string }>("get_vm_status"),
   checkRuntimes: () => invoke<RuntimeCheckItem[]>("check_runtimes"),
+  checkEnvironmentBootstrap: () =>
+    invoke<EnvironmentBootstrapResult>("check_environment_bootstrap"),
+  runEnvironmentBootstrap: () =>
+    invoke<EnvironmentBootstrapResult>("run_environment_bootstrap"),
   checkSystemDependencies: () =>
     invoke<SystemDependencyItem[]>("check_system_dependencies"),
   checkPrivilegeElevation: () =>

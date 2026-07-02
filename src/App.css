@@ -475,6 +475,13 @@ body {
   line-height: 1.6;
 }
 
+.locked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;

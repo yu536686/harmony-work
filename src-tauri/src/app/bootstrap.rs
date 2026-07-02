@@ -1410,6 +1410,8 @@ fn run_impl() {
             commands::platform::system::get_vm_status,
             commands::platform::system::get_runtime_capabilities,
             commands::platform::system::check_runtimes,
+            commands::platform::system::check_environment_bootstrap,
+            commands::platform::system::run_environment_bootstrap,
             commands::platform::system::check_system_dependencies,
             commands::platform::system::check_privilege_elevation,
             commands::platform::system::run_system_dependency_action,

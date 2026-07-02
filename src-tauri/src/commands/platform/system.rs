@@ -4,6 +4,7 @@ use piscis_kernel::proc::std_command;
 use robotz_browser::download;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[derive(Debug, Serialize)]
@@ -29,6 +30,26 @@ pub struct RuntimeCheckItem {
     pub version: Option<String>,
     pub download_url: String,
     pub hint: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct EnvironmentBootstrapItem {
+    pub key: String,
+    pub name: String,
+    pub available: bool,
+    pub version: Option<String>,
+    pub local_installer: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub details: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct EnvironmentBootstrapResult {
+    pub items: Vec<EnvironmentBootstrapItem>,
+    pub logs: Vec<String>,
+    pub workspace_root: String,
+    pub offline_dirs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -176,6 +197,72 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
     });
 
     Ok(items)
+}
+
+#[tauri::command]
+pub async fn check_environment_bootstrap(
+    state: State<'_, AppState>,
+) -> Result<EnvironmentBootstrapResult, String> {
+    let settings = state.settings.lock().await.clone();
+    Ok(collect_environment_bootstrap(&settings, Vec::new()))
+}
+
+#[tauri::command]
+pub async fn run_environment_bootstrap(
+    state: State<'_, AppState>,
+) -> Result<EnvironmentBootstrapResult, String> {
+    let settings = state.settings.lock().await.clone();
+    let mut logs = Vec::new();
+
+    let workspace_root = if settings.workspace_root.trim().is_empty() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("harmony")
+    } else {
+        PathBuf::from(&settings.workspace_root)
+    };
+    match std::fs::create_dir_all(&workspace_root) {
+        Ok(_) => logs.push(format!("Workspace ready: {}", workspace_root.display())),
+        Err(err) => logs.push(format!(
+            "Workspace create failed: {} ({err})",
+            workspace_root.display()
+        )),
+    }
+
+    for target in bootstrap_targets() {
+        if target_available(target).is_some() {
+            logs.push(format!("{} already available.", target.name));
+            continue;
+        }
+
+        if let Some(installer) = find_local_installer(target) {
+            logs.push(format!(
+                "Installing {} from local package: {}",
+                target.name,
+                installer.display()
+            ));
+            match run_local_installer(target, &installer) {
+                Ok(msg) => logs.push(msg),
+                Err(err) => logs.push(format!("{} local install failed: {err}", target.name)),
+            }
+            continue;
+        }
+
+        if let Some(command) = online_install_command(target) {
+            logs.push(format!("No local installer for {}; trying: {command}", target.name));
+            match run_shell_command(&command) {
+                Ok(msg) => logs.push(msg),
+                Err(err) => logs.push(format!("{} online install failed: {err}", target.name)),
+            }
+        } else {
+            logs.push(format!(
+                "No local installer and no assisted online installer for {}.",
+                target.name
+            ));
+        }
+    }
+
+    Ok(collect_environment_bootstrap(&settings, logs))
 }
 
 /// Check platform-specific feature dependencies that affect desktop automation,
@@ -708,6 +795,297 @@ enum LinuxPackageManager {
     Pacman,
     Zypper,
     Apk,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BootstrapTarget {
+    key: &'static str,
+    name: &'static str,
+    probe_command: &'static str,
+    probe_args: &'static [&'static str],
+    local_name_hints: &'static [&'static str],
+    winget_id: Option<&'static str>,
+}
+
+fn bootstrap_targets() -> Vec<BootstrapTarget> {
+    vec![
+        BootstrapTarget {
+            key: "git",
+            name: "Git",
+            probe_command: "git",
+            probe_args: &["--version"],
+            local_name_hints: &["git"],
+            winget_id: Some("Git.Git"),
+        },
+        BootstrapTarget {
+            key: "node",
+            name: "Node.js LTS",
+            probe_command: "node",
+            probe_args: &["--version"],
+            local_name_hints: &["node"],
+            winget_id: Some("OpenJS.NodeJS.LTS"),
+        },
+        BootstrapTarget {
+            key: "python",
+            name: "Python",
+            probe_command: "python",
+            probe_args: &["--version"],
+            local_name_hints: &["python"],
+            winget_id: Some("Python.Python.3.12"),
+        },
+        BootstrapTarget {
+            key: "wecom_cli",
+            name: "WeCom CLI",
+            probe_command: "wecom-cli",
+            probe_args: &["--version"],
+            local_name_hints: &["wecom", "@wecom", "cli"],
+            winget_id: None,
+        },
+    ]
+}
+
+fn collect_environment_bootstrap(
+    settings: &Settings,
+    logs: Vec<String>,
+) -> EnvironmentBootstrapResult {
+    let items = bootstrap_targets()
+        .into_iter()
+        .map(|target| {
+            let version = target_available(target);
+            let local = find_local_installer(target);
+            let source = if version.is_some() {
+                "system".to_string()
+            } else if local.is_some() {
+                "local".to_string()
+            } else if target.winget_id.is_some() || target.key == "wecom_cli" {
+                "online".to_string()
+            } else {
+                "missing".to_string()
+            };
+            let details = if version.is_some() {
+                "Installed and ready.".to_string()
+            } else if let Some(path) = &local {
+                format!("Local installer found: {}", path.display())
+            } else if target.key == "wecom_cli" {
+                "No local @wecom/cli tgz package found; online fallback will try npm install -g @wecom/cli."
+                    .to_string()
+            } else {
+                "No local installer found; online fallback will try silent winget install.".to_string()
+            };
+            EnvironmentBootstrapItem {
+                key: target.key.to_string(),
+                name: target.name.to_string(),
+                available: version.is_some(),
+                version,
+                local_installer: local.map(|path| path.to_string_lossy().to_string()),
+                source,
+                status: if target_available(target).is_some() {
+                    "ready".to_string()
+                } else {
+                    "missing".to_string()
+                },
+                details,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let workspace_root = if settings.workspace_root.trim().is_empty() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("harmony")
+            .to_string_lossy()
+            .to_string()
+    } else {
+        settings.workspace_root.clone()
+    };
+
+    EnvironmentBootstrapResult {
+        items,
+        logs,
+        workspace_root,
+        offline_dirs: offline_installer_dirs()
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    }
+}
+
+fn target_available(target: BootstrapTarget) -> Option<String> {
+    if target.key == "wecom_cli" {
+        return probe_command(target.probe_command, target.probe_args)
+            .or_else(|| probe_command("npx", &["-y", "@wecom/cli", "--version"]));
+    }
+    probe_command(target.probe_command, target.probe_args)
+}
+
+fn offline_installer_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.join("installers"));
+            dirs.push(parent.join("offline-installers"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.join("installers"));
+        dirs.push(cwd.join("offline-installers"));
+        dirs.push(cwd.join("src-tauri").join("resources").join("offline-installers"));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+fn find_local_installer(target: BootstrapTarget) -> Option<PathBuf> {
+    let allowed_exts = if target.key == "wecom_cli" {
+        vec!["tgz", "tar"]
+    } else {
+        vec!["exe", "msi"]
+    };
+    for dir in offline_installer_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !allowed_exts.iter().any(|candidate| candidate == &ext) {
+                continue;
+            }
+            if target
+                .local_name_hints
+                .iter()
+                .all(|hint| file_name.contains(&hint.to_ascii_lowercase()))
+                || target
+                    .local_name_hints
+                    .iter()
+                    .any(|hint| file_name.contains(&hint.to_ascii_lowercase()))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn run_local_installer(target: BootstrapTarget, path: &Path) -> Result<String, String> {
+    if target.key == "wecom_cli" {
+        let command = format!("npm install -g \"{}\"", path.display());
+        return run_shell_command(&command);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mut command = if ext == "msi" {
+            let mut cmd = std_command("msiexec");
+            cmd.args(["/i", &path.to_string_lossy(), "/qn", "/norestart"]);
+            cmd
+        } else {
+            let mut cmd = std_command(path.as_os_str());
+            match target.key {
+                "git" => {
+                    cmd.args(["/VERYSILENT", "/NORESTART"]);
+                }
+                "node" => {
+                    cmd.args(["/quiet", "/norestart"]);
+                }
+                "python" => {
+                    cmd.args(["/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_pip=1"]);
+                }
+                _ => {}
+            }
+            cmd
+        };
+        let output = command
+            .output()
+            .map_err(|err| format!("Failed to start local installer: {err}"))?;
+        if output.status.success() {
+            Ok(format!("{} local installer completed.", target.name))
+        } else {
+            Err(format!(
+                "installer exit={:?}; stdout={}; stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(format!(
+            "Local installer execution is only automated on Windows: {}",
+            path.display()
+        ))
+    }
+}
+
+fn online_install_command(target: BootstrapTarget) -> Option<String> {
+    if target.key == "wecom_cli" {
+        if command_exists("npm") {
+            return Some("npm install -g @wecom/cli".to_string());
+        }
+        return None;
+    }
+    let winget_id = target.winget_id?;
+    if command_exists("winget") {
+        Some(format!(
+            "winget install --id {winget_id} -e --silent --accept-source-agreements --accept-package-agreements"
+        ))
+    } else {
+        None
+    }
+}
+
+fn run_shell_command(command: &str) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let mut process = {
+        let mut cmd = std_command("powershell");
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]);
+        cmd
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut process = {
+        let mut cmd = std_command("sh");
+        cmd.args(["-lc", command]);
+        cmd
+    };
+
+    let output = process
+        .output()
+        .map_err(|err| format!("Failed to run command: {err}"))?;
+    if output.status.success() {
+        Ok(format!(
+            "Command completed: {}\n{}",
+            command,
+            String::from_utf8_lossy(&output.stdout).trim()
+        ))
+    } else {
+        Err(format!(
+            "command exit={:?}; stdout={}; stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]

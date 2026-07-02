@@ -1,0 +1,166 @@
+.bootstrap-screen {
+  min-height: 100vh;
+  padding: 48px;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 15% 5%, rgba(212, 173, 91, 0.18), transparent 34%),
+    linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
+  overflow: auto;
+}
+
+.bootstrap-hero {
+  max-width: 980px;
+  margin: 0 auto 28px;
+}
+
+.bootstrap-hero h1 {
+  margin: 10px 0;
+  font-size: 42px;
+  letter-spacing: 0;
+}
+
+.bootstrap-hero p {
+  max-width: 760px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.bootstrap-actions,
+.bootstrap-panel-head,
+.bootstrap-login {
+  display: flex;
+  gap: 12px;
+}
+
+.bootstrap-actions {
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.bootstrap-grid {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 18px;
+}
+
+.bootstrap-panel {
+  padding: 22px;
+  border-radius: 12px;
+}
+
+.bootstrap-panel-head {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.bootstrap-panel-head h2 {
+  margin: 4px 0 0;
+}
+
+.bootstrap-runtime-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bootstrap-runtime {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.bootstrap-runtime strong,
+.bootstrap-runtime small {
+  display: block;
+}
+
+.bootstrap-runtime small,
+.bootstrap-runtime em,
+.bootstrap-note,
+.bootstrap-paths p {
+  color: var(--text-muted);
+}
+
+.bootstrap-runtime em {
+  font-style: normal;
+  font-size: 12px;
+}
+
+.bootstrap-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #d86b5f;
+}
+
+.bootstrap-dot.ready {
+  background: #4fb477;
+}
+
+.bootstrap-paths {
+  margin-top: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.bootstrap-paths code {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.bootstrap-login {
+  flex-direction: column;
+}
+
+.bootstrap-login label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.bootstrap-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(212, 173, 91, 0.14);
+  color: var(--text-primary);
+}
+
+.bootstrap-note {
+  margin-top: 14px;
+  line-height: 1.6;
+}
+
+.bootstrap-log {
+  max-width: 1180px;
+  margin: 18px auto 0;
+  padding: 18px;
+}
+
+.bootstrap-log pre {
+  margin: 10px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .bootstrap-screen {
+    padding: 28px;
+  }
+
+  .bootstrap-grid {
+    grid-template-columns: 1fr;
+  }
+}

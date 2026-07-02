@@ -3,7 +3,7 @@ import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { forgetRememberedMarketingUser, marketingApi, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type MarketingUser } from "./services/tauri";
+import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import i18n, { setLanguage } from "./i18n";
@@ -24,6 +24,7 @@ const Settings = lazy(() => import("./components/Settings"));
 const AuditLog = lazy(() => import("./components/AuditLog"));
 const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
+const Bootstrap = lazy(() => import("./components/Bootstrap"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
 
@@ -33,6 +34,8 @@ type MarketTab = "experts" | "team" | "skills";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
+const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
+const REGISTER_URL = "http://www.harmonywatch.cn:8090";
 
 function AppContent() {
   const dispatch = useDispatch();
@@ -48,6 +51,7 @@ function AppContent() {
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
   const [initialized, setInitialized] = useState(false);
+  const [showBootstrap, setShowBootstrap] = useState(() => localStorage.getItem(BOOTSTRAP_STORAGE_KEY) !== "done");
   const [theme, setTheme] = useState<'violet' | 'gold'>(() => {
     return (localStorage.getItem('piscis-theme') as 'violet' | 'gold') || 'violet';
   });
@@ -233,6 +237,21 @@ function AppContent() {
     );
   }
 
+  if (showBootstrap) {
+    const completeBootstrap = () => {
+      localStorage.setItem(BOOTSTRAP_STORAGE_KEY, "done");
+      setShowBootstrap(false);
+    };
+    return (
+      <>
+        <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
+          <Bootstrap onComplete={completeBootstrap} onUserChange={setMarketingUser} />
+        </Suspense>
+        <Toaster />
+      </>
+    );
+  }
+
   if (showOnboarding) {
     return (
       <>
@@ -280,7 +299,10 @@ function AppContent() {
         <span className="eyebrow">Login Required</span>
         <h2>{title}</h2>
         <p>登录线上营销工作台账号后可以访问该功能。当前未登录时仅开放基础对话。</p>
-        <button className="btn-primary" onClick={() => setActiveTab("marketing-assets")}>去登录</button>
+        <div className="locked-actions">
+          <button className="btn-primary" onClick={() => setActiveTab("marketing-assets")}>去登录</button>
+          <button className="btn btn-secondary" onClick={() => void openPath(REGISTER_URL)}>注册账号</button>
+        </div>
       </div>
     </div>
   );

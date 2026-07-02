@@ -1,8 +1,8 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
-    "productName": "\u5c0f\u4ea8 WorkBuddy",
+    "productName": "小亨 WorkBuddy",
     "mainBinaryName": "xiaoheng-workbuddy",
-    "version": "0.7.6-alpha.4",
+    "version": "0.7.6-alpha.5",
     "identifier": "com.harmony.xiaoheng-workbuddy",
     "build": {
         "beforeDevCommand": "npm run dev",
@@ -14,7 +14,7 @@
         "windows": [
             {
                 "label": "main",
-                "title": "\u5c0f\u4ea8 WorkBuddy",
+                "title": "小亨 WorkBuddy",
                 "width": 1380,
                 "height": 880,
                 "minWidth": 980,
@@ -25,7 +25,7 @@
             },
             {
                 "label": "overlay",
-                "title": "\u5c0f\u4ea8 WorkBuddy Overlay",
+                "title": "小亨 WorkBuddy Overlay",
                 "url": "index.html?overlay=1",
                 "width": 280,
                 "height": 56,
@@ -65,7 +65,9 @@
             "icons/icon.icns",
             "icons/icon.ico"
         ],
-        "resources": [],
+        "resources": [
+            "resources/offline-installers"
+        ],
         "category": "Productivity",
         "publisher": "Harmony",
         "copyright": "Copyright 2026 Harmony",

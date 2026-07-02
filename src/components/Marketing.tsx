@@ -59,6 +59,7 @@ const FORMAT_FILTERS = [
 
 const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.map((item) => item.id);
 const MARKETING_ASSET_BASE = "http://61.150.31.150:8090";
+const REGISTER_URL = "http://www.harmonywatch.cn:8090";
 
 function selectedExtensions(groups: string[]) {
   return new Set<string>(
@@ -219,6 +220,11 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     try {
       const next = await marketingApi.login(email.trim(), password);
       onUserChange(next);
+      if (next.approvalStatus === "pending") {
+        setLoginError("账号已注册，但尚未通过管理员审批。审批通过后即可访问素材库、市场和团队功能。");
+      } else if (next.approvalStatus === "disabled") {
+        setLoginError("账号当前已停用，请联系管理员处理。");
+      }
     } catch (error) {
       setLoginError(String(error));
     } finally {
@@ -382,6 +388,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             <label>密码<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label>
             {loginError && <div className="marketing-error">{loginError}</div>}
             <button className="btn btn-primary" disabled={loading || !email.trim() || !password}>登录</button>
+            <button className="btn btn-secondary" type="button" onClick={() => void openPath(REGISTER_URL)}>注册账号</button>
           </form>
         </div>
       </section>
