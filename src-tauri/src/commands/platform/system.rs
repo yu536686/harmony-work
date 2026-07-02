@@ -942,9 +942,31 @@ fn collect_environment_bootstrap(
 fn target_available(target: BootstrapTarget) -> Option<String> {
     if target.key == "wecom_cli" {
         return probe_command(target.probe_command, target.probe_args)
-            .or_else(|| probe_command("npx", &["-y", "@wecom/cli", "--version"]));
+            .or_else(|| probe_command("wecom-cli.cmd", target.probe_args))
+            .or_else(probe_wecom_cli_from_npm_prefix)
+            .or_else(|| probe_command("npx", &["-y", "@wecom/cli", "--version"]))
+            .or_else(|| probe_command("npx.cmd", &["-y", "@wecom/cli", "--version"]))
+            .or_else(|| probe_command("npm", &["list", "-g", "@wecom/cli", "--depth=0"]))
+            .or_else(|| probe_command("npm.cmd", &["list", "-g", "@wecom/cli", "--depth=0"]));
     }
     probe_command(target.probe_command, target.probe_args)
+}
+
+fn probe_wecom_cli_from_npm_prefix() -> Option<String> {
+    let prefix = probe_command("npm", &["prefix", "-g"])
+        .or_else(|| probe_command("npm.cmd", &["prefix", "-g"]))?;
+    let prefix = PathBuf::from(prefix.trim());
+
+    #[cfg(target_os = "windows")]
+    let candidates = vec![prefix.join("wecom-cli.cmd"), prefix.join("wecom-cli")];
+
+    #[cfg(not(target_os = "windows"))]
+    let candidates = vec![prefix.join("bin").join("wecom-cli")];
+
+    candidates
+        .into_iter()
+        .filter(|path| path.exists())
+        .find_map(|path| probe_command(path.to_string_lossy().as_ref(), &["--version"]))
 }
 
 fn offline_installer_dirs() -> Vec<PathBuf> {
