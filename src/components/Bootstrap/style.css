@@ -1,11 +1,14 @@
 .bootstrap-screen {
-  min-height: 100vh;
-  padding: 48px;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 48px 48px 72px;
   color: var(--text-primary);
   background:
     radial-gradient(circle at 15% 5%, rgba(212, 173, 91, 0.18), transparent 34%),
     linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .bootstrap-shell {
@@ -61,6 +64,7 @@
 .bootstrap-actions {
   flex-wrap: wrap;
   margin-top: 24px;
+  margin-bottom: 4px;
   justify-content: flex-end;
 }
 
@@ -195,7 +199,7 @@
 
 @media (max-width: 900px) {
   .bootstrap-screen {
-    padding: 28px;
+    padding: 28px 28px 72px;
   }
 
   .bootstrap-runtime {

@@ -14,6 +14,8 @@ const REGISTER_URL = "http://www.harmonywatch.cn:8090";
 
 type BootstrapStep = "environment" | "login";
 
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 export default function Bootstrap({
   onComplete,
   onUserChange,
@@ -55,6 +57,15 @@ export default function Bootstrap({
       const latest = result.items.find((candidate) => candidate.key === item.key);
       setActionMessage(
         latest?.available
+          ? `${item.name} 已安装并通过检测。`
+          : `${item.name} 安装流程已结束，正在重新检测环境状态。`,
+      );
+      await sleep(1200);
+      const refreshed = await systemApi.checkEnvironmentBootstrap();
+      setStatus(refreshed);
+      const refreshedItem = refreshed.items.find((candidate) => candidate.key === item.key);
+      setActionMessage(
+        refreshedItem?.available
           ? `${item.name} 已安装并通过检测。`
           : `${item.name} 安装流程已结束，但还没有通过检测。请按日志提示处理后点击“重新检测”。`,
       );

@@ -975,6 +975,7 @@ fn offline_installer_dirs() -> Vec<PathBuf> {
         if let Some(parent) = exe.parent() {
             dirs.push(parent.join("installers"));
             dirs.push(parent.join("offline-installers"));
+            dirs.push(parent.join("resources").join("offline-installers"));
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
