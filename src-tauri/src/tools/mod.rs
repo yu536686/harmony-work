@@ -6,6 +6,7 @@ pub mod chat_ui;
 pub mod chat_ui_listen;
 pub mod chat_ui_patch;
 pub mod chat_ui_schema;
+pub mod harmony_cut;
 pub mod im_channel;
 pub mod im_send;
 #[cfg(target_os = "windows")]

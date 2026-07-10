@@ -19,6 +19,7 @@
 
 pub mod chat;
 pub mod config;
+pub mod harmony_cut;
 pub mod ide;
 pub mod journal;
 pub mod marketing;

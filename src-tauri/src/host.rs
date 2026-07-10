@@ -632,6 +632,10 @@ impl HostTools for DesktopHostTools {
             registry.register(Box::new(system_info::SystemInfoTool));
         }
 
+        if self.is_enabled("harmony_cut") {
+            registry.register(Box::new(crate::tools::harmony_cut::HarmonyCutTool));
+        }
+
         if self.is_enabled("lsp") {
             if let Some(ref lsp_manager) = self.lsp_manager {
                 registry.register(Box::new(crate::tools::LspTool {

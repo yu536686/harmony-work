@@ -89,6 +89,12 @@ pub async fn list_builtin_tools(
             windows_only: false,
         },
         BuiltinToolInfo {
+            name: "harmony_cut".into(),
+            description: "Harmony Cut commercial editing: analyze local video materials, create a review workbench, and continue to preview plus CapCut/JianYing draft generation.".into(),
+            icon: "CUT".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
             name: "uia".into(),
             description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
             icon: "🖱️".into(),

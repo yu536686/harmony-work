@@ -7,6 +7,7 @@ pub mod app;
 mod commands;
 mod fish;
 mod gateway;
+mod harmony_cut;
 pub mod headless_cli;
 pub mod host;
 

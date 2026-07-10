@@ -19,6 +19,7 @@ const Pond = lazy(() => import("./components/Pond"));
 const Skills = lazy(() => import("./components/Skills"));
 const Market = lazy(() => import("./components/Market"));
 const Marketing = lazy(() => import("./components/Marketing"));
+const HarmonyCut = lazy(() => import("./components/HarmonyCut"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
 const Settings = lazy(() => import("./components/Settings"));
 const AuditLog = lazy(() => import("./components/AuditLog"));
@@ -28,7 +29,7 @@ const Bootstrap = lazy(() => import("./components/Bootstrap"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
 
-type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "harmony-cut" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 type SchoolSubTab = "fish" | "koi";
 type MarketTab = "experts" | "team" | "skills";
 
@@ -45,6 +46,8 @@ function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
+  const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
+  const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [schoolSubTab, setSchoolSubTab] = useState<SchoolSubTab>("fish");
   const [marketTab, setMarketTab] = useState<MarketTab>("experts");
@@ -283,6 +286,13 @@ function AppContent() {
     setActiveTab(tab);
   };
 
+  const openHarmonyCut = (opts?: { projectId?: string | null; sessionId?: string | null }) => {
+    setHarmonyCutProjectId(opts?.projectId ?? null);
+    setHarmonyCutSessionId(opts?.sessionId ?? null);
+    setMarketingExpanded(true);
+    navigateTab("harmony-cut");
+  };
+
   const highLevelUnlocked = marketingUser?.approvalStatus === "active";
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: t("nav.chat"), icon: "💬" },
@@ -335,10 +345,10 @@ function AppContent() {
         </div>
         <nav className="sidebar-nav">
           <button
-            className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" ? "active" : ""}`}
+            className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" || activeTab === "harmony-cut" ? "active" : ""}`}
             onClick={() => {
               setMarketingExpanded((value) => !value);
-              if (activeTab !== "marketing-assets" && activeTab !== "marketing-dashboard") {
+              if (activeTab !== "marketing-assets" && activeTab !== "marketing-dashboard" && activeTab !== "harmony-cut") {
                 navigateTab("marketing-assets");
               }
             }}
@@ -361,6 +371,12 @@ function AppContent() {
                 onClick={() => navigateTab("marketing-dashboard")}
               >
                 数据看板
+              </button>
+              <button
+                className={`nav-subitem ${activeTab === "harmony-cut" ? "active" : ""}`}
+                onClick={() => openHarmonyCut()}
+              >
+                商摄快剪
               </button>
             </div>
           )}
@@ -417,6 +433,7 @@ function AppContent() {
                 onNavigateTab={(tab, opts) => {
                   if (tab === "skills") navigateTab("skills");
                   if (tab === "school") navigateTab("school", { schoolSubTab: opts?.schoolSubTab ?? "koi" });
+                  if (tab === "harmony-cut") openHarmonyCut({ projectId: opts?.projectId, sessionId: opts?.sessionId });
                 }}
               />
             </div>
@@ -437,6 +454,15 @@ function AppContent() {
                 view="dashboard"
                 user={marketingUser}
                 onUserChange={setMarketingUser}
+                onNavigateToChat={() => setActiveTab("chat")}
+              />
+            </div>
+          )}
+          {mountedTabs.has("harmony-cut") && (
+            <div className="tab-panel" hidden={activeTab !== "harmony-cut"}>
+              <HarmonyCut
+                projectId={harmonyCutProjectId}
+                sourceSessionId={harmonyCutSessionId}
                 onNavigateToChat={() => setActiveTab("chat")}
               />
             </div>

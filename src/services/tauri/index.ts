@@ -21,5 +21,6 @@
 export * from "./chat";
 export * from "./pool";
 export * from "./config";
+export * from "./harmonyCut";
 export * from "./marketing";
 export * from "./platform";

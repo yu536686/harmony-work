@@ -361,8 +361,8 @@ function ContextUsageRing({
 }
 
 export type ChatNavigateTab = (
-  tab: "skills" | "school",
-  opts?: { schoolSubTab?: "fish" | "koi" },
+  tab: "skills" | "school" | "harmony-cut",
+  opts?: { schoolSubTab?: "fish" | "koi"; projectId?: string | null; sessionId?: string | null },
 ) => void;
 
 interface ChatProps {
@@ -2214,7 +2214,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                       <div key={card.requestId} className="message message-assistant">
                         <div className="message-role">{t("chat.piscis")}</div>
                         <div className="message-content">
-                          {msg.content.trim() && <MessageContent content={msg.content} />}
+                          {msg.content.trim() && <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />}
                           <InteractiveCard
                             requestId={card.requestId}
                             uiDefinition={card.uiDefinition}
@@ -2236,7 +2236,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                       {msg.role === "user" ? t("chat.you") : t("chat.piscis")}
                     </div>
                     <div className="message-content">
-                      <MessageContent content={msg.content} />
+                      <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
                     </div>
                   </div>
                 );
@@ -2251,7 +2251,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   <div className="message-content">
                     {streamingCurrent ? (
                       <>
-                        <MessageContent content={streamingCurrent} />
+                        <MessageContent content={streamingCurrent} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
                         <span className="cursor-blink">▋</span>
                       </>
                     ) : (
@@ -2833,8 +2833,24 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
 
 import { linkifyPaths, stripSendMarkers, isLocalPath, uriToNativePath } from "../../utils/linkify";
 
+function harmonyCutProjectIdFromHref(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href, window.location.origin);
+    const isInternalPath = url.pathname === "/harmony-cut";
+    const isLocalWorkbench =
+      url.hostname === "127.0.0.1" &&
+      url.port === "8765" &&
+      url.searchParams.has("project");
+    if (!isInternalPath && !isLocalWorkbench) return null;
+    return url.searchParams.get("project_id") || url.searchParams.get("project");
+  } catch {
+    return null;
+  }
+}
+
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
-function MessageContent({ content }: { content: string }) {
+function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpenHarmonyCut?: (projectId: string | null) => void }) {
   const processed = linkifyPaths(stripSendMarkers(content));
   const fallback = (
     <pre className="code-block">
@@ -2851,6 +2867,21 @@ function MessageContent({ content }: { content: string }) {
           components={{
             // Local paths → shell.open(); web URLs → new tab
             a: ({ href, children }) => {
+              const harmonyCutProjectId = harmonyCutProjectIdFromHref(href);
+              if (harmonyCutProjectId !== null) {
+                return (
+                  <a
+                    href={href}
+                    title={href}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onOpenHarmonyCut?.(harmonyCutProjectId);
+                    }}
+                  >
+                    {children}
+                  </a>
+                );
+              }
               if (isLocalPath(href)) {
                 return (
                   <a
@@ -2941,6 +2972,7 @@ const TOOL_ICONS: Record<string, string> = {
   web_fetch: "📰",
   browser: "🌐",
   screen_capture: "📸",
+  harmony_cut: "CUT",
   uia: "🖱️",
   wmi: "🔧",
   com: "📋",
@@ -2966,6 +2998,7 @@ function toolSummary(name: string, input: unknown): string {
   if (name === "file_read" || name === "file_write") return String(i["path"] ?? "").slice(0, 80);
   if (name === "web_search") return String(i["query"] ?? "").slice(0, 80);
   if (name === "web_fetch") return String(i["url"] ?? "").slice(0, 80);
+  if (name === "harmony_cut") return [i["action"], i["media_dir"] ?? i["project_id"]].filter(Boolean).join(" ");
   if (name === "screen_capture") return String(i["mode"] ?? "fullscreen");
   return Object.entries(i).slice(0, 2).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(" ");
 }

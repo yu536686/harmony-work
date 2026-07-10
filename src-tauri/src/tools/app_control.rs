@@ -2322,6 +2322,13 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             windows_only: false,
         },
         BuiltinToolInfo {
+            name: "harmony_cut".into(),
+            description: "Prepare and continue the local Harmony Cut commercial editing workflow."
+                .into(),
+            icon: "CUT".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
             name: "call_fish".into(),
             description: "Delegate work to Fish sub-agents.".into(),
             icon: "🐠".into(),
