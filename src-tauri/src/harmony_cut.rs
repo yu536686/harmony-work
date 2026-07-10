@@ -1,11 +1,14 @@
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tauri::Manager;
 
 pub const DEFAULT_HARMONY_CUT_ROOT: &str = r"D:\harmony_cut";
 pub const DEFAULT_HARMONY_CUT_URL: &str = "http://127.0.0.1:8765";
+const BUNDLED_HARMONY_CUT_DIR: &str = "harmony-cut";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,13 +68,88 @@ pub struct HarmonyCutProjectSummary {
     pub review_url: String,
 }
 
-pub fn root_dir() -> PathBuf {
+fn env_root_dir() -> Option<PathBuf> {
     std::env::var("WORKBUDDY_HARMONY_CUT_ROOT")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_HARMONY_CUT_ROOT))
+}
+
+fn bundled_source_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    [
+        resource_dir.join(BUNDLED_HARMONY_CUT_DIR),
+        resource_dir.join("resources").join(BUNDLED_HARMONY_CUT_DIR),
+    ]
+    .into_iter()
+    .find(|path| path.join("server.py").exists())
+}
+
+fn copy_runtime_entry(source: &Path, target: &Path) -> Result<(), String> {
+    let name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if name == "data" || name == "__pycache__" {
+        return Ok(());
+    }
+
+    let metadata = fs::metadata(source)
+        .map_err(|e| format!("Failed to read Harmony Cut resource metadata: {e}"))?;
+    if metadata.is_dir() {
+        fs::create_dir_all(target)
+            .map_err(|e| format!("Failed to create Harmony Cut runtime dir: {e}"))?;
+        for entry in fs::read_dir(source)
+            .map_err(|e| format!("Failed to list Harmony Cut resource dir: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read Harmony Cut resource: {e}"))?;
+            copy_runtime_entry(&entry.path(), &target.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create Harmony Cut runtime parent dir: {e}"))?;
+        }
+        fs::copy(source, target).map_err(|e| {
+            format!(
+                "Failed to copy Harmony Cut resource {} to {}: {e}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn sync_bundled_runtime(app: &tauri::AppHandle, source: &Path) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+    let target = app_data_dir.join(BUNDLED_HARMONY_CUT_DIR);
+    fs::create_dir_all(&target)
+        .map_err(|e| format!("Failed to create Harmony Cut runtime dir: {e}"))?;
+    for entry in fs::read_dir(source)
+        .map_err(|e| format!("Failed to list bundled Harmony Cut resources: {e}"))?
+    {
+        let entry =
+            entry.map_err(|e| format!("Failed to read bundled Harmony Cut resource: {e}"))?;
+        copy_runtime_entry(&entry.path(), &target.join(entry.file_name()))?;
+    }
+    Ok(target)
+}
+
+pub fn root_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> {
+    if let Some(root) = env_root_dir() {
+        return Ok(root);
+    }
+    if let Some(app) = app {
+        if let Some(source) = bundled_source_dir(app) {
+            return sync_bundled_runtime(app, &source);
+        }
+    }
+    Ok(PathBuf::from(DEFAULT_HARMONY_CUT_ROOT))
 }
 
 pub fn server_url() -> String {
@@ -95,6 +173,64 @@ fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
         .user_agent("Xiaoheng-WorkBuddy/HarmonyCut")
         .build()
         .map_err(|e| e.to_string())
+}
+
+fn output_text(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    [stdout.trim(), stderr.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn check_python_dependencies() -> Result<(), String> {
+    let output = piscis_kernel::proc::std_command("python")
+        .arg("-c")
+        .arg("import starlette, uvicorn, pydantic, cv2, numpy, imageio_ffmpeg")
+        .output()
+        .map_err(|e| format!("Failed to run python dependency check: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(output_text(&output))
+    }
+}
+
+async fn ensure_python_dependencies(root: PathBuf) -> Result<(), String> {
+    if check_python_dependencies().is_ok() {
+        return Ok(());
+    }
+    let requirements = root.join("requirements.txt");
+    if !requirements.exists() {
+        return Err(format!(
+            "Harmony Cut Python dependencies are missing and requirements.txt was not found: {}",
+            requirements.display()
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        let output = piscis_kernel::proc::std_command("python")
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--user")
+            .arg("-r")
+            .arg(&requirements)
+            .output()
+            .map_err(|e| format!("Failed to install Harmony Cut Python dependencies: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to install Harmony Cut Python dependencies:\n{}",
+                output_text(&output)
+            ));
+        }
+        check_python_dependencies().map_err(|e| {
+            format!("Harmony Cut Python dependencies are still unavailable after install:\n{e}")
+        })
+    })
+    .await
+    .map_err(|e| format!("Harmony Cut dependency task failed: {e}"))?
 }
 
 async fn json_or_error(resp: reqwest::Response, label: &str) -> Result<Value, String> {
@@ -129,15 +265,21 @@ pub async fn server_running() -> bool {
     }
 }
 
-pub async fn health() -> HarmonyCutHealth {
-    let root = root_dir();
-    let installed = root.join("server.py").exists();
+pub async fn health(app: Option<&tauri::AppHandle>) -> HarmonyCutHealth {
+    let root_result = root_dir(app);
+    let root = root_result
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HARMONY_CUT_ROOT));
+    let installed = root_result.is_ok() && root.join("server.py").exists();
     let server_running = if installed {
         server_running().await
     } else {
         false
     };
-    let message = if !installed {
+    let message = if let Err(error) = root_result {
+        error
+    } else if !installed {
         format!("Harmony Cut root not found: {}", root.display())
     } else if server_running {
         "Harmony Cut service is running".to_string()
@@ -153,8 +295,8 @@ pub async fn health() -> HarmonyCutHealth {
     }
 }
 
-pub async fn start_service() -> Result<HarmonyCutHealth, String> {
-    let root = root_dir();
+pub async fn start_service(app: Option<&tauri::AppHandle>) -> Result<HarmonyCutHealth, String> {
+    let root = root_dir(app)?;
     let server_py = root.join("server.py");
     if !server_py.exists() {
         return Err(format!(
@@ -163,8 +305,9 @@ pub async fn start_service() -> Result<HarmonyCutHealth, String> {
         ));
     }
     if server_running().await {
-        return Ok(health().await);
+        return Ok(health(app).await);
     }
+    ensure_python_dependencies(root.clone()).await?;
 
     let mut cmd = piscis_kernel::proc::std_command("python");
     cmd.arg(&server_py).current_dir(&root);
@@ -174,7 +317,7 @@ pub async fn start_service() -> Result<HarmonyCutHealth, String> {
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if server_running().await {
-            return Ok(health().await);
+            return Ok(health(app).await);
         }
     }
     Err("Harmony Cut service did not become ready on port 8765".to_string())
@@ -182,8 +325,9 @@ pub async fn start_service() -> Result<HarmonyCutHealth, String> {
 
 pub async fn prepare_project(
     input: HarmonyCutPrepareInput,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<HarmonyCutPrepareOutput, String> {
-    start_service().await?;
+    start_service(app).await?;
     let client = client(3600)?;
     let payload = json!({
         "media_dir": input.media_dir,
@@ -230,8 +374,9 @@ pub async fn prepare_project(
 
 pub async fn continue_project(
     input: HarmonyCutContinueInput,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<HarmonyCutContinueOutput, String> {
-    start_service().await?;
+    start_service(app).await?;
     let client = client(3600)?;
     let payload = json!({
         "project_id": input.project_id.unwrap_or_default(),
@@ -266,8 +411,10 @@ pub async fn continue_project(
     })
 }
 
-pub async fn list_projects() -> Result<Vec<HarmonyCutProjectSummary>, String> {
-    start_service().await?;
+pub async fn list_projects(
+    app: Option<&tauri::AppHandle>,
+) -> Result<Vec<HarmonyCutProjectSummary>, String> {
+    start_service(app).await?;
     let client = client(30)?;
     let value = json_or_error(
         client
@@ -310,8 +457,11 @@ pub async fn list_projects() -> Result<Vec<HarmonyCutProjectSummary>, String> {
         .collect())
 }
 
-pub async fn get_project(project_id: &str) -> Result<Value, String> {
-    start_service().await?;
+pub async fn get_project(
+    project_id: &str,
+    app: Option<&tauri::AppHandle>,
+) -> Result<Value, String> {
+    start_service(app).await?;
     let client = client(30)?;
     let value = json_or_error(
         client

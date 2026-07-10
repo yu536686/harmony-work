@@ -232,7 +232,7 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--bg-primary)", padding: 24, position: "relative", overflow: "auto" }}>
+    <div style={{ display: "flex", alignItems: step === "provider" ? "flex-start" : "center", justifyContent: "center", height: "100vh", minHeight: 0, background: "var(--bg-primary)", padding: 24, paddingBottom: step === "provider" ? 88 : 24, position: "relative", overflowY: "auto", overflowX: "hidden", boxSizing: "border-box" }}>
       <button
         onClick={toggleLang}
         style={{

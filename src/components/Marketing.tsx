@@ -117,6 +117,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [preview, setPreview] = useState<MarketingPreparedAsset | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = useState("");
   const [thumbnailDataUrls, setThumbnailDataUrls] = useState<Record<string, string>>({});
+  const [thumbnailFailures, setThumbnailFailures] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [formatGroups, setFormatGroups] = useState<string[]>(DEFAULT_FORMAT_GROUPS);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -178,28 +179,34 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     if (!assets.length) return;
     let cancelled = false;
     const missingImages = assets
-      .filter((asset) => asset.assetType === "image" && !thumbnailDataUrls[asset.id])
-      .slice(0, 24);
+      .filter((asset) => asset.assetType === "image" && !thumbnailDataUrls[asset.id] && !thumbnailFailures[asset.id])
+      .slice(0, 36);
     if (!missingImages.length) return;
     void (async () => {
       const next: Record<string, string> = {};
+      const failed: Record<string, string> = {};
       for (const asset of missingImages) {
         try {
-          const data = await marketingApi.assetDataUrl(asset.id, asset.fileName, 2 * 1024 * 1024);
+          const data = await marketingApi.assetDataUrl(asset.id, asset.fileName, 12 * 1024 * 1024);
           if (data.mediaType.startsWith("image/")) {
             next[asset.id] = data.dataUrl;
+          } else {
+            failed[asset.id] = data.mediaType || "unsupported";
           }
-        } catch {
-          // Thumbnail generation is opportunistic; keep card usable with fallback art.
+        } catch (error) {
+          failed[asset.id] = String(error);
         }
         if (cancelled) return;
       }
       if (!cancelled && Object.keys(next).length) {
         setThumbnailDataUrls((prev) => ({ ...prev, ...next }));
       }
+      if (!cancelled && Object.keys(failed).length) {
+        setThumbnailFailures((prev) => ({ ...prev, ...failed }));
+      }
     })();
     return () => { cancelled = true; };
-  }, [assets, thumbnailDataUrls]);
+  }, [assets, thumbnailDataUrls, thumbnailFailures]);
 
   const totals = summary?.totals ?? {};
   const platformTotals = useMemo(() => {
@@ -502,14 +509,21 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
               </div>
               <div className="marketing-asset-cards">
                 {assets.map((asset) => {
-                  const previewUrl = thumbnailDataUrls[asset.id] || assetPreviewUrl(asset);
+                  const previewUrl = thumbnailDataUrls[asset.id] || (thumbnailFailures[asset.id] === "preview-load-failed" ? "" : assetPreviewUrl(asset));
                   const dimensions = assetDimensions(asset);
                   return (
                   <button className={`marketing-asset-card asset-${asset.assetType} ${selectedAsset?.id === asset.id ? "active" : ""}`} key={asset.id} title={`${asset.fileName}\n${asset.rootFolder}/${asset.relativePath}`} onClick={() => void selectAsset(asset)}>
                     <span className="marketing-asset-select"><i />选择</span>
                     <span className="marketing-asset-media">
                       {previewUrl ? (
-                        <span className="marketing-asset-thumb" style={{ backgroundImage: `url("${previewUrl}")` }} />
+                        <img
+                          className="marketing-asset-thumb"
+                          src={previewUrl}
+                          alt=""
+                          loading="lazy"
+                          draggable={false}
+                          onError={() => setThumbnailFailures((prev) => ({ ...prev, [asset.id]: "preview-load-failed" }))}
+                        />
                       ) : (
                         <span className="marketing-asset-placeholder">{assetKindIcon(asset)}</span>
                       )}

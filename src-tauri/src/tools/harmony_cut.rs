@@ -7,8 +7,11 @@ use async_trait::async_trait;
 use piscis_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use tauri::AppHandle;
 
-pub struct HarmonyCutTool;
+pub struct HarmonyCutTool {
+    pub app_handle: Option<AppHandle>,
+}
 
 fn optional_string(input: &Value, key: &str) -> Option<String> {
     input
@@ -116,7 +119,7 @@ impl Tool for HarmonyCutTool {
             .trim();
         match action {
             "health" => {
-                let status = health().await;
+                let status = health(self.app_handle.as_ref()).await;
                 Ok(ToolResult::ok(
                     serde_json::to_string_pretty(&status).unwrap_or_default(),
                 ))
@@ -124,30 +127,38 @@ impl Tool for HarmonyCutTool {
             "prepare" => {
                 let media_dir = optional_string(&input, "media_dir")
                     .ok_or_else(|| anyhow::anyhow!("media_dir is required for prepare"))?;
-                let result = prepare_project(HarmonyCutPrepareInput {
-                    media_dir,
-                    title: optional_string(&input, "title"),
-                    requirement: optional_string(&input, "requirement"),
-                    auto_rotate_landscape: input
-                        .get("auto_rotate_landscape")
-                        .and_then(Value::as_bool),
-                })
+                let result = prepare_project(
+                    HarmonyCutPrepareInput {
+                        media_dir,
+                        title: optional_string(&input, "title"),
+                        requirement: optional_string(&input, "requirement"),
+                        auto_rotate_landscape: input
+                            .get("auto_rotate_landscape")
+                            .and_then(Value::as_bool),
+                    },
+                    self.app_handle.as_ref(),
+                )
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::ok(format_prepare_result(result)))
             }
             "continue" => {
-                let result = continue_project(HarmonyCutContinueInput {
-                    project_id: optional_string(&input, "project_id"),
-                    skip_preview: input.get("skip_preview").and_then(Value::as_bool),
-                    skip_draft: input.get("skip_draft").and_then(Value::as_bool),
-                })
+                let result = continue_project(
+                    HarmonyCutContinueInput {
+                        project_id: optional_string(&input, "project_id"),
+                        skip_preview: input.get("skip_preview").and_then(Value::as_bool),
+                        skip_draft: input.get("skip_draft").and_then(Value::as_bool),
+                    },
+                    self.app_handle.as_ref(),
+                )
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::ok(format_continue_result(result)))
             }
             "projects" => {
-                let projects = list_projects().await.map_err(|e| anyhow::anyhow!(e))?;
+                let projects = list_projects(self.app_handle.as_ref())
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))?;
                 Ok(ToolResult::ok(
                     serde_json::to_string_pretty(&projects).unwrap_or_default(),
                 ))

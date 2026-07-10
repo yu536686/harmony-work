@@ -633,7 +633,9 @@ impl HostTools for DesktopHostTools {
         }
 
         if self.is_enabled("harmony_cut") {
-            registry.register(Box::new(crate::tools::harmony_cut::HarmonyCutTool));
+            registry.register(Box::new(crate::tools::harmony_cut::HarmonyCutTool {
+                app_handle: self.app_handle.clone(),
+            }));
         }
 
         if self.is_enabled("lsp") {
