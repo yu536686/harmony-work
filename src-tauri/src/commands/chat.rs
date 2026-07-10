@@ -20,7 +20,7 @@ use piscis_kernel::agent::messages::AgentEvent;
 use piscis_kernel::agent::plan::{summarize_todos, PlanTodoItem};
 use piscis_kernel::agent::tool::ToolContext;
 use piscis_kernel::llm::{
-    build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef,
+    build_client_with_timeout, ContentBlock, LlmMessage, LlmRequest, MessageContent, ToolDef,
 };
 use piscis_kernel::policy::PolicyGate;
 use piscis_kernel::project_context::render_project_instruction_context;
@@ -64,6 +64,172 @@ struct ChatPromptArtifacts {
     /// When the session workspace matches a pool's `project_dir`.
     bound_pool_id: Option<String>,
     memory_owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MainChatRouteDecision {
+    route: String,
+    #[serde(default)]
+    answer: Option<String>,
+    #[serde(default)]
+    tool_groups: Vec<String>,
+    #[serde(default)]
+    needs_plan: bool,
+}
+
+struct MainChatRouteAttempt {
+    decision: Option<MainChatRouteDecision>,
+    input_tokens: u32,
+    output_tokens: u32,
+}
+
+fn parse_route_decision(text: &str) -> Option<MainChatRouteDecision> {
+    let trimmed = text.trim();
+    let candidate = if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    };
+    serde_json::from_str(candidate).ok().or_else(|| {
+        let start = candidate.find('{')?;
+        let end = candidate.rfind('}')?;
+        serde_json::from_str(&candidate[start..=end]).ok()
+    })
+}
+
+fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
+    if groups.is_empty() || groups.iter().any(|group| group == "all") {
+        return None;
+    }
+    let mut names = HashSet::new();
+    for group in groups {
+        let group_tools: &[&str] = match group.as_str() {
+            "files" => &[
+                "file_read",
+                "file_write",
+                "file_edit",
+                "file_diff",
+                "file_search",
+                "file_list",
+                "recall_tool_result",
+            ],
+            "runtime" => &[
+                "code_run",
+                "shell",
+                "process_control",
+                "system_info",
+                "powershell_query",
+                "wmi",
+                "lsp",
+                "read_lints",
+            ],
+            "web" => &["web_search", "web_fetch", "browser"],
+            "office" => &["office", "com", "com_invoke", "pdf"],
+            "desktop" => &[
+                "screen_capture",
+                "desktop_automation",
+                "uia",
+                "vision_context",
+                "browser",
+            ],
+            "skills" => &["skill_list", "skill_manage", "file_read"],
+            "collaboration" => &["pool_org", "call_fish", "plan_todo", "app_control"],
+            "memory" => &["memory_store", "recall_tool_result"],
+            "im" => &[
+                "im_channel_list",
+                "im_channel_connect",
+                "im_channel_binding_lookup",
+                "im_channel_binding_list",
+                "im_send_message",
+            ],
+            "interaction" => &["chat_ui", "chat_ui_patch", "chat_ui_listen"],
+            "ssh" => &["ssh"],
+            _ => &[],
+        };
+        names.extend(group_tools.iter().copied());
+    }
+    // Artifact submission and visible progress are cross-cutting for any task
+    // that creates files or performs multi-step work.
+    if groups.iter().any(|group| {
+        matches!(
+            group.as_str(),
+            "files" | "runtime" | "office" | "desktop" | "collaboration"
+        )
+    }) {
+        names.insert("app_control");
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+async fn route_main_chat_intent(
+    client: &dyn piscis_kernel::llm::LlmClient,
+    model: &str,
+    messages: &[LlmMessage],
+) -> MainChatRouteAttempt {
+    let mut recent: Vec<LlmMessage> = messages
+        .iter()
+        .rev()
+        .filter_map(|message| {
+            let text = message.content.as_text();
+            if text.trim().is_empty() {
+                return None;
+            }
+            Some(LlmMessage {
+                role: message.role.clone(),
+                content: MessageContent::text(&text.chars().take(1600).collect::<String>()),
+            })
+        })
+        .take(8)
+        .collect();
+    recent.reverse();
+    let system = r#"You are the lightweight intent router and direct-response layer for Xiaoheng WorkBuddy.
+Return one JSON object only, with this schema:
+{"route":"direct|agent|workflow|multi_agent","answer":string|null,"tool_groups":string[],"needs_plan":boolean}
+
+Use route=direct and provide the complete user-facing answer when the request can be answered from conversation context and stable reasoning without files, current external state, tools, skills, desktop actions, or project execution.
+Use route=agent when one flexible tool-using agent is appropriate.
+Use route=workflow for a concrete deliverable or repeatable operation such as creating Office files, media, installing/building software, or browser automation.
+Use route=multi_agent only for genuinely multi-role, parallel, sustained project work or when the user explicitly requests team collaboration.
+
+Choose only required tool_groups from: files, runtime, web, office, desktop, skills, collaboration, memory, im, interaction, ssh, all.
+Do not route greetings, identity questions, explanations, rewriting, or ordinary conversation to tools. Route requests about current time, live data, local files, installed capabilities, running projects, or external systems to tools. Never output tool-call markup."#;
+    let request = LlmRequest {
+        messages: recent,
+        system: Some(system.to_string()),
+        tools: vec![],
+        model: model.to_string(),
+        max_tokens: 900,
+        stream: false,
+        vision_override: Some(false),
+    };
+    match client.complete(request).await {
+        Ok(response) => MainChatRouteAttempt {
+            decision: parse_route_decision(&response.content),
+            input_tokens: response.input_tokens,
+            output_tokens: response.output_tokens,
+        },
+        Err(error) => {
+            tracing::warn!(
+                "main-chat intent routing failed; using full agent: {}",
+                error
+            );
+            MainChatRouteAttempt {
+                decision: None,
+                input_tokens: 0,
+                output_tokens: 0,
+            }
+        }
+    }
+}
+
+fn emit_agent_event(app: &AppHandle, session_id: &str, event: &AgentEvent) {
+    let payload = serde_json::to_value(event).unwrap_or_default();
+    let _ = app.emit(&format!("agent_event_{}", session_id), payload.clone());
+    let _ = app.emit("agent_broadcast", payload);
 }
 
 fn merge_frontend_attachments(
@@ -714,6 +880,7 @@ async fn build_chat_prompt_artifacts(
     project_instruction_budget_chars: u32,
     enable_project_instructions: bool,
     persona_koi_id: Option<&str>,
+    route_tool_groups: Option<&[String]>,
 ) -> Result<ChatPromptArtifacts, String> {
     let persona_koi = if let Some(koi_id) = persona_koi_id.filter(|id| !id.trim().is_empty()) {
         let db = state.db.lock().await;
@@ -741,7 +908,7 @@ async fn build_chat_prompt_artifacts(
     let app_data_dir = app.path().app_data_dir().ok();
 
     let skill_loader_arc = load_skill_loader(app);
-    let registry = build_registry_for_scene(
+    let mut registry = build_registry_for_scene(
         scene_kind,
         state.browser.clone(),
         user_tools_dir.as_deref(),
@@ -753,6 +920,14 @@ async fn build_chat_prompt_artifacts(
         skill_loader_arc,
     )
     .await;
+    if let Some(allowlist) = route_tool_groups.and_then(route_tool_allowlist) {
+        registry.retain(|tool| allowlist.contains(tool.name()));
+        tracing::info!(
+            "main_chat_tool_route groups={:?} retained_tools={}",
+            route_tool_groups,
+            registry.all().len()
+        );
+    }
     let registry = Arc::new(registry);
     // Chat budget estimation uses the same Minimal injection mode the
     // harness will actually send, so the token accounting stays honest.
@@ -858,6 +1033,13 @@ async fn build_chat_prompt_artifacts(
             workspace_root,
             allow_outside_workspace,
         );
+        if route_tool_groups.is_some_and(|groups| {
+            groups
+                .iter()
+                .any(|group| group == "collaboration" || group == "all")
+        }) {
+            prompt.push_str(collaboration_protocol_prompt());
+        }
         if !pool_context.is_empty() {
             prompt.push_str(&pool_context);
             prompt.push_str(pool_coordinator_scene_guidance());
@@ -1022,6 +1204,9 @@ pub async fn chat_send(
     clear_plan: Option<bool>,
 ) -> Result<(), String> {
     let merged_attachments = merge_frontend_attachments(attachment, attachments);
+    let has_explicit_skills = explicit_skills
+        .as_ref()
+        .is_some_and(|items| !items.is_empty());
     tracing::info!(
         "chat_send called: session={} content_len={} attachments={} explicit_skills={:?} persona_koi={:?}",
         session_id,
@@ -1266,14 +1451,6 @@ pub async fn chat_send(
         db.update_session_status(&session_id, "running")
             .map_err(|e| e.to_string())?;
     }
-    persist_session_task_contract(
-        &state.db,
-        &session_id,
-        &effective_content,
-        replace_task_contract,
-    )
-    .await;
-
     // Load message history and build context with layered compression.
     let budget = compute_context_budget(context_window, max_tokens);
     let mut llm_messages = build_session_message_context(&state, &session_id, budget)
@@ -1311,14 +1488,9 @@ pub async fn chat_send(
         }
     }
 
-    // Build cancellation token
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut flags = state.cancel_flags.lock().await;
-        flags.insert(session_id.clone(), cancel.clone());
-    }
-
-    // Build agent components
+    // Build the provider client once. A lightweight model-driven routing call
+    // decides whether this message can be answered directly or needs the full
+    // tool loop, and selects the smallest relevant tool surface for that loop.
     let client = build_client_with_timeout(
         &provider,
         &api_key,
@@ -1329,6 +1501,108 @@ pub async fn chat_send(
         },
         llm_read_timeout_secs,
     );
+    let route_attempt = route_main_chat_intent(client.as_ref(), &model, &llm_messages).await;
+    if route_attempt.input_tokens > 0 || route_attempt.output_tokens > 0 {
+        let db = state.db.lock().await;
+        if let Err(error) = db.update_session_usage_totals(
+            &session_id,
+            route_attempt.input_tokens,
+            route_attempt.output_tokens,
+        ) {
+            tracing::warn!("failed to persist routing usage totals: {}", error);
+        }
+    }
+    let mut route_decision = route_attempt
+        .decision
+        .unwrap_or_else(|| MainChatRouteDecision {
+            route: "agent".to_string(),
+            answer: None,
+            tool_groups: vec!["all".to_string()],
+            needs_plan: false,
+        });
+    if route_decision.tool_groups.is_empty() && route_decision.route != "direct" {
+        route_decision.tool_groups = match route_decision.route.as_str() {
+            "workflow" => vec!["files", "runtime", "office", "skills"],
+            "multi_agent" => vec!["collaboration", "files", "runtime", "web"],
+            _ => vec!["files", "runtime", "web", "skills", "interaction"],
+        }
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    }
+    if route_decision.needs_plan
+        && !route_decision
+            .tool_groups
+            .iter()
+            .any(|group| group == "collaboration")
+    {
+        route_decision.tool_groups.push("collaboration".to_string());
+    }
+    let has_unfinished_plan = {
+        let plans = state.plan_state.lock().await;
+        plans.get(&session_id).is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.status == "pending" || item.status == "in_progress")
+        })
+    };
+    let direct_answer = route_decision
+        .answer
+        .as_deref()
+        .map(str::trim)
+        .filter(|answer| !answer.is_empty());
+    let direct_allowed = route_decision.route == "direct"
+        && direct_answer.is_some()
+        && merged_attachments.is_empty()
+        && !has_explicit_skills
+        && persona_koi_id.as_deref().is_none_or(str::is_empty)
+        && !has_unfinished_plan;
+    if direct_allowed {
+        let answer = direct_answer.unwrap().to_string();
+        {
+            let db = state.db.lock().await;
+            db.append_message(&session_id, "assistant", &answer)
+                .map_err(|error| error.to_string())?;
+            db.update_session_status(&session_id, "idle")
+                .map_err(|error| error.to_string())?;
+        }
+        emit_agent_event(
+            &app,
+            &session_id,
+            &AgentEvent::TextSegmentStart { iteration: 1 },
+        );
+        emit_agent_event(&app, &session_id, &AgentEvent::TextDelta { delta: answer });
+        emit_agent_event(
+            &app,
+            &session_id,
+            &AgentEvent::Done {
+                total_input_tokens: route_attempt.input_tokens,
+                total_output_tokens: route_attempt.output_tokens,
+            },
+        );
+        tracing::info!(
+            "chat_send: direct route completed session={} input_tokens={} output_tokens={}",
+            session_id,
+            route_attempt.input_tokens,
+            route_attempt.output_tokens
+        );
+        return Ok(());
+    }
+
+    persist_session_task_contract(
+        &state.db,
+        &session_id,
+        &effective_content,
+        replace_task_contract,
+    )
+    .await;
+
+    // Build cancellation token
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut flags = state.cancel_flags.lock().await;
+        flags.insert(session_id.clone(), cancel.clone());
+    }
 
     let mut prompt_artifacts = build_chat_prompt_artifacts(
         &app,
@@ -1343,6 +1617,7 @@ pub async fn chat_send(
         project_instruction_budget_chars,
         enable_project_instructions,
         persona_koi_id.as_deref(),
+        Some(&route_decision.tool_groups),
     )
     .await?;
     if let Some(ctx) = user_context
@@ -1436,12 +1711,18 @@ pub async fn chat_send(
     .with_hooks(hooks)
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
+    let routed_max_iterations = match route_decision.route.as_str() {
+        "multi_agent" => max_iterations.min(32),
+        "workflow" => max_iterations.min(24),
+        _ => max_iterations.min(16),
+    }
+    .max(4);
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: std::path::PathBuf::from(&workspace_root),
         bypass_permissions: false,
         settings: tool_settings,
-        max_iterations: Some(max_iterations),
+        max_iterations: Some(routed_max_iterations),
         memory_owner_id: prompt_artifacts.memory_owner_id.clone(),
         pool_session_id: bound_pool_id,
         tool_use_id: None,
@@ -2694,9 +2975,55 @@ pub fn build_main_chat_system_prompt(
     allow_outside: bool,
 ) -> String {
     let mut prompt =
-        build_system_prompt_with_env(memory_context, "", workspace_root, allow_outside);
+        build_compact_main_system_prompt(memory_context, workspace_root, allow_outside);
     prompt.push_str(main_chat_overlay_prompt());
     prompt
+}
+
+fn build_compact_main_system_prompt(
+    memory_context: &str,
+    workspace_root: &str,
+    allow_outside: bool,
+) -> String {
+    let outside_note = if allow_outside {
+        "Access outside this workspace is allowed when the task requires it."
+    } else {
+        "File operations are restricted to this workspace."
+    };
+    let workspace = if workspace_root.trim().is_empty() {
+        "not configured".to_string()
+    } else {
+        workspace_root.to_string()
+    };
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z");
+    format!(
+        r#"You are 小亨 WorkBuddy, the user's desktop AI work assistant. Piscis is an internal engine codename; never introduce yourself as Piscis.
+Current local time: {now}
+Workspace: `{workspace}`. {outside_note}
+
+## Operating contract
+- Be direct, truthful and evidence-grounded. Never invent file contents, tool results, project state or completion.
+- Use the smallest useful tool sequence. Independent read-only calls may run together. Do not repeat an unchanged call more than twice; inspect the error or change approach.
+- Work autonomously until the requested result is complete, blocked, or requires approval. Do not ask the user to type "continue" merely to advance an internal step.
+- Treat permission requests as runtime pauses. When approval is required, issue the tool call and let the host show the approval dialog.
+- Use absolute paths. On Windows, use valid PowerShell syntax; do not use CMD-only `&&` or `||` in PowerShell commands.
+- For builds and scripts prefer `code_run`; use `shell` for general system operations. Read tool errors before retrying.
+- When waiting for a process or external state, use real elapsed time. Sleep between checks with exponential backoff. Do not infer timeout from loop/turn count.
+
+## Skills
+- Do not enumerate skills for every request. Use `skill_list` only when a reusable installed skill is likely to materially improve the task or the user explicitly asks about skills.
+- After selecting a skill, read its `SKILL.md` once and follow it. Do not repeatedly rediscover or reread the same instructions without a reason.
+
+## Plans and collaboration
+- Use `plan_todo` only for genuinely multi-step work. Keep it short, update it alongside real work, and never let plan bookkeeping replace execution.
+- Use `call_fish` for bounded result-first research or scanning. Use `pool_org` only for explicit or genuinely multi-role sustained work; ordinary tasks stay in this agent.
+
+## Deliverables and completion
+- Create deliverables in the active workspace unless the user specifies another path. Verify existence, size and the task-specific success condition before claiming completion.
+- Submit concrete user-facing files through `app_control(action="artifact_submit", ...)` after verification. Do not submit scratch files.
+- End as soon as the user's objective is satisfied. State what was produced and any verification performed; if blocked, state the exact blocker and recovery condition.
+{memory_context}"#
+    )
 }
 
 fn heartbeat_scene_guidance() -> &'static str {
@@ -2870,11 +3197,10 @@ Every tangible output you produce in a session MUST be submitted as an artifact 
 ### Self-check before ending a run
 Before your final user-facing reply, scan the turn for any file path you wrote, screenshot you captured, or URL you delivered. If any such path/URL is missing from the artifacts list, submit it now. The user's Artifacts panel must reflect the full set of tangible outputs.
 
-## ⚡ First Step: Always Check Skills
-Before doing anything else, call `skill_list` to see all available skills.
-- If one skill clearly applies → read its SKILL.md with `file_read`, then follow it exactly.
-- If none apply → proceed with your built-in capabilities below.
-This applies to every new task, no exceptions.
+## Skills: Discover On Demand
+- Do not call `skill_list` for greetings, direct questions, or tasks that clearly need no installed skill.
+- When a reusable installed skill is likely to materially improve the task, call `skill_list` once, select the best match, read its SKILL.md with `file_read`, and follow it.
+- Do not repeatedly list skills or reread the same SKILL.md in one run unless the installed set changed.
 
 ## Tool Selection Decision Tree
 
@@ -4377,14 +4703,48 @@ pub async fn auto_extract_memories(
     max_tokens: u32,
     owner_id: String,
 ) {
-    // Only extract if there's meaningful assistant content
+    // Memory extraction is a background model call, so gate it on evidence
+    // that the user actually revealed reusable personal/project information.
+    // Long assistant output alone (for example an identity answer or generated
+    // report) is not a reason to spend another model request.
     let assistant_chars: usize = messages
         .iter()
         .filter(|m| m.role == "assistant")
         .map(|m| m.content.as_text().chars().count())
         .sum();
+    let user_text = messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .map(|message| message.content.as_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let user_chars = user_text.chars().count();
+    let memory_signals = [
+        "记住",
+        "以后",
+        "我喜欢",
+        "我希望",
+        "我的偏好",
+        "我的项目",
+        "常用",
+        "默认路径",
+        "remember",
+        "my preference",
+        "my project",
+        "from now on",
+    ];
+    let has_memory_signal = user_chars >= 120
+        || memory_signals
+            .iter()
+            .any(|signal| user_text.to_lowercase().contains(&signal.to_lowercase()));
 
-    if assistant_chars < 100 {
+    if assistant_chars < 160 || !has_memory_signal {
+        tracing::debug!(
+            "memory extraction skipped: assistant_chars={} user_chars={} memory_signal={}",
+            assistant_chars,
+            user_chars,
+            has_memory_signal
+        );
         return;
     }
 
@@ -4594,6 +4954,7 @@ pub async fn get_context_preview(
         project_instruction_budget_chars,
         enable_project_instructions,
         None,
+        None,
     )
     .await?;
     let base_llm_messages = session_context.llm_messages;
@@ -4776,8 +5137,9 @@ mod tests {
     use super::{
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
         derive_headless_session_source, extract_tool_minimals_from_history,
-        minimal_tool_result_blocks, paths_match_for_pool_binding, resolve_headless_memory_owner_id,
-        resolve_headless_scene_kind, resolve_pool_session_for_workspace, HeadlessRunOptions,
+        minimal_tool_result_blocks, parse_route_decision, paths_match_for_pool_binding,
+        resolve_headless_memory_owner_id, resolve_headless_scene_kind,
+        resolve_pool_session_for_workspace, route_tool_allowlist, HeadlessRunOptions,
         SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCIS_POOL,
     };
     use crate::commands::config::scene::SceneKind;
@@ -4930,6 +5292,8 @@ mod tests {
             task_timeout_secs: 600,
             origin_im_binding_key: None,
             member_koi_ids: Vec::new(),
+            team_id: None,
+            workflow_run_id: None,
             last_active_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -5001,7 +5365,7 @@ mod tests {
     }
 
     #[test]
-    fn main_prompt_preserves_piscis_routing_heuristics() {
+    fn main_prompt_is_compact_and_does_not_force_skill_discovery() {
         let prompt = build_main_chat_system_prompt("", "", false);
         for required in [
             "Pool and Koi state is not preloaded from keyword matches",
@@ -5010,9 +5374,9 @@ mod tests {
             "If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work",
             "Use `call_fish` for simple, self-contained, result-heavy work",
             "Do the work yourself when it is still simple enough for one agent but the user benefits from your own detailed reasoning",
-            "Prefer Fish for simple result-first work such as web search, file search",
             "Sleep between checks with exponential backoff",
             "Do not infer timeout from loop/turn count",
+            "Do not enumerate skills for every request",
         ] {
             assert!(
                 prompt.contains(required),
@@ -5020,23 +5384,25 @@ mod tests {
                 required
             );
         }
+        assert!(!prompt.contains("Before doing anything else, call `skill_list`"));
+        assert!(prompt.chars().count() < 8_000);
     }
 
     #[test]
-    fn main_prompt_requires_pool_for_quality_sensitive_multi_role_work() {
-        let prompt = build_main_chat_system_prompt("", "", false);
-        assert!(
-            prompt.contains(
-                "The task is complex, multi-domain, and quality-sensitive enough that explicit review, quality control, or specialist cross-checking should be separate from implementation"
-            ),
-            "main prompt must force pool routing for quality-sensitive multi-role work"
-        );
-        assert!(
-            prompt.contains(
-                "Before assigning work, check whether the existing Koi roster covers the specialist roles the project needs"
-            ),
-            "main prompt must require checking the Koi roster before delegating complex multi-role work"
-        );
+    fn router_parser_and_tool_groups_are_bounded() {
+        let decision = parse_route_decision(
+            r#"```json
+{"route":"workflow","answer":null,"tool_groups":["files","office"],"needs_plan":true}
+```"#,
+        )
+        .expect("route JSON should parse");
+        assert_eq!(decision.route, "workflow");
+        assert!(decision.needs_plan);
+        let tools = route_tool_allowlist(&decision.tool_groups).expect("bounded tool set");
+        assert!(tools.contains("file_write"));
+        assert!(tools.contains("office"));
+        assert!(tools.contains("app_control"));
+        assert!(!tools.contains("web_search"));
     }
 
     #[test]

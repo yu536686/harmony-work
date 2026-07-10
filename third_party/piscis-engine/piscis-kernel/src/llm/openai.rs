@@ -62,6 +62,18 @@ fn is_deepseek_thinking_model(model: &str) -> bool {
     model.contains("deepseek-v4") || model.contains("deepseek-reasoner")
 }
 
+fn parse_tool_arguments(tool_name: &str, raw: &str) -> Result<Value> {
+    serde_json::from_str(raw).map_err(|error| {
+        let preview: String = raw.chars().take(300).collect();
+        anyhow!(
+            "Model returned invalid JSON arguments for tool '{}': {} (arguments preview: {})",
+            tool_name,
+            error,
+            preview
+        )
+    })
+}
+
 impl OpenAiClient {
     #[allow(dead_code)]
     pub fn new(api_key: &str, base_url: &str) -> Self {
@@ -769,8 +781,7 @@ impl LlmClient for OpenAiClient {
                     if data == "[DONE]" {
                         // Drain any tool calls that arrived before [DONE]
                         for (_, (id, name, args_buf)) in tool_bufs.drain() {
-                            let input = serde_json::from_str(&args_buf)
-                                .unwrap_or(Value::Object(serde_json::Map::new()));
+                            let input = parse_tool_arguments(&name, &args_buf)?;
                             let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
                         }
                         let _ = tx
@@ -821,8 +832,7 @@ impl LlmClient for OpenAiClient {
                                 // Finish reason
                                 if let Some("tool_calls") = choice["finish_reason"].as_str() {
                                     for (_, (id, name, args_buf)) in tool_bufs.drain() {
-                                        let input = serde_json::from_str(&args_buf)
-                                            .unwrap_or(Value::Object(serde_json::Map::new()));
+                                        let input = parse_tool_arguments(&name, &args_buf)?;
                                         let _ =
                                             tx.send(LlmChunk::ToolUse { id, name, input }).await;
                                     }
@@ -881,11 +891,11 @@ impl LlmClient for OpenAiClient {
         if let Some(tcs) = message["tool_calls"].as_array() {
             for tc in tcs {
                 let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                let input =
-                    serde_json::from_str(args_str).unwrap_or(Value::Object(serde_json::Map::new()));
+                let tool_name = tc["function"]["name"].as_str().unwrap_or("");
+                let input = parse_tool_arguments(tool_name, args_str)?;
                 tool_calls.push(ToolCall {
                     id: tc["id"].as_str().unwrap_or("").to_string(),
-                    name: tc["function"]["name"].as_str().unwrap_or("").to_string(),
+                    name: tool_name.to_string(),
                     input,
                 });
             }
@@ -952,6 +962,15 @@ mod tests {
         let body = client.build_body(&request_for_model("deepseek-chat"));
 
         assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn malformed_tool_arguments_are_rejected() {
+        let error = parse_tool_arguments("shell_exec", r#"{"command":"python -c "print(1)""}"#)
+            .expect_err("malformed JSON must not be converted to empty arguments");
+
+        assert!(error.to_string().contains("shell_exec"));
+        assert!(error.to_string().contains("invalid JSON arguments"));
     }
 
     #[test]

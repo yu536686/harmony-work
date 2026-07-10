@@ -29,7 +29,7 @@ use std::sync::{
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
-const DEFAULT_MAX_ITERATIONS: usize = 50;
+const DEFAULT_MAX_ITERATIONS: usize = 24;
 const TOOL_TIMEOUT_SECS: u64 = 120;
 const LLM_MAX_RETRIES: u32 = 3;
 const READ_TOOL_MAX_CONCURRENCY: usize = 4;
@@ -38,19 +38,18 @@ const READ_TOOL_MAX_CONCURRENCY: usize = 4;
 // Purpose: ONLY prevent true infinite loops / dead loops where the agent is
 // stuck making zero progress with identical input+output.  We do NOT restrict
 // exploration — agents must be free to try, fail, retry, and iterate through
-// multi-step workflows (browser navigation, desktop automation, search
-// refinement, etc.).  Thresholds are deliberately high so they only fire as
-// a last-resort safety net, never as a premature "you called this too many
-// times" nag.
-const TOOL_CALL_HISTORY_SIZE: usize = 128;
-const WARNING_THRESHOLD: usize = 64;
-const CRITICAL_THRESHOLD: usize = 128;
-const CIRCUIT_BREAKER_THRESHOLD: usize = 64;
-const RESEARCH_WARNING_THRESHOLD: usize = 64;
-const RESEARCH_CRITICAL_THRESHOLD: usize = 128;
-const RESEARCH_RECENT_WINDOW: usize = 64;
-const PING_PONG_WARNING: usize = 64;
-const PING_PONG_CRITICAL: usize = 128;
+// multi-step workflows. The thresholds must still be lower than the run
+// budget, otherwise the detector can never protect a normal one-call-per-turn
+// loop before max_iterations is exhausted.
+const TOOL_CALL_HISTORY_SIZE: usize = 48;
+const WARNING_THRESHOLD: usize = 6;
+const CRITICAL_THRESHOLD: usize = 12;
+const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
+const RESEARCH_WARNING_THRESHOLD: usize = 8;
+const RESEARCH_CRITICAL_THRESHOLD: usize = 16;
+const RESEARCH_RECENT_WINDOW: usize = 24;
+const PING_PONG_WARNING: usize = 6;
+const PING_PONG_CRITICAL: usize = 12;
 const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
 const CONTEXT_SINGLE_RESULT_SHARE: f64 = 0.5;
 const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
@@ -1880,6 +1879,11 @@ async fn llm_call_unified(
         return client.complete(req).await;
     }
 
+    let non_stream_retry_request = {
+        let mut retry = req.clone();
+        retry.stream = false;
+        retry
+    };
     let (tx, mut rx) = mpsc::channel::<crate::llm::LlmChunk>(32);
     let mut text = String::new();
     let mut tool_calls: Vec<crate::llm::ToolCall> = Vec::new();
@@ -1916,7 +1920,18 @@ async fn llm_call_unified(
     };
 
     let (stream_res, _) = tokio::join!(stream_fut, recv_fut);
-    stream_res?;
+    if let Err(error) = stream_res {
+        let lower = error.to_string().to_lowercase();
+        let transport_decode_error = lower.contains("error decoding response body")
+            || lower.contains("incomplete message")
+            || lower.contains("unexpected eof")
+            || lower.contains("broken pipe");
+        if transport_decode_error && text.trim().is_empty() && tool_calls.is_empty() {
+            warn!("stream transport failed before any output; retrying once without streaming");
+            return client.complete(non_stream_retry_request).await;
+        }
+        return Err(error);
+    }
     if let Some(err) = stream_error {
         return Err(anyhow::anyhow!(err));
     }
@@ -2821,7 +2836,7 @@ impl AgentLoop {
         // Guard: limit how many times we re-prompt for unfinished todos.
         // After this many consecutive text-only (no tool call) responses with
         // unfinished todos, stop injecting reminders and exit gracefully.
-        const TODO_REMINDER_MAX: usize = 2;
+        const TODO_REMINDER_MAX: usize = 1;
         let mut todo_reminder_count: usize = 0;
         let mut rolling_summary_version = 0i64;
         let mut cumulative_input_tokens = 0i64;
@@ -2849,8 +2864,12 @@ impl AgentLoop {
         // Loop-strategy turn tracking (fed into `prepare_next_turn`).
         let mut last_turn_had_tool_calls = false;
         let mut last_turn_text = String::new();
+        let mut produced_final_output = false;
+        let mut stopped_by_host = false;
+        let mut iterations_run = 0usize;
 
         for _iteration in 0..max_iterations {
+            iterations_run = _iteration + 1;
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
@@ -3335,18 +3354,22 @@ impl AgentLoop {
                                     last_err = Some(e);
                                     break;
                                 } else {
-                                    let is_transient = msg.contains("timeout")
-                                        || msg.contains("connection")
-                                        || msg.contains("overloaded")
-                                        || msg.contains("502")
-                                        || msg.contains("503")
-                                        || msg.contains("529")
+                                    let lower = msg.to_lowercase();
+                                    let is_transient = lower.contains("timeout")
+                                        || lower.contains("connection")
+                                        || lower.contains("connect")
+                                        || lower.contains("error sending request")
+                                        || lower.contains("request failed before http response")
+                                        || lower.contains("overloaded")
+                                        || lower.contains("502")
+                                        || lower.contains("503")
+                                        || lower.contains("529")
                                         // Network-level decode errors (server closed connection
                                         // mid-stream, incomplete chunk, etc.) are transient
-                                        || msg.contains("error decoding response body")
-                                        || msg.contains("incomplete message")
-                                        || msg.contains("unexpected eof")
-                                        || msg.contains("broken pipe");
+                                        || lower.contains("error decoding response body")
+                                        || lower.contains("incomplete message")
+                                        || lower.contains("unexpected eof")
+                                        || lower.contains("broken pipe");
                                     if !is_transient || attempt + 1 == LLM_MAX_RETRIES {
                                         last_err = Some(e);
                                         break 'model_loop;
@@ -3503,6 +3526,7 @@ impl AgentLoop {
                     messages.push(asst_msg.clone());
                     self.persist_message(&ctx.session_id, &asst_msg, turn_index)
                         .await;
+                    produced_final_output = true;
                     break;
                 }
             }
@@ -3764,6 +3788,7 @@ impl AgentLoop {
                 .is_some_and(|h| h.load(Ordering::Relaxed))
             {
                 info!("agent loop halted by host (plan ready / await user build)");
+                stopped_by_host = true;
                 break;
             }
 
@@ -3828,9 +3853,99 @@ impl AgentLoop {
                         strat.name(),
                         _iteration + 1
                     );
+                    stopped_by_host = true;
                     break;
                 }
             }
+        }
+
+        // Never report a tool-only max-iteration exit as a successful run.
+        // Produce one bounded, no-tools closeout turn so the user receives an
+        // honest summary of completed work, remaining work and blockers. If
+        // even that cannot be produced, surface an explicit error instead of
+        // emitting Done with a dangling tool-result as the last message.
+        if !produced_final_output
+            && !stopped_by_host
+            && !cancel.load(Ordering::Relaxed)
+            && iterations_run >= max_iterations
+        {
+            warn!(
+                "agent loop exhausted max_iterations={} for session={}, forcing no-tools closeout",
+                max_iterations, ctx.session_id
+            );
+            let _ = event_tx
+                .send(AgentEvent::TextSegmentStart {
+                    iteration: max_iterations as u32 + 1,
+                })
+                .await;
+
+            let mut closeout_messages = build_request_messages(
+                &messages,
+                &tool_minimals,
+                CTX_PRESERVE_RECENT_TURNS,
+                CTX_KEEP_RECENT_TOOL_CARRIERS,
+            );
+            closeout_messages.push(LlmMessage {
+                role: "user".into(),
+                content: MessageContent::text(
+                    "[System closeout] The execution budget is exhausted. Do not call tools. Give the user a concise, truthful final status now: what was actually completed and verified, what remains, any blockers, and the exact paths or outputs already produced. Do not claim completion without evidence.",
+                ),
+            });
+            let provider_kind = crate::agent::harness::ProviderKind::from_model_id(&self.model);
+            let closeout_request = crate::agent::harness::RequestBuilder::new(
+                closeout_messages,
+                Some(
+                    "You are Xiaoheng WorkBuddy. Produce an evidence-grounded execution closeout. Never emit tool-call markup or pseudo tool calls."
+                        .to_string(),
+                ),
+                vec![],
+                self.model.clone(),
+                self.max_tokens.min(1200),
+            )
+            .with_stream(false)
+            .with_vision_override(Some(false))
+            .build_for(provider_kind);
+
+            let closeout = self.client.complete(closeout_request).await.map_err(|error| {
+                anyhow::anyhow!(
+                    "Agent reached the {}-iteration execution limit and closeout generation failed: {}",
+                    max_iterations,
+                    error
+                )
+            })?;
+            let closeout_text = closeout.content.trim().to_string();
+            if closeout_text.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Agent reached the {}-iteration execution limit without a final response",
+                    max_iterations
+                ));
+            }
+
+            total_input = total_input.saturating_add(closeout.input_tokens);
+            total_output = total_output.saturating_add(closeout.output_tokens);
+            if let Some(ref db_arc) = self.db {
+                let db = db_arc.lock().await;
+                if let Err(error) = db.update_session_usage_totals(
+                    &ctx.session_id,
+                    closeout.input_tokens,
+                    closeout.output_tokens,
+                ) {
+                    warn!("Failed to persist closeout usage totals: {}", error);
+                }
+            }
+            let _ = event_tx
+                .send(AgentEvent::TextDelta {
+                    delta: closeout_text.clone(),
+                })
+                .await;
+            let closeout_msg = LlmMessage {
+                role: "assistant".into(),
+                content: MessageContent::text(&closeout_text),
+            };
+            new_messages.push(closeout_msg.clone());
+            messages.push(closeout_msg.clone());
+            self.persist_message(&ctx.session_id, &closeout_msg, turn_index)
+                .await;
         }
 
         // Mark checkpoint as completed so it won't be resumed next run
@@ -4241,8 +4356,9 @@ mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results, confirm_flags_handle,
         is_structural_schema_error, maybe_schema_correction_envelope,
-        serialize_tool_results_with_receipts, AgentLoop, CTX_KEEP_RECENT_TOOL_CARRIERS,
-        CTX_PRESERVE_RECENT_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+        serialize_tool_results_with_receipts, AgentLoop, CIRCUIT_BREAKER_THRESHOLD,
+        CRITICAL_THRESHOLD, CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS,
+        CTX_TRIM_HEAD, CTX_TRIM_TAIL, DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
     };
     use crate::agent::tool::{Tool, ToolContext, ToolRegistry, ToolSettings};
     use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
@@ -4252,6 +4368,13 @@ mod tests {
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::{borrow::Cow, collections::HashMap, path::PathBuf, sync::Arc};
+
+    #[test]
+    fn loop_guardrails_trigger_before_the_default_budget_is_exhausted() {
+        assert!(CIRCUIT_BREAKER_THRESHOLD < WARNING_THRESHOLD);
+        assert!(WARNING_THRESHOLD < DEFAULT_MAX_ITERATIONS);
+        assert!(CRITICAL_THRESHOLD <= DEFAULT_MAX_ITERATIONS);
+    }
 
     // ── Mock LLM clients ──────────────────────────────────────────────────────
 

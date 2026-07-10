@@ -649,7 +649,7 @@ fn default_imap_port() -> u16 {
     993
 }
 fn default_max_iterations() -> u32 {
-    50
+    24
 }
 fn default_auto_compact_input_tokens_threshold() -> u32 {
     // Bumped from 100k → 200k after introducing dual-version tool results.
