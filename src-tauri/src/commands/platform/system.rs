@@ -898,6 +898,9 @@ fn collect_environment_bootstrap(
             } else if target.key == "wecom_cli" {
                 "No local @wecom/cli tgz package found; online fallback will try npm install -g @wecom/cli."
                     .to_string()
+            } else if cfg!(target_os = "macos") {
+                "No local macOS installer found; fallback will use Homebrew when available, otherwise open the official installer."
+                    .to_string()
             } else {
                 "No local installer found; online fallback will try silent winget install.".to_string()
             };
@@ -949,7 +952,12 @@ fn target_available(target: BootstrapTarget) -> Option<String> {
             .or_else(|| probe_command("npm", &["list", "-g", "@wecom/cli", "--depth=0"]))
             .or_else(|| probe_command("npm.cmd", &["list", "-g", "@wecom/cli", "--depth=0"]));
     }
-    probe_command(target.probe_command, target.probe_args)
+    let detected = probe_command(target.probe_command, target.probe_args);
+    if target.key == "python" {
+        detected.or_else(|| probe_command("python3", target.probe_args))
+    } else {
+        detected
+    }
 }
 
 fn probe_wecom_cli_from_npm_prefix() -> Option<String> {
@@ -976,6 +984,17 @@ fn offline_installer_dirs() -> Vec<PathBuf> {
             dirs.push(parent.join("installers"));
             dirs.push(parent.join("offline-installers"));
             dirs.push(parent.join("resources").join("offline-installers"));
+
+            // Tauri copies configured resources into Contents/Resources on
+            // macOS, preserving the source `resources/...` path. The binary
+            // itself lives in Contents/MacOS, so the generic sibling lookup
+            // above cannot discover bundled offline installers.
+            #[cfg(target_os = "macos")]
+            if let Some(contents) = parent.parent() {
+                let resources = contents.join("Resources");
+                dirs.push(resources.join("offline-installers"));
+                dirs.push(resources.join("resources").join("offline-installers"));
+            }
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -995,8 +1014,12 @@ fn offline_installer_dirs() -> Vec<PathBuf> {
 fn find_local_installer(target: BootstrapTarget) -> Option<PathBuf> {
     let allowed_exts = if target.key == "wecom_cli" {
         vec!["tgz", "tar"]
-    } else {
+    } else if cfg!(target_os = "windows") {
         vec!["exe", "msi"]
+    } else if cfg!(target_os = "macos") {
+        vec!["pkg", "dmg"]
+    } else {
+        vec!["deb", "rpm", "appimage"]
     };
     for dir in offline_installer_dirs() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -1073,8 +1096,47 @@ fn run_local_installer(target: BootstrapTarget, path: &Path) -> Result<String, S
 
     #[cfg(not(target_os = "windows"))]
     {
+        #[cfg(target_os = "macos")]
+        {
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let mut command = bootstrap_command("open");
+            command.arg(path);
+            // A .pkg is handled by the native Installer application. Waiting
+            // lets the UI re-detect only after the user closes Installer.
+            if extension == "pkg" {
+                command.arg("-W");
+            }
+            let output = command
+                .output()
+                .map_err(|err| format!("Failed to open local installer: {err}"))?;
+            if output.status.success() {
+                let action = if extension == "pkg" {
+                    "opened and closed"
+                } else {
+                    "opened"
+                };
+                return Ok(format!(
+                    "{} local macOS installer {}: {}. Complete any visible installer steps, then re-check the environment.",
+                    target.name,
+                    action,
+                    path.display()
+                ));
+            }
+            return Err(format!(
+                "macOS installer exit={:?}; stdout={}; stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        #[cfg(not(target_os = "macos"))]
         Err(format!(
-            "Local installer execution is only automated on Windows: {}",
+            "Local installer execution is not supported on this platform: {}",
             path.display()
         ))
     }
@@ -1087,13 +1149,37 @@ fn online_install_command(target: BootstrapTarget) -> Option<String> {
         }
         return None;
     }
-    let winget_id = target.winget_id?;
-    if command_exists("winget") {
-        Some(format!(
-            "winget install --id {winget_id} -e --silent --accept-source-agreements --accept-package-agreements"
-        ))
-    } else {
-        None
+    #[cfg(target_os = "macos")]
+    {
+        if command_exists("brew") {
+            let formula = match target.key {
+                "git" => "git",
+                "node" => "node",
+                "python" => "python",
+                _ => return None,
+            };
+            return Some(format!("brew install {formula}"));
+        }
+        return match target.key {
+            // macOS supplies Git through Command Line Tools. This opens the
+            // native confirmation UI instead of silently failing in a GUI app.
+            "git" => Some("xcode-select --install".to_string()),
+            "node" => Some("open https://nodejs.org/en/download".to_string()),
+            "python" => Some("open https://www.python.org/downloads/macos/".to_string()),
+            _ => None,
+        };
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let winget_id = target.winget_id?;
+        if command_exists("winget") {
+            Some(format!(
+                "winget install --id {winget_id} -e --silent --accept-source-agreements --accept-package-agreements"
+            ))
+        } else {
+            None
+        }
     }
 }
 
@@ -1113,7 +1199,7 @@ fn run_shell_command(command: &str) -> Result<String, String> {
 
     #[cfg(not(target_os = "windows"))]
     let mut process = {
-        let mut cmd = std_command("sh");
+        let mut cmd = bootstrap_command("sh");
         cmd.args(["-lc", command]);
         cmd
     };
@@ -1135,6 +1221,20 @@ fn run_shell_command(command: &str) -> Result<String, String> {
             String::from_utf8_lossy(&output.stderr)
         ))
     }
+}
+
+/// Finder-launched macOS applications do not inherit the user's interactive
+/// shell PATH. Include Homebrew's two standard locations so runtime detection
+/// and npm-based installation work from the packaged app as well as from a
+/// development terminal.
+fn bootstrap_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut command = std_command(program);
+    #[cfg(target_os = "macos")]
+    command.env(
+        "PATH",
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
+    command
 }
 
 #[cfg(target_os = "linux")]
@@ -1344,7 +1444,7 @@ fn command_exists(cmd: &str) -> bool {
 
     #[cfg(not(target_os = "windows"))]
     let mut command = {
-        let mut command = std_command("which");
+        let mut command = bootstrap_command("which");
         command.arg(cmd);
         command
     };
@@ -1356,7 +1456,7 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 fn probe_command(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut command = std_command(cmd);
+    let mut command = bootstrap_command(cmd);
     command.args(args);
     let output = command.output().ok()?;
     if output.status.success() {
