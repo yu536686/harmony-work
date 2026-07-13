@@ -9,6 +9,7 @@ pub mod chat_ui_schema;
 pub mod harmony_cut;
 pub mod im_channel;
 pub mod im_send;
+pub mod presentation;
 #[cfg(target_os = "windows")]
 pub mod office;
 #[cfg(target_os = "windows")]

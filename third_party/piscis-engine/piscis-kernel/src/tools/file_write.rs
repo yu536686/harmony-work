@@ -3,6 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::io::Write;
 
 use super::file_read::decode_bytes;
 use super::output::{format_err, ToolErrorCode};
@@ -86,6 +87,11 @@ impl Tool for FileWriteTool {
                 "content": {
                     "type": "string",
                     "description": "Full content to write. This REPLACES the entire file. Use file_edit to modify only part of an existing file."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["overwrite", "append"],
+                    "description": "overwrite (default) replaces the whole file; append adds content to the end. Use append for large generated files in smaller chunks."
                 }
             },
             "required": ["path", "content"]
@@ -105,7 +111,8 @@ impl Tool for FileWriteTool {
             "type": "object",
             "properties": {
                 "path":    { "type": "string" },
-                "content": { "type": "string" }
+                "content": { "type": "string" },
+                "mode": { "type": "string", "enum": ["overwrite", "append"] }
             },
             "required": ["path", "content"]
         })
@@ -124,6 +131,10 @@ impl Tool for FileWriteTool {
             Some(c) => c,
             None => return Ok(ToolResult::err("Missing required parameter: content")),
         };
+        let mode = input["mode"].as_str().unwrap_or("overwrite");
+        if mode != "overwrite" && mode != "append" {
+            return Ok(ToolResult::err("mode must be 'overwrite' or 'append'"));
+        }
 
         let path = if std::path::Path::new(path_str).is_absolute() {
             std::path::PathBuf::from(path_str)
@@ -138,9 +149,23 @@ impl Tool for FileWriteTool {
 
         let existed = path.exists();
         let preserve_bom = existed && file_has_utf8_bom(&path);
-        write_with_bom_policy(&path, content, preserve_bom)?;
+        if mode == "append" {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)?;
+            file.write_all(content.as_bytes())?;
+        } else {
+            write_with_bom_policy(&path, content, preserve_bom)?;
+        }
 
-        let action = if existed { "Updated" } else { "Created" };
+        let action = if mode == "append" {
+            if existed { "Appended to" } else { "Created" }
+        } else if existed {
+            "Updated"
+        } else {
+            "Created"
+        };
         Ok(ToolResult::ok(format!(
             "{} file: {} ({} bytes)",
             action,

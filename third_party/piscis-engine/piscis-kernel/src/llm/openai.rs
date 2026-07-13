@@ -62,7 +62,38 @@ fn is_deepseek_thinking_model(model: &str) -> bool {
     model.contains("deepseek-v4") || model.contains("deepseek-reasoner")
 }
 
-fn parse_tool_arguments(tool_name: &str, raw: &str) -> Result<Value> {
+const TOOL_ARGUMENTS_ERROR_KEY: &str = "__tool_arguments_error";
+const TOOL_ARGUMENTS_RAW_PREVIEW_KEY: &str = "__tool_arguments_raw_preview";
+
+fn malformed_tool_arguments_value(tool_name: &str, raw: &str, error: &serde_json::Error) -> Value {
+    let preview: String = raw.chars().take(1200).collect();
+    json!({
+        TOOL_ARGUMENTS_ERROR_KEY: format!(
+            "Model returned invalid JSON arguments for tool '{}': {}. The tool was not executed.",
+            tool_name, error
+        ),
+        TOOL_ARGUMENTS_RAW_PREVIEW_KEY: preview,
+    })
+}
+
+fn parse_tool_arguments(tool_name: &str, raw: &str) -> Value {
+    match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(error) => {
+            let preview: String = raw.chars().take(300).collect();
+            tracing::warn!(
+                "Model returned invalid JSON arguments for tool '{}': {} (arguments preview: {})",
+                tool_name,
+                error,
+                preview
+            );
+            malformed_tool_arguments_value(tool_name, raw, &error)
+        }
+    }
+}
+
+#[cfg(test)]
+fn parse_tool_arguments_strict(tool_name: &str, raw: &str) -> Result<Value> {
     serde_json::from_str(raw).map_err(|error| {
         let preview: String = raw.chars().take(300).collect();
         anyhow!(
@@ -781,7 +812,7 @@ impl LlmClient for OpenAiClient {
                     if data == "[DONE]" {
                         // Drain any tool calls that arrived before [DONE]
                         for (_, (id, name, args_buf)) in tool_bufs.drain() {
-                            let input = parse_tool_arguments(&name, &args_buf)?;
+                            let input = parse_tool_arguments(&name, &args_buf);
                             let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
                         }
                         let _ = tx
@@ -832,7 +863,7 @@ impl LlmClient for OpenAiClient {
                                 // Finish reason
                                 if let Some("tool_calls") = choice["finish_reason"].as_str() {
                                     for (_, (id, name, args_buf)) in tool_bufs.drain() {
-                                        let input = parse_tool_arguments(&name, &args_buf)?;
+                                        let input = parse_tool_arguments(&name, &args_buf);
                                         let _ =
                                             tx.send(LlmChunk::ToolUse { id, name, input }).await;
                                     }
@@ -892,7 +923,7 @@ impl LlmClient for OpenAiClient {
             for tc in tcs {
                 let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
                 let tool_name = tc["function"]["name"].as_str().unwrap_or("");
-                let input = parse_tool_arguments(tool_name, args_str)?;
+                let input = parse_tool_arguments(tool_name, args_str);
                 tool_calls.push(ToolCall {
                     id: tc["id"].as_str().unwrap_or("").to_string(),
                     name: tool_name.to_string(),
@@ -966,11 +997,24 @@ mod tests {
 
     #[test]
     fn malformed_tool_arguments_are_rejected() {
-        let error = parse_tool_arguments("shell_exec", r#"{"command":"python -c "print(1)""}"#)
+        let error = parse_tool_arguments_strict("shell_exec", r#"{"command":"python -c "print(1)""}"#)
             .expect_err("malformed JSON must not be converted to empty arguments");
 
         assert!(error.to_string().contains("shell_exec"));
         assert!(error.to_string().contains("invalid JSON arguments"));
+    }
+
+    #[test]
+    fn malformed_tool_arguments_are_returned_as_recoverable_tool_input() {
+        let value = parse_tool_arguments("file_write", r#"{"path":"a.py","content":"unterminated"#);
+        assert!(value[TOOL_ARGUMENTS_ERROR_KEY]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid JSON arguments"));
+        assert!(value[TOOL_ARGUMENTS_RAW_PREVIEW_KEY]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unterminated"));
     }
 
     #[test]

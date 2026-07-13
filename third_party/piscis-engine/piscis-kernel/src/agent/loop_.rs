@@ -2032,6 +2032,54 @@ impl AgentLoop {
         let trace_id = uuid::Uuid::new_v4().simple().to_string();
         let mut blocks = Vec::new();
 
+        if let Some(err) = input
+            .get("__tool_arguments_error")
+            .and_then(|value| value.as_str())
+        {
+            let raw_preview = input
+                .get("__tool_arguments_raw_preview")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let guidance = match name {
+                "file_write" | "file_edit" => {
+                    "Recover by writing smaller chunks, using append mode where available, or generating the artifact through a dedicated structured tool instead of embedding a very large script in one JSON argument."
+                }
+                "shell" | "code_run" => {
+                    "Recover by shortening the command/script, writing the script in smaller file chunks first, then executing it."
+                }
+                "presentation" => {
+                    "Recover by sending a smaller slide spec, reducing long speaker notes/body text, or splitting the deck into fewer slides per call."
+                }
+                _ => {
+                    "Recover by retrying the same tool with valid JSON arguments and smaller string fields."
+                }
+            };
+            let content = format!(
+                "{err}\n{guidance}\nRaw arguments preview:\n{raw_preview}"
+            );
+            let _ = event_tx
+                .send(AgentEvent::ToolStart {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    input: input.clone(),
+                })
+                .await;
+            let _ = event_tx
+                .send(AgentEvent::ToolEnd {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    result: content.clone(),
+                    is_error: true,
+                })
+                .await;
+            blocks.push(ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content,
+                is_error: true,
+            });
+            return blocks;
+        }
+
         if let Some(wait_reason) = self.check_tool_rate_limit(ctx).await {
             let _ = event_tx
                 .send(AgentEvent::ToolEnd {

@@ -638,6 +638,10 @@ impl HostTools for DesktopHostTools {
             }));
         }
 
+        if self.is_enabled("presentation") {
+            registry.register(Box::new(crate::tools::presentation::PresentationTool));
+        }
+
         if self.is_enabled("lsp") {
             if let Some(ref lsp_manager) = self.lsp_manager {
                 registry.register(Box::new(crate::tools::LspTool {

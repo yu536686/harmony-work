@@ -128,7 +128,7 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
                 "read_lints",
             ],
             "web" => &["web_search", "web_fetch", "browser"],
-            "office" => &["office", "com", "com_invoke", "pdf"],
+            "office" => &["presentation", "office", "com", "com_invoke", "pdf"],
             "desktop" => &[
                 "screen_capture",
                 "desktop_automation",
@@ -3284,7 +3284,7 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 **Office automation (Excel, Word, PowerPoint, Outlook):**
 → For creating new deliverables, prefer a deterministic file-generation workflow when available:
   - Excel: generate `.xlsx` with Python/openpyxl or structured data tooling, then verify the file exists and is non-empty.
-  - PowerPoint: generate `.pptx` with Python/python-pptx or a dedicated presentation skill from a slide-spec JSON; use image assets deliberately and verify slide count/file size.
+  - PowerPoint: use `presentation` first for new `.pptx` files. Pass compact slide-spec JSON and verify slide count/file size.
   - Word: generate `.docx` with Python/python-docx or a dedicated document skill, then verify the file exists and is non-empty.
 → Use `office` mainly for reading/editing existing Office documents, batch cell writes, charts, COM-only compatibility, opening Office apps, and export/PDF operations on machines with Microsoft Office installed.
 → `office` values are passed safely — no escaping needed for $, quotes, formulas.
