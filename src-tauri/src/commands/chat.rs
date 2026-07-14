@@ -129,6 +129,14 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
             ],
             "web" => &["web_search", "web_fetch", "browser"],
             "office" => &["presentation", "office", "com", "com_invoke", "pdf"],
+            "media" => &[
+                "harmony_cut",
+                "file_list",
+                "file_search",
+                "process_control",
+                "shell",
+                "app_control",
+            ],
             "desktop" => &[
                 "screen_capture",
                 "desktop_automation",
@@ -157,7 +165,7 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
     if groups.iter().any(|group| {
         matches!(
             group.as_str(),
-            "files" | "runtime" | "office" | "desktop" | "collaboration"
+            "files" | "runtime" | "office" | "media" | "desktop" | "collaboration"
         )
     }) {
         names.insert("app_control");
@@ -195,7 +203,8 @@ Use route=agent when one flexible tool-using agent is appropriate.
 Use route=workflow for a concrete deliverable or repeatable operation such as creating Office files, media, installing/building software, or browser automation.
 Use route=multi_agent only for genuinely multi-role, parallel, sustained project work or when the user explicitly requests team collaboration.
 
-Choose only required tool_groups from: files, runtime, web, office, desktop, skills, collaboration, memory, im, interaction, ssh, all.
+Choose only required tool_groups from: files, runtime, web, office, media, desktop, skills, collaboration, memory, im, interaction, ssh, all.
+Route local video/material editing requests to route=workflow with tool_groups=["media","files","runtime","interaction"]. This includes requests mentioning HarmonyCut, 商摄快剪, 剪辑, 成片, 视频素材, 剪映草稿, CapCut/JianYing draft, 标记工作台, or a local media folder path.
 Do not route greetings, identity questions, explanations, rewriting, or ordinary conversation to tools. Route requests about current time, live data, local files, installed capabilities, running projects, or external systems to tools. Never output tool-call markup."#;
     let request = LlmRequest {
         messages: recent,
@@ -1522,7 +1531,14 @@ pub async fn chat_send(
         });
     if route_decision.tool_groups.is_empty() && route_decision.route != "direct" {
         route_decision.tool_groups = match route_decision.route.as_str() {
-            "workflow" => vec!["files", "runtime", "office", "skills"],
+            "workflow" => vec![
+                "files",
+                "runtime",
+                "media",
+                "office",
+                "skills",
+                "interaction",
+            ],
             "multi_agent" => vec!["collaboration", "files", "runtime", "web"],
             _ => vec!["files", "runtime", "web", "skills", "interaction"],
         }
@@ -3203,6 +3219,12 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 - Do not repeatedly list skills or reread the same SKILL.md in one run unless the installed set changed.
 
 ## Tool Selection Decision Tree
+
+**Local product-video / commercial-editing workflow:**
+→ When the user provides a local media/material folder and asks to 剪辑, 生成成片, 使用 HarmonyCut, 商摄快剪, 初剪, 标记工作台, 剪映草稿, CapCut/JianYing draft, or continue after marking, use the `harmony_cut` tool.
+→ For first-pass editing from a material folder: call `harmony_cut(action="prepare", media_dir=<absolute folder>, requirement=<user request>, auto_rotate_landscape=true)`.
+→ After the user says they saved/marked and wants to continue: call `harmony_cut(action="continue", project_id=<id if known>)`.
+→ Do not say you cannot access local disks when the user provides a local path; you are running on the user's machine and should use tools to verify and operate on that path.
 
 **Listing a directory / exploring the file system:**
 → Use `file_list` — returns structured JSON (name, size, modified date, type). Best for AI to parse.
