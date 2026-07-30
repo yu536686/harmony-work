@@ -9,7 +9,9 @@
 //! separate adapter.
 
 use crate::agent::messages::AgentEvent;
-use crate::agent::plan::{merge_todos, summarize_todos, validate_todos, PlanStore, PlanTodoItem};
+use crate::agent::plan::{
+    merge_todos, plans_equal, summarize_todos, validate_todos, PlanStore, PlanTodoItem,
+};
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use piscis_core::host::EventSink;
@@ -79,27 +81,32 @@ impl Tool for PlanTodoTool {
             return Ok(ToolResult::err(e));
         }
 
-        let updated = {
+        let (updated, changed) = {
             let mut state = self.store.lock().await;
             let current = state.get(&ctx.session_id).cloned().unwrap_or_default();
             let next = if merge {
                 merge_todos(&current, &todos)
             } else {
-                todos.clone()
+                todos.iter().map(PlanTodoItem::normalized).collect()
             };
             if let Err(e) = validate_todos(&next) {
                 return Ok(ToolResult::err(e));
             }
-            state.insert(ctx.session_id.clone(), next.clone());
-            next
+            let changed = !plans_equal(&current, &next);
+            if changed {
+                state.insert(ctx.session_id.clone(), next.clone());
+            }
+            (next, changed)
         };
 
-        let payload = serde_json::to_value(AgentEvent::PlanUpdate {
-            items: updated.clone(),
-        })
-        .unwrap_or(Value::Null);
-        self.event_sink
-            .emit_session(&ctx.session_id, "agent_event", payload);
+        if changed {
+            let payload = serde_json::to_value(AgentEvent::PlanUpdate {
+                items: updated.clone(),
+            })
+            .unwrap_or(Value::Null);
+            self.event_sink
+                .emit_session(&ctx.session_id, "agent_event", payload);
+        }
 
         let scope_note = if ctx.pool_session_id.is_some() {
             "\n\n注意：这只更新你的内部计划板，不会把结果发送到 `pool_chat`，也不会创建、认领或完成 `pool_org` 的协作 todo。\
@@ -108,11 +115,17 @@ impl Tool for PlanTodoTool {
             "\n\n注意：这只更新计划板，不会直接完成任务。更新计划后仍需要调用实际工具或直接产出结果。"
         };
 
-        Ok(ToolResult::ok(format!(
-            "计划已更新（{} 项）:\n{}{}",
-            updated.len(),
-            summarize_todos(&updated),
-            scope_note
-        )))
+        if changed {
+            Ok(ToolResult::ok(format!(
+                "计划已更新（{} 项）:\n{}{}\n\n现在直接执行当前步骤；在取得真实工具结果前，不要再次调用 plan_todo。",
+                updated.len(),
+                summarize_todos(&updated),
+                scope_note
+            )))
+        } else {
+            Ok(ToolResult::ok(
+                "计划未变化，未写入计划板。不要再次调用 plan_todo；现在直接调用能推进当前步骤的真实工具。",
+            ))
+        }
     }
 }

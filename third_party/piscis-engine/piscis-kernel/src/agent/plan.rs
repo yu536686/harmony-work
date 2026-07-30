@@ -37,6 +37,29 @@ impl PlanTodoItem {
     }
 }
 
+/// Compare todo identifiers by their machine-generated meaning rather than
+/// their formatting. LLMs commonly alternate between `todo-1`, `todo 1`, and
+/// `todo_1` while referring to the same visible plan item.
+fn canonical_todo_id(id: &str) -> String {
+    id.trim()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Return whether two plan snapshots carry the same user-visible state.
+/// Formatting-only changes from a model must not create a new activity event
+/// or reset the agent's execution focus.
+pub fn plans_equal(left: &[PlanTodoItem], right: &[PlanTodoItem]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(a, b)| {
+            canonical_todo_id(&a.id) == canonical_todo_id(&b.id)
+                && a.content.trim() == b.content.trim()
+                && a.status.trim() == b.status.trim()
+        })
+}
+
 pub fn validate_todos(items: &[PlanTodoItem]) -> Result<(), String> {
     if items.is_empty() {
         return Err("至少需要 1 个 todo 项".into());
@@ -47,7 +70,8 @@ pub fn validate_todos(items: &[PlanTodoItem]) -> Result<(), String> {
 
     for item in items {
         let item = item.normalized();
-        if item.id.is_empty() {
+        let id_key = canonical_todo_id(&item.id);
+        if id_key.is_empty() {
             return Err("todo.id 不能为空".into());
         }
         if item.content.is_empty() {
@@ -62,7 +86,7 @@ pub fn validate_todos(items: &[PlanTodoItem]) -> Result<(), String> {
                 ));
             }
         }
-        if !seen.insert(item.id.clone()) {
+        if !seen.insert(id_key) {
             return Err(format!("todo id '{}' 重复", item.id));
         }
         if item.status == "in_progress" {
@@ -80,10 +104,18 @@ pub fn validate_todos(items: &[PlanTodoItem]) -> Result<(), String> {
 pub fn merge_todos(existing: &[PlanTodoItem], updates: &[PlanTodoItem]) -> Vec<PlanTodoItem> {
     let mut merged = existing.to_vec();
     for update in updates {
-        if let Some(idx) = merged.iter().position(|item| item.id == update.id) {
-            merged[idx] = update.clone();
+        let update_key = canonical_todo_id(&update.id);
+        if let Some(idx) = merged
+            .iter()
+            .position(|item| canonical_todo_id(&item.id) == update_key)
+        {
+            let mut replacement = update.normalized();
+            // Preserve the first stable identifier so model formatting drift
+            // does not create a second plan item on the next update.
+            replacement.id = merged[idx].id.clone();
+            merged[idx] = replacement;
         } else {
-            merged.push(update.clone());
+            merged.push(update.normalized());
         }
     }
     merged
@@ -99,7 +131,7 @@ pub fn summarize_todos(items: &[PlanTodoItem]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_todos, validate_todos, PlanTodoItem};
+    use super::{merge_todos, plans_equal, validate_todos, PlanTodoItem};
 
     fn todo(id: &str, content: &str, status: &str) -> PlanTodoItem {
         PlanTodoItem {
@@ -137,5 +169,36 @@ mod tests {
         assert_eq!(merged[1].content, "second updated");
         assert_eq!(merged[1].status, "completed");
         assert_eq!(merged[2].id, "c");
+    }
+
+    #[test]
+    fn merge_recognizes_equivalent_machine_generated_todo_ids() {
+        let merged = merge_todos(
+            &[todo("todo-1", "inspect the files", "in_progress")],
+            &[todo("todo 1", "inspect the files", "completed")],
+        );
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "todo-1");
+        assert_eq!(merged[0].status, "completed");
+    }
+
+    #[test]
+    fn validate_rejects_equivalent_todo_ids_in_the_same_plan() {
+        let err = validate_todos(&[
+            todo("todo-1", "first", "pending"),
+            todo("todo 1", "second", "pending"),
+        ])
+        .unwrap_err();
+
+        assert!(err.contains("重复"));
+    }
+
+    #[test]
+    fn equivalent_plan_formatting_is_not_a_new_plan_update() {
+        let existing = [todo("todo-1", " inspect the files ", "in_progress")];
+        let requested = [todo("todo 1", "inspect the files", "in_progress")];
+
+        assert!(plans_equal(&existing, &requested));
     }
 }

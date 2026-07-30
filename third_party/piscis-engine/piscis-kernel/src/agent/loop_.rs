@@ -45,6 +45,7 @@ const TOOL_CALL_HISTORY_SIZE: usize = 48;
 const WARNING_THRESHOLD: usize = 6;
 const CRITICAL_THRESHOLD: usize = 12;
 const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
+const PLAN_BOOKKEEPING_WARNING_THRESHOLD: usize = 2;
 const RESEARCH_WARNING_THRESHOLD: usize = 8;
 const RESEARCH_CRITICAL_THRESHOLD: usize = 16;
 const RESEARCH_RECENT_WINDOW: usize = 24;
@@ -241,6 +242,9 @@ enum LoopDetector {
     KnownPollNoProgress,
     PingPong,
     GlobalCircuitBreaker,
+    /// A visible plan is bookkeeping. Repeating it should redirect the model
+    /// to actual work, never halt all tool execution for the task.
+    PlanBookkeeping,
     /// Vision-agent screenshot-analyze loop: the agent is spending too much
     /// time re-describing the scene with screenshots instead of committing
     /// to concrete actions (click, type, press). Nudges the model to
@@ -328,6 +332,21 @@ impl LoopDetectorState {
         batch: &[(String, String, serde_json::Value)],
     ) -> LoopDetectionResult {
         let pending_hash = stable_hash_input(pending_name, pending_input);
+
+        if pending_name == "plan_todo" {
+            let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
+            if no_progress_streak >= PLAN_BOOKKEEPING_WARNING_THRESHOLD {
+                return LoopDetectionResult {
+                    level: LoopLevel::Warning,
+                    detector: Some(LoopDetector::PlanBookkeeping),
+                    count: no_progress_streak,
+                    message: format!(
+                        "计划板已连续{}次没有变化。不要再调用 plan_todo；现在直接调用能推进当前步骤的真实工具。",
+                        no_progress_streak
+                    ),
+                };
+            }
+        }
 
         // 1. Global circuit breaker: same tool+input with no progress
         let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
@@ -634,6 +653,28 @@ fn stable_hash_input(name: &str, input: &serde_json::Value) -> u64 {
     let mut normalized = input.clone();
     if let Some(obj) = normalized.as_object_mut() {
         obj.remove("_trace_id");
+        if name == "plan_todo" {
+            if let Some(todos) = obj.get_mut("todos").and_then(serde_json::Value::as_array_mut) {
+                for todo in todos {
+                    if let Some(todo_obj) = todo.as_object_mut() {
+                        if let Some(id) = todo_obj.get("id").and_then(serde_json::Value::as_str) {
+                            let canonical_id: String = id
+                                .trim()
+                                .chars()
+                                .filter(|ch| ch.is_alphanumeric())
+                                .flat_map(char::to_lowercase)
+                                .collect();
+                            todo_obj.insert("id".into(), serde_json::Value::String(canonical_id));
+                        }
+                        for field in ["content", "status"] {
+                            if let Some(value) = todo_obj.get(field).and_then(serde_json::Value::as_str) {
+                                todo_obj.insert(field.into(), serde_json::Value::String(value.trim().to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     normalized.to_string().hash(&mut hasher);
     hasher.finish()
@@ -4404,7 +4445,8 @@ mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results, confirm_flags_handle,
         is_structural_schema_error, maybe_schema_correction_envelope,
-        serialize_tool_results_with_receipts, AgentLoop, CIRCUIT_BREAKER_THRESHOLD,
+        serialize_tool_results_with_receipts, stable_hash_result, AgentLoop, LoopDetector,
+        LoopDetectorState, LoopLevel, CIRCUIT_BREAKER_THRESHOLD,
         CRITICAL_THRESHOLD, CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS,
         CTX_TRIM_HEAD, CTX_TRIM_TAIL, DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
     };
@@ -4422,6 +4464,30 @@ mod tests {
         assert!(CIRCUIT_BREAKER_THRESHOLD < WARNING_THRESHOLD);
         assert!(WARNING_THRESHOLD < DEFAULT_MAX_ITERATIONS);
         assert!(CRITICAL_THRESHOLD <= DEFAULT_MAX_ITERATIONS);
+    }
+
+    #[test]
+    fn repeated_plan_bookkeeping_never_uses_the_global_circuit_breaker() {
+        let input = json!({
+            "todos": [{
+                "id": "todo-1",
+                "content": "read the data",
+                "status": "in_progress"
+            }]
+        });
+        let batch = vec![("call-plan".to_string(), "plan_todo".to_string(), input.clone())];
+        let mut detector = LoopDetectorState {
+            history: Vec::new(),
+            consecutive_vision_only_turns: 0,
+        };
+
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            detector.record("plan_todo", &input, stable_hash_result("plan unchanged"));
+        }
+
+        let detection = detector.detect("plan_todo", &input, &batch);
+        assert!(matches!(detection.level, LoopLevel::Warning));
+        assert!(matches!(detection.detector, Some(LoopDetector::PlanBookkeeping)));
     }
 
     // ── Mock LLM clients ──────────────────────────────────────────────────────
