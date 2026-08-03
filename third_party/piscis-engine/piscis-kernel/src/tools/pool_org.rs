@@ -22,6 +22,7 @@ use crate::pool::model::{
 use crate::pool::{services, PoolStore};
 use async_trait::async_trait;
 use piscis_core::host::{PoolEventSink, SubagentRuntime};
+use piscis_core::models::{rank_kois_for_task, KoiCapabilityCandidate, KoiDefinition};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -98,6 +99,7 @@ impl Tool for PoolOrgTool {
          - 'read': Read the org_spec for an existing pool. \
          - 'update': Update the org_spec for an existing pool. \
          - 'list': List all project pools with their status. \
+         - 'recommend_koi': List available digital-employee capability profiles and rank candidates for a proposed task. This is read-only evidence for the coordinator, not an assignment. \
          - 'add_member': Add a Koi to this project's team (requires pool_id, koi_id). A Koi must be a member before it can be assigned work. \
          - 'remove_member': Remove a Koi from this project's team (requires pool_id, koi_id). Refused while the Koi still has active todos here. \
          - 'list_members': List the Koi that are members of this project (requires pool_id). \
@@ -121,6 +123,7 @@ impl Tool for PoolOrgTool {
          - 'merge_branches': Piscis-only supervisor integration action. Merge one Koi branch (pass branch=...) or all remaining koi/* branches into main after review. Prefer incremental single-branch merges when integration_ready todos exist on the board. \
          \
          Workflow: ALWAYS call 'list' first to see all existing pools. \
+         For a genuine multi-role task, call 'recommend_koi' with the concrete task before selecting team members. Use its matching capabilities as evidence, then decide whether to add members and assign work. Do not delegate a simple single-agent task merely because candidates exist. \
          Then use 'find_related' to search for related projects by keywords. \
          Only call 'create' if no existing pool covers the requested work — \
          if an active or paused pool is related, add tasks to it instead of creating a new pool. \
@@ -135,7 +138,7 @@ impl Tool for PoolOrgTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "read", "update", "list", "add_member", "remove_member", "list_members", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "post_status", "wait_for_koi", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "delete_todo", "update_todo_status", "merge_branches"],
+                    "enum": ["create", "read", "update", "list", "recommend_koi", "add_member", "remove_member", "list_members", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "post_status", "wait_for_koi", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "delete_todo", "update_todo_status", "merge_branches"],
                     "description": "Action to perform"
                 },
                 "project_dir": {
@@ -181,7 +184,7 @@ impl Tool for PoolOrgTool {
                 },
                 "task": {
                     "type": "string",
-                    "description": "For assign_koi: the initial task description"
+                    "description": "For recommend_koi/assign_koi: the concrete task description"
                 },
                 "priority": {
                     "type": "string",
@@ -335,6 +338,19 @@ impl Tool for PoolOrgTool {
                 Ok(v) => Ok(ToolResult::ok(render_list_pools(&v))),
                 Err(e) => Ok(ToolResult::err(e.to_string())),
             },
+            "recommend_koi" => {
+                let task = input["task"].as_str().unwrap_or("").trim();
+                if task.is_empty() {
+                    return Ok(ToolResult::err(
+                        "'task' is required for action 'recommend_koi'. Provide the concrete work to staff.",
+                    ));
+                }
+                let limit = input["limit"].as_u64().unwrap_or(5) as usize;
+                match services::list_pools(&self.store).await {
+                    Ok(v) => Ok(ToolResult::ok(render_koi_recommendations(&v, task, limit))),
+                    Err(e) => Ok(ToolResult::err(e.to_string())),
+                }
+            }
             "add_member" => {
                 let pool_id = input["pool_id"].as_str().unwrap_or("");
                 let koi_id = input["koi_id"].as_str().unwrap_or("");
@@ -601,7 +617,7 @@ impl Tool for PoolOrgTool {
                 }
             }
             _ => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Use: create, read, update, list, add_member, remove_member, list_members, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, post_status, wait_for_koi, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, delete_todo, update_todo_status, merge_branches",
+                "Unknown action '{}'. Use: create, read, update, list, recommend_koi, add_member, remove_member, list_members, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, post_status, wait_for_koi, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, delete_todo, update_todo_status, merge_branches",
                 action
             ))),
         }
@@ -612,6 +628,62 @@ impl Tool for PoolOrgTool {
 
 fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
+}
+
+fn render_koi_recommendations(v: &Value, task: &str, limit: usize) -> String {
+    let kois: Vec<KoiDefinition> = v
+        .get("kois")
+        .and_then(|k| k.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect();
+    let candidates = rank_kois_for_task(&kois, task, limit);
+
+    if candidates.is_empty() {
+        return "No available Koi profiles exist. Create or bring a Koi online before staffing this task."
+            .to_string();
+    }
+
+    let lines: Vec<String> = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| render_koi_candidate(index + 1, candidate))
+        .collect();
+    format!(
+        "Digital-employee candidates for: {}\n{}\n\nThis is a recommendation only. Select the required roles, then use add_member and assign_koi to dispatch concrete work.",
+        task,
+        lines.join("\n"),
+    )
+}
+
+fn render_koi_candidate(index: usize, candidate: &KoiCapabilityCandidate) -> String {
+    let matched = if candidate.matching_capabilities.is_empty() {
+        "none".to_string()
+    } else {
+        candidate.matching_capabilities.join(", ")
+    };
+    let capabilities = if candidate.capabilities.is_empty() {
+        "unspecified".to_string()
+    } else {
+        candidate.capabilities.join(", ")
+    };
+    format!(
+        "{}. {} (id: {}, role: {}, status: {}, score: {})\n   matched: {}\n   profile: {}",
+        index,
+        candidate.koi_name,
+        short_id(&candidate.koi_id),
+        if candidate.role.trim().is_empty() {
+            "unspecified"
+        } else {
+            &candidate.role
+        },
+        candidate.status,
+        candidate.score,
+        matched,
+        capabilities,
+    )
 }
 
 fn render_list_pools(v: &Value) -> String {

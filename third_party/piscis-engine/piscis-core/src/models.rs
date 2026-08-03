@@ -111,6 +111,134 @@ pub struct KoiDefinition {
     pub task_timeout_secs: u32,
 }
 
+/// Compact, user-editable capability view derived from a Koi's existing
+/// role and description fields. Keeping this derived avoids a migration and
+/// makes edits made in the People UI effective immediately.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KoiCapabilityProfile {
+    pub koi_id: String,
+    pub koi_name: String,
+    pub role: String,
+    pub status: String,
+    pub capabilities: Vec<String>,
+}
+
+/// A deterministic candidate ranking for a task. The coordinator uses this
+/// as evidence when it decides whether and how to delegate; it is never an
+/// implicit task assignment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KoiCapabilityCandidate {
+    pub koi_id: String,
+    pub koi_name: String,
+    pub role: String,
+    pub status: String,
+    pub score: u32,
+    pub matching_capabilities: Vec<String>,
+    pub capabilities: Vec<String>,
+}
+
+impl KoiDefinition {
+    pub fn capability_profile(&self) -> KoiCapabilityProfile {
+        let mut capabilities = Vec::new();
+        push_capability(&mut capabilities, &self.role);
+        for part in self
+            .description
+            .split(|c| matches!(c, ',' | ';' | '\n' | '\r' | '，' | '、' | '；' | '|' | '/'))
+        {
+            push_capability(&mut capabilities, part);
+        }
+
+        KoiCapabilityProfile {
+            koi_id: self.id.clone(),
+            koi_name: self.name.clone(),
+            role: self.role.clone(),
+            status: self.status.clone(),
+            capabilities,
+        }
+    }
+}
+
+/// Rank online Koi by explicit capability phrases that occur in a task.
+/// Ties are stable by name/id so the same staff profile produces the same
+/// recommendation across runs.
+pub fn rank_kois_for_task(
+    kois: &[KoiDefinition],
+    task: &str,
+    limit: usize,
+) -> Vec<KoiCapabilityCandidate> {
+    let normalized_task = normalize_capability_text(task);
+    let mut candidates: Vec<KoiCapabilityCandidate> = kois
+        .iter()
+        .filter(|koi| !koi.status.eq_ignore_ascii_case("offline"))
+        .map(|koi| {
+            let profile = koi.capability_profile();
+            let matching_capabilities: Vec<String> = profile
+                .capabilities
+                .iter()
+                .filter(|capability| {
+                    let normalized = normalize_capability_text(capability);
+                    normalized.chars().count() >= 2 && normalized_task.contains(&normalized)
+                })
+                .cloned()
+                .collect();
+            let availability_bonus = u32::from(koi.status.eq_ignore_ascii_case("idle"));
+            let score = matching_capabilities.len() as u32 * 100 + availability_bonus;
+
+            KoiCapabilityCandidate {
+                koi_id: profile.koi_id,
+                koi_name: profile.koi_name,
+                role: profile.role,
+                status: profile.status,
+                score,
+                matching_capabilities,
+                capabilities: profile.capabilities,
+            }
+        })
+        .collect();
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.koi_name.cmp(&right.koi_name))
+            .then_with(|| left.koi_id.cmp(&right.koi_id))
+    });
+    candidates.truncate(limit.max(1));
+    candidates
+}
+
+fn push_capability(capabilities: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    let without_label = [
+        "能力：",
+        "能力:",
+        "技能：",
+        "技能:",
+        "capabilities:",
+        "capability:",
+    ]
+    .iter()
+    .find_map(|label| trimmed.strip_prefix(label))
+    .unwrap_or(trimmed)
+    .trim();
+    if without_label.is_empty()
+        || capabilities
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(without_label))
+    {
+        return;
+    }
+    capabilities.push(without_label.to_string());
+}
+
+fn normalize_capability_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 pub const KOI_COLORS: &[(&str, &str)] = &[
     ("#7c6af7", "Violet"),
     ("#4ecdc4", "Teal"),
@@ -185,3 +313,46 @@ pub const STARTER_KOI_SPECS: &[StarterKoiSpec] = &[
         description: "Code review, quality assurance, feedback",
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn koi(id: &str, role: &str, description: &str, status: &str) -> KoiDefinition {
+        KoiDefinition {
+            id: id.into(),
+            name: id.into(),
+            role: role.into(),
+            icon: String::new(),
+            color: String::new(),
+            system_prompt: String::new(),
+            description: description.into(),
+            status: status.into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            llm_provider_id: None,
+            max_iterations: 0,
+            task_timeout_secs: 0,
+        }
+    }
+
+    #[test]
+    fn ranks_available_koi_by_declared_capabilities() {
+        let product = koi(
+            "product",
+            "产品经理",
+            "能力：需求分析、产品策略、PPT",
+            "idle",
+        );
+        let writer = koi("writer", "内容经理", "能力：内容策划、文案", "idle");
+        let offline = koi("offline", "设计师", "能力：PPT、视觉设计", "offline");
+
+        let candidates =
+            rank_kois_for_task(&[writer, offline, product], "请制作产品策略介绍 PPT", 3);
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].koi_id, "product");
+        assert_eq!(candidates[0].matching_capabilities, vec!["产品策略", "PPT"]);
+        assert_eq!(candidates[1].koi_id, "writer");
+    }
+}
