@@ -95,6 +95,12 @@ pub async fn list_builtin_tools(
             windows_only: true,
         },
         BuiltinToolInfo {
+            name: "harvis_creative".into(),
+            description: "通过已登录的 Harmony 网关创建 Harvis 音乐和图片、查询创作进度，并将完成的成品归档至素材库".into(),
+            icon: "AI".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
             name: "uia".into(),
             description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
             icon: "🖱️".into(),

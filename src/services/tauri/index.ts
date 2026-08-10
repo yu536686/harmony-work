@@ -23,4 +23,5 @@ export * from "./pool";
 export * from "./config";
 export * from "./harmonyCut";
 export * from "./marketing";
+export * from "./creative";
 export * from "./platform";

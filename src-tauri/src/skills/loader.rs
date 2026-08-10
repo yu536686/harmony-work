@@ -155,6 +155,7 @@ impl SkillLoader {
         }
         let _ = crate::skills::provenance::ensure_evolution_dirs(&self.skills_dir);
         let _ = crate::skills::provenance::migrate_flat_skills_to_installed(&self.skills_dir);
+        self.ensure_harvis_creative_skill()?;
 
         self.skills.clear();
         let scan_roots = [
@@ -226,6 +227,7 @@ impl SkillLoader {
                 "web-automation",
                 "system-admin",
                 "desktop-control",
+                "harvis-creative",
             ];
             let dir_name = path
                 .parent()
@@ -507,6 +509,54 @@ impl SkillLoader {
             );
             std::fs::write(skill_dir.join("SKILL.md"), content)?;
         }
+        Ok(())
+    }
+
+    /// Ship Harvis creation as a locked system skill for both clean installs and
+    /// upgrades where the skills root already exists. Existing user-authored
+    /// skills are never touched.
+    fn ensure_harvis_creative_skill(&self) -> Result<()> {
+        let skill_dir = self.skills_dir.join("harvis-creative");
+        let skill_file = skill_dir.join("SKILL.md");
+        if skill_file.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&skill_dir)?;
+        std::fs::write(
+            skill_file,
+            r#"---
+name: harvis-creative
+description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
+version: "1.0"
+tools:
+  - harvis_creative
+triggers:
+  - "生成音乐"
+  - "背景音乐"
+  - "BGM"
+  - "生成图片"
+  - "海报"
+  - "文生图"
+  - "图生图"
+---
+
+# Harvis AI 创作
+
+仅在用户明确要求生成音乐或图片时使用 `harvis_creative`。先根据用户信息组织一个完整的单次请求，不要为了规划而反复调用工具。
+
+## 音乐
+
+调用 `create_music`。默认使用纯音乐：`mode` 为 `free`，给出简洁的 `prompt`、英文风格 `tags`、标题和时长。除非用户要求人声，否则不要提出含演唱或歌词的需求。
+
+## 图片
+
+调用 `create_image`。提供 `mode`、完整 `prompt` 和 `canvas`。比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 width 和 height）。用户提供参考图时先由界面上传，拿到 referenceIds 后再提交。
+
+## 进度与交付
+
+任务提交后报告 job id 和当前状态。需要查询时调用 `get_job`；不要连续轮询同一个未完成任务。任务成功后调用 `stage_for_chat`，将成品归档到用户自己的素材库；除非用户明确要求继续处理，不要自动发送或执行额外操作。
+"#,
+        )?;
         Ok(())
     }
 

@@ -3,7 +3,7 @@ import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type MarketingUser } from "./services/tauri";
+import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type ChatAttachment, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import i18n, { setLanguage } from "./i18n";
@@ -19,6 +19,7 @@ const Pond = lazy(() => import("./components/Pond"));
 const Skills = lazy(() => import("./components/Skills"));
 const Market = lazy(() => import("./components/Market"));
 const Marketing = lazy(() => import("./components/Marketing"));
+const Creative = lazy(() => import("./components/Creative"));
 const HarmonyCut = lazy(() => import("./components/HarmonyCut"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
 const Settings = lazy(() => import("./components/Settings"));
@@ -29,7 +30,7 @@ const Bootstrap = lazy(() => import("./components/Bootstrap"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
 
-type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "harmony-cut" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "harmony-cut" | "creative-music" | "creative-image" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 type SchoolSubTab = "fish" | "koi";
 type MarketTab = "experts" | "team" | "skills";
 
@@ -46,6 +47,7 @@ function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
+  const [creativeExpanded, setCreativeExpanded] = useState(true);
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -321,6 +323,10 @@ function AppContent() {
     setMarketingUser(null);
     setUserMenuOpen(false);
   };
+  const stageCreativeToChat = (attachments: ChatAttachment[], draft: string) => {
+    dispatch(sessionsActions.openMainChatView({ filter: "chat", composerDraft: draft, composerAttachments: attachments }));
+    setActiveTab("chat");
+  };
 
   return (
     <div className="app">
@@ -378,6 +384,24 @@ function AppContent() {
               >
                 商摄快剪
               </button>
+            </div>
+          )}
+          <button
+            className={`nav-item ${activeTab === "creative-music" || activeTab === "creative-image" ? "active" : ""}`}
+            onClick={() => {
+              setCreativeExpanded((value) => !value);
+              if (activeTab !== "creative-music" && activeTab !== "creative-image") navigateTab("creative-music");
+            }}
+            title="AI 创作"
+          >
+            <span className="nav-icon">✦</span>
+            <span className="nav-label">AI 创作</span>
+            <span className="nav-caret">{creativeExpanded ? "⌄" : "›"}</span>
+          </button>
+          {creativeExpanded && (
+            <div className="nav-subitems">
+              <button className={`nav-subitem ${activeTab === "creative-music" ? "active" : ""}`} onClick={() => navigateTab("creative-music")}>Harvis 音乐创作</button>
+              <button className={`nav-subitem ${activeTab === "creative-image" ? "active" : ""}`} onClick={() => navigateTab("creative-image")}>Harvis 图片创作</button>
             </div>
           )}
           {tabs.map((tab) => (
@@ -465,6 +489,16 @@ function AppContent() {
                 sourceSessionId={harmonyCutSessionId}
                 onNavigateToChat={() => setActiveTab("chat")}
               />
+            </div>
+          )}
+          {mountedTabs.has("creative-music") && (
+            <div className="tab-panel" hidden={activeTab !== "creative-music"}>
+              {highLevelUnlocked ? <Creative initialKind="music" user={marketingUser} onStageToChat={stageCreativeToChat} /> : requireLoginPanel("Harvis 音乐创作")}
+            </div>
+          )}
+          {mountedTabs.has("creative-image") && (
+            <div className="tab-panel" hidden={activeTab !== "creative-image"}>
+              {highLevelUnlocked ? <Creative initialKind="image" user={marketingUser} onStageToChat={stageCreativeToChat} /> : requireLoginPanel("Harvis 图片创作")}
             </div>
           )}
           {mountedTabs.has("memory") && (

@@ -638,6 +638,10 @@ impl HostTools for DesktopHostTools {
             }));
         }
 
+        if self.is_enabled("harvis_creative") {
+            registry.register(Box::new(crate::tools::harvis_creative::HarvisCreativeTool));
+        }
+
         if self.is_enabled("presentation") {
             registry.register(Box::new(crate::tools::presentation::PresentationTool));
         }

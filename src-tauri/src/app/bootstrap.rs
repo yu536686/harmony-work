@@ -1309,6 +1309,12 @@ fn run_impl() {
             commands::marketing::marketing_douyin_accounts,
             commands::marketing::marketing_asset_data_url,
             commands::marketing::marketing_prepare_asset_for_chat,
+            commands::marketing::marketing_creative_jobs,
+            commands::marketing::marketing_creative_job,
+            commands::marketing::marketing_creative_create_music,
+            commands::marketing::marketing_creative_create_image,
+            commands::marketing::marketing_creative_stage_for_chat,
+            commands::marketing::marketing_creative_upload_reference,
             // harmony cut/
             commands::harmony_cut::harmony_cut_health,
             commands::harmony_cut::harmony_cut_start_service,

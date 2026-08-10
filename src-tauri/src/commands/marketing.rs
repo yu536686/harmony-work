@@ -7,6 +7,7 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -146,6 +147,11 @@ fn media_type_for_name(name: &str, fallback: Option<&str>) -> String {
         "gif" => "image/gif",
         "mp4" => "video/mp4",
         "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "ogg" => "audio/ogg",
         "pdf" => "application/pdf",
         "txt" | "md" | "csv" | "json" => "text/plain",
         _ => "application/octet-stream",
@@ -221,6 +227,14 @@ pub struct MarketingAssetDataUrl {
     media_type: String,
     data_url: String,
     byte_size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketingCreativeReferenceUploadRequest {
+    file_name: String,
+    media_type: String,
+    data_base64: String,
 }
 
 struct DownloadedMarketingAsset {
@@ -342,6 +356,80 @@ async fn marketing_get_json(path: &str, params: Vec<(String, String)>) -> Result
         .map_err(|e| format!("Marketing request failed: {e}"))?;
     store_response_cookie(&resp).await;
     json_or_error(resp, "Marketing API").await
+}
+
+async fn marketing_post_json(path: &str, body: Value) -> Result<Value, String> {
+    let client = marketing_client()?;
+    let url = format!("{}{}", marketing_base_url(), path);
+    let req = apply_cookie(client.post(url).json(&body)).await;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Marketing request failed: {e}"))?;
+    store_response_cookie(&resp).await;
+    json_or_error(resp, "Marketing API").await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_jobs() -> Result<Value, String> {
+    marketing_get_json("/api/creative/jobs", Vec::new()).await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_job(job_id: String) -> Result<Value, String> {
+    marketing_get_json(
+        &format!("/api/creative/jobs/{}", urlencoding::encode(&job_id)),
+        Vec::new(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_create_music(request: Value) -> Result<Value, String> {
+    marketing_post_json("/api/creative/music/jobs", request).await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_create_image(request: Value) -> Result<Value, String> {
+    marketing_post_json("/api/creative/image/jobs", request).await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_stage_for_chat(job_id: String) -> Result<Value, String> {
+    marketing_post_json(
+        &format!(
+            "/api/creative/jobs/{}/stage-for-chat",
+            urlencoding::encode(&job_id)
+        ),
+        json!({}),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_upload_reference(
+    request: MarketingCreativeReferenceUploadRequest,
+) -> Result<Value, String> {
+    let bytes = BASE64_STANDARD
+        .decode(request.data_base64.as_bytes())
+        .map_err(|e| format!("Invalid reference image data: {e}"))?;
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return Err("Reference image must be between 1 byte and 20MB".to_string());
+    }
+    let part = Part::bytes(bytes)
+        .file_name(safe_file_name(&request.file_name))
+        .mime_str(&request.media_type)
+        .map_err(|e| format!("Invalid reference image media type: {e}"))?;
+    let form = Form::new().part("referenceImage", part);
+    let client = marketing_client()?;
+    let url = format!("{}/api/creative/reference-images", marketing_base_url());
+    let req = apply_cookie(client.post(url).multipart(form)).await;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Reference image upload failed: {e}"))?;
+    store_response_cookie(&resp).await;
+    json_or_error(resp, "Reference image upload").await
 }
 
 async fn download_marketing_asset(

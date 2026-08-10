@@ -7,6 +7,7 @@ pub mod chat_ui_listen;
 pub mod chat_ui_patch;
 pub mod chat_ui_schema;
 pub mod harmony_cut;
+pub mod harvis_creative;
 pub mod im_channel;
 pub mod im_send;
 pub mod presentation;
