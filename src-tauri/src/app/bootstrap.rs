@@ -1312,6 +1312,7 @@ fn run_impl() {
             commands::marketing::marketing_creative_jobs,
             commands::marketing::marketing_creative_job,
             commands::marketing::marketing_creative_create_music,
+            commands::marketing::marketing_creative_compose_music_prompt,
             commands::marketing::marketing_creative_create_image,
             commands::marketing::marketing_creative_stage_for_chat,
             commands::marketing::marketing_creative_upload_reference,

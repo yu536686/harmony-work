@@ -53,6 +53,21 @@ export interface CreativeReferenceUpload {
   expiresInSeconds: number;
 }
 
+export interface MusicPromptAssistantRequest {
+  businessLine: string;
+  brand: string;
+  watchCollection: string;
+  watchStyle?: string;
+  desiredStyle?: string;
+  bpm?: number;
+  duration: number;
+}
+
+export interface MusicPromptAssistantResponse {
+  prompt: string;
+  model?: string;
+}
+
 export interface CanvasRequest {
   canvasPreset: ImageJobRequest["canvasPreset"];
   outputWidth?: number;
@@ -79,6 +94,11 @@ export function resolveCanvasRequest(
   };
 }
 
+export function normalizeReferenceSelection(ids: string[]) {
+  const unique = ids.filter((id, index) => id.trim().length > 0 && ids.indexOf(id) === index);
+  return unique.slice(-4);
+}
+
 async function encodeFile(file: File) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
@@ -95,6 +115,8 @@ export const creativeApi = {
     invoke<{ job: CreativeJob }>("marketing_creative_create_music", { request }),
   createImage: (request: ImageJobRequest) =>
     invoke<{ job: CreativeJob }>("marketing_creative_create_image", { request }),
+  composeMusicPrompt: (request: MusicPromptAssistantRequest) =>
+    invoke<MusicPromptAssistantResponse>("marketing_creative_compose_music_prompt", { request }),
   stageForChat: (jobId: string) =>
     invoke<{ job: CreativeJob; assetIds: string[] }>("marketing_creative_stage_for_chat", { jobId }),
   uploadReference: async (file: File) =>

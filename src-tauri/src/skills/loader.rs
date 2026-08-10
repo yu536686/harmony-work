@@ -518,8 +518,11 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        if skill_file.exists() {
-            return Ok(());
+        const HARVIS_SKILL_VERSION: &str = "1.1";
+        if let Ok(existing) = std::fs::read_to_string(&skill_file) {
+            if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
+                return Ok(());
+            }
         }
         std::fs::create_dir_all(&skill_dir)?;
         std::fs::write(
@@ -527,7 +530,7 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "1.0"
+version: "1.1"
 tools:
   - harvis_creative
 triggers:
@@ -542,15 +545,27 @@ triggers:
 
 # Harvis AI 创作
 
-仅在用户明确要求生成音乐或图片时使用 `harvis_creative`。先根据用户信息组织一个完整的单次请求，不要为了规划而反复调用工具。
+仅在用户明确要求生成音乐或图片时使用 `harvis_creative`。先根据用户信息组织一个完整的单次请求，不要为了规划而反复调用工具。工具创建任务前会要求用户确认。
 
 ## 音乐
 
-调用 `create_music`。默认使用纯音乐：`mode` 为 `free`，给出简洁的 `prompt`、英文风格 `tags`、标题和时长。除非用户要求人声，否则不要提出含演唱或歌词的需求。
+调用 `create_music`，最小请求为：
+
+```json
+{"action":"create_music","request":{"prompt":"elegant luxury instrumental, piano and strings, 45-second brand BGM, no vocals","title":"品牌 BGM","duration":45}}
+```
+
+默认使用纯音乐。给出简洁英文 `prompt`（或 `tags`）、标题和时长；除非用户明确要求人声，否则加入 `instrumental only, no vocals`，不要写歌词或演唱要求。
 
 ## 图片
 
-调用 `create_image`。提供 `mode`、完整 `prompt` 和 `canvas`。比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 width 和 height）。用户提供参考图时先由界面上传，拿到 referenceIds 后再提交。
+文生图直接调用 `create_image`，不需要参考图，也不要声称 Harvis 只能图生图：
+
+```json
+{"action":"create_image","request":{"mode":"text","prompt":"高端腕表主视觉海报，香槟金棚拍，留白构图","canvasPreset":"vertical"}}
+```
+
+比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 `outputWidth` 和 `outputHeight`）。只有用户已经在创作界面上传并明确提供 `referenceIds` 时，才使用 `mode: "image"` 图生图。
 
 ## 进度与交付
 
