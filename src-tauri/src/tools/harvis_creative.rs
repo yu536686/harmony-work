@@ -130,7 +130,7 @@ impl Tool for HarvisCreativeTool {
     }
 
     fn description_minimal(&self) -> Cow<'_, str> {
-        Cow::Borrowed("Generate Harvis Suno music or GPT Image2 images, query progress, and archive completed results into the user's material library.")
+        Cow::Borrowed("Generate Harvis Suno music or GPT Image2 images, query progress, save completed results into the current workspace, or archive them into the user's material library.")
     }
 
     fn input_schema(&self) -> Value {
@@ -140,14 +140,14 @@ impl Tool for HarvisCreativeTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create_music", "create_image", "get_job", "list_jobs", "stage_for_chat"],
-                    "description": "create_music submits Suno V5.5; create_image submits GPT Image2; get_job and list_jobs read status; stage_for_chat archives completed results for the active user."
+                    "enum": ["create_music", "create_image", "get_job", "list_jobs", "stage_for_chat", "save_to_workspace"],
+                    "description": "create_music submits Suno V5.5; create_image submits GPT Image2; get_job and list_jobs read status; stage_for_chat archives completed results; save_to_workspace downloads all completed artifacts to the current session workspace."
                 },
                 "request": {
                     "type": "object",
                     "description": "For create_music: {prompt or tags, title?: string, duration?: 45, mode?: 'free'|'assistant'}. For direct text-to-image: {mode:'text', prompt:'...', canvasPreset:'vertical'|'television'|'store-poster'|'phone-fullscreen'|'custom', outputWidth?: number, outputHeight?: number}. Do not require referenceIds for text-to-image. For image-to-image only: {mode:'image', prompt:'...', canvasPreset:'vertical', referenceIds:['uploaded-reference-id']}."
                 },
-                "job_id": { "type": "string", "description": "Creative job id for get_job or stage_for_chat." }
+                "job_id": { "type": "string", "description": "Creative job id for get_job, stage_for_chat, or save_to_workspace." }
             }
         })
     }
@@ -159,7 +159,7 @@ impl Tool for HarvisCreativeTool {
         )
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let action = input.get("action").and_then(Value::as_str).unwrap_or("");
         let result = match action {
             "create_music" => crate::commands::marketing::marketing_creative_create_music(normalize_music_request(&input)?).await,
@@ -167,7 +167,12 @@ impl Tool for HarvisCreativeTool {
             "get_job" => crate::commands::marketing::marketing_creative_job(job_id(&input)?).await,
             "list_jobs" => crate::commands::marketing::marketing_creative_jobs().await,
             "stage_for_chat" => crate::commands::marketing::marketing_creative_stage_for_chat(job_id(&input)?).await,
-            _ => return Ok(ToolResult::err("Unknown harvis_creative action. Use create_music, create_image, get_job, list_jobs, or stage_for_chat.")),
+            "save_to_workspace" => crate::commands::marketing::marketing_creative_save_to_workspace(
+                job_id(&input)?,
+                Some(ctx.workspace_root.to_string_lossy().to_string()),
+            )
+            .await,
+            _ => return Ok(ToolResult::err("Unknown harvis_creative action. Use create_music, create_image, get_job, list_jobs, stage_for_chat, or save_to_workspace.")),
         };
         result
             .map(|payload| {

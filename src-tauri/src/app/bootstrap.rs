@@ -1308,6 +1308,7 @@ fn run_impl() {
             commands::marketing::marketing_campaign_summary,
             commands::marketing::marketing_douyin_accounts,
             commands::marketing::marketing_asset_data_url,
+            commands::marketing::marketing_save_asset,
             commands::marketing::marketing_prepare_asset_for_chat,
             commands::marketing::marketing_creative_jobs,
             commands::marketing::marketing_creative_job,
@@ -1315,6 +1316,7 @@ fn run_impl() {
             commands::marketing::marketing_creative_compose_music_prompt,
             commands::marketing::marketing_creative_create_image,
             commands::marketing::marketing_creative_stage_for_chat,
+            commands::marketing::marketing_creative_save_to_workspace,
             commands::marketing::marketing_creative_upload_reference,
             // harmony cut/
             commands::harmony_cut::harmony_cut_health,

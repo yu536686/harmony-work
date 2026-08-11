@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import {
   creativeApi,
   marketingApi,
@@ -74,15 +73,6 @@ function readPreview(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error(`无法读取 ${file.name}`));
     reader.readAsDataURL(file);
   });
-}
-
-function dataUrlBytes(dataUrl: string) {
-  const encoded = dataUrl.split(",", 2)[1];
-  if (!encoded) throw new Error("创作成品数据格式无效");
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
 }
 
 function extensionOf(fileName: string) {
@@ -272,7 +262,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     }
   };
 
-  const downloadArtifact = async (artifact: CreativeArtifact, existingDataUrl?: string) => {
+  const downloadArtifact = async (artifact: CreativeArtifact) => {
     if (!artifact.assetId) {
       setNotice("该成品尚未归档，暂时无法下载");
       return;
@@ -284,9 +274,8 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         filters: [{ name: artifact.kind === "audio" ? "音频文件" : "图片文件", extensions: [extensionOf(artifact.fileName)] }]
       });
       if (!path || Array.isArray(path)) return;
-      const dataUrl = existingDataUrl ?? (await marketingApi.assetDataUrl(artifact.assetId, artifact.fileName, artifact.kind === "audio" ? 24 * 1024 * 1024 : 16 * 1024 * 1024)).dataUrl;
-      await writeFile(path, dataUrlBytes(dataUrl));
-      setNotice(`已保存到 ${path}`);
+      const saved = await creativeApi.saveAsset(artifact.assetId, artifact.fileName, path);
+      setNotice(`已保存到 ${saved.localPath}`);
     } catch (error) {
       setNotice(String(error));
     }
@@ -368,7 +357,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
           <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
         </aside>
       </div>
-      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.artifact.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => void downloadArtifact(preview.artifact, preview.dataUrl)}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.artifact.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.artifact.fileName} />}</div></div>}
+      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.artifact.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => void downloadArtifact(preview.artifact)}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.artifact.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.artifact.fileName} />}</div></div>}
     </section>
   );
 }

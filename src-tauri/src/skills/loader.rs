@@ -518,7 +518,7 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        const HARVIS_SKILL_VERSION: &str = "1.1";
+        const HARVIS_SKILL_VERSION: &str = "1.2";
         if let Ok(existing) = std::fs::read_to_string(&skill_file) {
             if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
                 return Ok(());
@@ -530,7 +530,7 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "1.1"
+version: "1.2"
 tools:
   - harvis_creative
 triggers:
@@ -569,7 +569,7 @@ triggers:
 
 ## 进度与交付
 
-任务提交后报告 job id 和当前状态。需要查询时调用 `get_job`；不要连续轮询同一个未完成任务。任务成功后调用 `stage_for_chat`，将成品归档到用户自己的素材库；除非用户明确要求继续处理，不要自动发送或执行额外操作。
+任务提交后报告 job id 和当前状态。需要查询时调用 `get_job`；不要连续轮询同一个未完成任务。任务成功后，先调用 `save_to_workspace`，它会把全部成品下载到当前会话工作区的 `marketing-assets` 目录，并报告真实 `localPath`。`stage_for_chat` 只负责归档到用户素材库，不能视为已保存到本机；除非用户明确要求继续处理，不要自动发送或执行额外操作。
 "#,
         )?;
         Ok(())

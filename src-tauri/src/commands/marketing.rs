@@ -243,6 +243,14 @@ pub struct MarketingCreativeReferenceUploadRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MarketingSaveAssetRequest {
+    asset_id: String,
+    file_name: Option<String>,
+    target_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MarketingCreativeMusicPromptRequest {
     business_line: String,
     brand: String,
@@ -601,6 +609,45 @@ async fn download_marketing_asset(
     })
 }
 
+fn save_target_path(target_path: &str) -> Result<PathBuf, String> {
+    let target_path = target_path.trim();
+    if target_path.is_empty() {
+        return Err("保存路径不能为空".to_string());
+    }
+    let path = PathBuf::from(target_path);
+    if !path.is_absolute() {
+        return Err("保存路径必须是绝对路径".to_string());
+    }
+    if path.file_name().and_then(|value| value.to_str()).filter(|value| !value.trim().is_empty()).is_none() {
+        return Err("保存路径必须包含文件名".to_string());
+    }
+    Ok(path)
+}
+
+async fn save_marketing_asset_to_path(
+    asset_id: &str,
+    requested_file_name: Option<&str>,
+    target_path: PathBuf,
+) -> Result<MarketingPreparedAsset, String> {
+    let asset = download_marketing_asset(asset_id, requested_file_name).await?;
+    if let Some(parent) = target_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("无法创建保存目录：{e}"))?;
+    }
+    tokio::fs::write(&target_path, &asset.bytes)
+        .await
+        .map_err(|e| format!("无法保存创作成品：{e}"))?;
+    Ok(MarketingPreparedAsset {
+        asset_id: asset_id.to_string(),
+        file_name: asset.file_name,
+        media_type: asset.media_type,
+        local_path: target_path.to_string_lossy().to_string(),
+        source_url: asset.source_url,
+        byte_size: asset.bytes.len() as u64,
+    })
+}
+
 #[tauri::command]
 pub async fn marketing_asset_data_url(
     request: MarketingAssetDataUrlRequest,
@@ -625,6 +672,19 @@ pub async fn marketing_asset_data_url(
         data_url: format!("data:{};base64,{}", asset.media_type, encoded),
         byte_size: asset.bytes.len() as u64,
     })
+}
+
+#[tauri::command]
+pub async fn marketing_save_asset(
+    request: MarketingSaveAssetRequest,
+) -> Result<MarketingPreparedAsset, String> {
+    let target_path = save_target_path(&request.target_path)?;
+    save_marketing_asset_to_path(
+        &request.asset_id,
+        request.file_name.as_deref(),
+        target_path,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -655,4 +715,59 @@ pub async fn marketing_prepare_asset_for_chat(
         source_url: asset.source_url,
         byte_size: asset.bytes.len() as u64,
     })
+}
+
+#[tauri::command]
+pub async fn marketing_creative_save_to_workspace(
+    job_id: String,
+    workspace_root: Option<String>,
+) -> Result<Value, String> {
+    let staged = marketing_creative_stage_for_chat(job_id.clone()).await?;
+    let asset_ids = staged
+        .get("assetIds")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "创作任务没有可保存的成品".to_string())?;
+    if asset_ids.is_empty() {
+        return Err("创作任务没有可保存的成品".to_string());
+    }
+    let job = marketing_creative_job(job_id).await?;
+    let artifacts = job
+        .get("job")
+        .and_then(|value| value.get("artifacts"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut saved = Vec::new();
+    for asset_id in asset_ids.iter().filter_map(Value::as_str) {
+        let file_name = artifacts
+            .iter()
+            .find(|artifact| artifact.get("assetId").and_then(Value::as_str) == Some(asset_id))
+            .and_then(|artifact| artifact.get("fileName"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let saved_asset = marketing_prepare_asset_for_chat(MarketingPrepareAssetRequest {
+            asset_id: asset_id.to_string(),
+            file_name,
+            workspace_root: workspace_root.clone(),
+        })
+        .await?;
+        saved.push(saved_asset);
+    }
+    Ok(json!({ "job": staged.get("job").cloned(), "saved": saved }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::save_target_path;
+
+    #[test]
+    fn accepts_an_absolute_user_selected_save_target() {
+        let path = save_target_path(r"C:\Users\Admin\Desktop\Harvis 成品.mp3").unwrap();
+        assert_eq!(path.to_string_lossy(), r"C:\Users\Admin\Desktop\Harvis 成品.mp3");
+    }
+
+    #[test]
+    fn rejects_a_relative_save_target() {
+        assert!(save_target_path("Harvis 成品.mp3").is_err());
+    }
 }

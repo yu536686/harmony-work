@@ -119,6 +119,15 @@ export const creativeApi = {
     invoke<MusicPromptAssistantResponse>("marketing_creative_compose_music_prompt", { request }),
   stageForChat: (jobId: string) =>
     invoke<{ job: CreativeJob; assetIds: string[] }>("marketing_creative_stage_for_chat", { jobId }),
+  saveToWorkspace: (jobId: string, workspaceRoot?: string | null) =>
+    invoke<{ job: CreativeJob | null; saved: Array<{ localPath: string; fileName: string; mediaType: string }> }>("marketing_creative_save_to_workspace", {
+      jobId,
+      workspaceRoot: workspaceRoot || null
+    }),
+  saveAsset: (assetId: string, fileName: string, targetPath: string) =>
+    invoke<{ localPath: string; fileName: string; mediaType: string }>("marketing_save_asset", {
+      request: { assetId, fileName, targetPath }
+    }),
   uploadReference: async (file: File) =>
     invoke<CreativeReferenceUpload>("marketing_creative_upload_reference", {
       request: {
