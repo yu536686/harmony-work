@@ -4,8 +4,8 @@
  */
 export const DESIGN_TOKENS = {
   layout: {
-    sidebarExpanded: 252,
-    sidebarCollapsed: 68,
+    sidebarExpanded: 280,
+    sidebarCollapsed: 64,
   },
   motion: {
     fast: 150,

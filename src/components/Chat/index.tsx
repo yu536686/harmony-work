@@ -1,6 +1,17 @@
 import { Component, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, type ErrorInfo, type ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
+import { createPortal } from "react-dom";
+import {
+  BrainCircuit,
+  FolderOpen,
+  Paperclip,
+  Search,
+  SendHorizontal,
+  Sparkles,
+  Square,
+  UserRound,
+} from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,7 +25,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
-import SessionPicker from "./SessionPicker";
+import GlobalSessionRail from "./GlobalSessionRail";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
 import ConfirmDialog from "../ConfirmDialog";
@@ -367,9 +378,12 @@ export type ChatNavigateTab = (
 
 interface ChatProps {
   onNavigateTab?: ChatNavigateTab;
+  sidebarHost?: HTMLElement | null;
+  sidebarCollapsed?: boolean;
+  onFocusChat?: () => void;
 }
 
-export default function Chat({ onNavigateTab }: ChatProps = {}) {
+export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = false, onFocusChat }: ChatProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
@@ -383,9 +397,8 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   // File-journal review: files the agent changed in the last turn, per session.
   const [reviewBySession, setReviewBySession] = useState<Record<string, JournalChange[]>>({});
   const [undoingReview, setUndoingReview] = useState(false);
-    const [infoNotice, setInfoNotice] = useState<string | null>(null);
+  const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionKind>("chat");
-  const [sessionSidebarCollapsed, setSessionSidebarCollapsed] = useState(false);
 
   const pendingAutoSendRef = useRef<string | null>(null);
 
@@ -1321,6 +1334,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
     // Switch to main-chat filter *before* the async create so the post-create
     // visibility effect does not reset activeSessionId while filter is still im/cli.
     setSessionFilter("chat");
+    onFocusChat?.();
     try {
       const session = await sessionsApi.create(t("chat.newChat"));
       dispatch(sessionsActions.addSession(session));
@@ -1328,7 +1342,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
     } catch (e) {
       setSendError(t("chat.failedCreate", { error: String(e) }));
     }
-  }, [dispatch, t]);
+  }, [dispatch, onFocusChat, t]);
 
   // Refresh the full session list when opening Pond CLI so assistant / headless
   // sessions created outside the main chat flow appear in the sidebar.
@@ -1957,7 +1971,6 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   };
 
   // ── Filtered session list (single source of truth) ───────────────────────
-  const sessionKinds: SessionKind[] = ["chat", "im", "cli"];
   const sessionsForKind = (kind: SessionKind) =>
     sessions.filter((s) => isMainChatVisibleSession(s, kind));
   const kindLabel = (kind: SessionKind) =>
@@ -2018,75 +2031,46 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
     </div>
   );
 
+  const sessionRail = sidebarHost
+    ? createPortal(
+        <GlobalSessionRail
+          collapsed={sidebarCollapsed}
+          activeKind={sessionFilter}
+          counts={{
+            chat: sessionsForKind("chat").length,
+            im: sessionsForKind("im").length,
+            cli: sessionsForKind("cli").length,
+          }}
+          sessions={sessionsForKind(sessionFilter)}
+          activeSessionId={displaySessionId}
+          labels={{
+            conversations: t("chat.chats"),
+            chat: kindLabel("chat"),
+            im: kindLabel("im"),
+            cli: kindLabel("cli"),
+          }}
+          onKindChange={(kind) => {
+            setSessionFilter(kind);
+            onFocusChat?.();
+          }}
+          onSelect={(id) => {
+            dispatch(sessionsActions.setActiveSession(id));
+            onFocusChat?.();
+          }}
+          onDelete={requestDeleteSession}
+          onNew={handleNewSession}
+          t={t}
+          emptyHint={sessionFilter === "cli" ? t("chat.cliNoSessionsHint") : undefined}
+          footer={sessionFilter === "im" ? imConnectFooter : undefined}
+        />,
+        sidebarHost,
+      )
+    : null;
+
   return (
-    <div className="chat-layout">
-      <aside className={`chat-session-sidebar ${sessionSidebarCollapsed ? "collapsed" : ""}`}>
-        <div className="chat-session-sidebar-head">
-          <button
-            type="button"
-            className="chat-session-collapse"
-            onClick={() => setSessionSidebarCollapsed((v) => !v)}
-            title={sessionSidebarCollapsed ? t("common.expand") : t("common.collapse")}
-          >
-            {sessionSidebarCollapsed ? "›" : "‹"}
-          </button>
-          {!sessionSidebarCollapsed && (
-            <>
-              <div className="chat-session-sidebar-title">{t("chat.chats")}</div>
-              {sessionFilter !== "cli" && (
-                <button
-                  className="chat-session-new-primary"
-                  onClick={handleNewSession}
-                  title={t("chat.newChat")}
-                >
-                  + {t("chat.newChat")}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-        <div className="chat-session-filter-list">
-          {sessionKinds.map((kind) => {
-            const count = sessionsForKind(kind).length;
-            return (
-              <button
-                key={kind}
-                type="button"
-                className={`chat-session-filter ${sessionFilter === kind ? "active" : ""}`}
-                onClick={() => {
-                  setSessionFilter(kind);
-                }}
-                title={kindLabel(kind)}
-              >
-                <span className="chat-session-filter-icon">
-                  {kind === "chat" ? "💬" : kind === "im" ? "📱" : "⌨"}
-                </span>
-                {!sessionSidebarCollapsed && (
-                  <>
-                    <span className="chat-session-filter-label">{kindLabel(kind)}</span>
-                    <span className="chat-session-filter-count">{count}</span>
-                  </>
-                )}
-              </button>
-            );
-          })}
-        </div>
-        {!sessionSidebarCollapsed && (
-          <SessionPicker
-            embedded
-            sessions={sessionsForKind(sessionFilter)}
-            activeSessionId={displaySessionId}
-            onSelect={(id) => dispatch(sessionsActions.setActiveSession(id))}
-            onDelete={requestDeleteSession}
-            onNew={sessionFilter === "cli" ? undefined : handleNewSession}
-            allowCreate={false}
-            emptyHint={sessionFilter === "cli" ? t("chat.cliNoSessionsHint") : undefined}
-            onClose={() => {}}
-            t={t}
-            footer={sessionFilter === "im" ? imConnectFooter : undefined}
-          />
-        )}
-      </aside>
+    <>
+      {sessionRail}
+      <div className="chat-layout">
       {/* Main chat area */}
       <div className="chat-main">
         {/* Top bar: task tabs */}
@@ -2412,7 +2396,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   <div className="composer-selector workspace-selector">
                     <ComposerDropdown
                       menuId="workspace"
-                      icon="📁"
+                      icon={<FolderOpen size={14} strokeWidth={1.8} />}
                       triggerLabel={workspaceTriggerLabel}
                       triggerTitle={displayedWorkspace || t("chat.workspaceLabel")}
                       items={workspaceMenuItems}
@@ -2427,7 +2411,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   <div className="composer-selector koi-selector">
                     <ComposerDropdown
                       menuId="koi"
-                      icon="🙋‍♂️"
+                      icon={<UserRound size={14} strokeWidth={1.8} />}
                       triggerLabel={
                         selectedKoi
                           ? `${selectedKoi.icon} ${selectedKoi.name}`
@@ -2446,7 +2430,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   <div className="composer-selector model-selector">
                     <ComposerDropdown
                       menuId="model"
-                      icon="🧠"
+                      icon={<BrainCircuit size={14} strokeWidth={1.8} />}
                       triggerLabel={selectedModelLabel}
                       items={modelMenuItems}
                       open={composerMenuOpen === "model"}
@@ -2461,7 +2445,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   <div className="composer-selector skill-selector">
                     <ComposerDropdown
                       menuId="skill"
-                      icon="⚡"
+                      icon={<Sparkles size={14} strokeWidth={1.8} />}
                       triggerLabel={t("chat.skillSelectPlaceholder")}
                       items={skillMenuItems}
                       open={composerMenuOpen === "skill"}
@@ -2486,9 +2470,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   disabled={running}
                   title={t("chat.attachFile")}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-                  </svg>
+                  <Paperclip size={16} strokeWidth={1.8} />
                 </button>
                 <button
                   type="button"
@@ -2497,11 +2479,12 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                   disabled={contextPreviewLoading || !displaySessionId}
                   title={t("chat.debugContextTitle")}
                 >
-                  {contextPreviewLoading ? "…" : "🔍"}
+                  {contextPreviewLoading ? "…" : <Search size={16} strokeWidth={1.8} />}
                 </button>
                 {running ? (
                   <button className="btn btn-danger" onClick={handleCancel}>
-                    ⏹ {t("common.stop")}
+                    <Square size={14} fill="currentColor" />
+                    <span>{t("common.stop")}</span>
                   </button>
                 ) : (
                   <button
@@ -2509,7 +2492,8 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
                     onClick={handleSend}
                     disabled={!canSend}
                   >
-                    {t("common.send")} ↵
+                    <span>{t("common.send")}</span>
+                    <SendHorizontal size={15} strokeWidth={2} />
                   </button>
                 )}
               </div>
@@ -2827,7 +2811,8 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

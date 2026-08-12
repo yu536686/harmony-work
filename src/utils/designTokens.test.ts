@@ -3,6 +3,8 @@ import { DESIGN_TOKENS, getSidebarWidth } from "./designTokens";
 
 describe("design tokens", () => {
   it("keeps the documented navigation widths stable", () => {
+    expect(DESIGN_TOKENS.layout.sidebarExpanded).toBe(280);
+    expect(DESIGN_TOKENS.layout.sidebarCollapsed).toBe(64);
     expect(getSidebarWidth(false)).toBe(DESIGN_TOKENS.layout.sidebarExpanded);
     expect(getSidebarWidth(true)).toBe(DESIGN_TOKENS.layout.sidebarCollapsed);
   });

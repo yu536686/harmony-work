@@ -2,6 +2,24 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
+import {
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  LineChart,
+  MessageSquare,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+  Sparkles,
+  Store,
+  Sun,
+  Wrench,
+  Circle,
+  type LucideIcon,
+} from "lucide-react";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type ChatAttachment, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
@@ -49,6 +67,7 @@ function AppContent() {
   const [marketingExpanded, setMarketingExpanded] = useState(true);
   const [creativeExpanded, setCreativeExpanded] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
+  const [chatSidebarHost, setChatSidebarHost] = useState<HTMLDivElement | null>(null);
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -301,13 +320,12 @@ function AppContent() {
   };
 
   const highLevelUnlocked = marketingUser?.approvalStatus === "active";
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "chat", label: t("nav.chat"), icon: "💬" },
-    { id: "market", label: t("nav.market"), icon: "🏬" },
-    { id: "tools", label: t("nav.tools"), icon: "🔧" },
-    { id: "scheduler", label: t("nav.scheduler"), icon: "⏰" },
-    { id: "memory", label: t("nav.memory"), icon: "💡" },
-    { id: "audit", label: t("nav.audit"), icon: "🔍" },
+  const tabs: { id: Tab; label: string; icon: LucideIcon }[] = [
+    { id: "market", label: t("nav.market"), icon: Store },
+    { id: "tools", label: t("nav.tools"), icon: Wrench },
+    { id: "scheduler", label: t("nav.scheduler"), icon: Clock3 },
+    { id: "memory", label: t("nav.memory"), icon: Brain },
+    { id: "audit", label: t("nav.audit"), icon: Search },
   ];
   const userInitial = (marketingUser?.name || marketingUser?.email || "YT").trim().slice(0, 2).toUpperCase();
   const requireLoginPanel = (title: string) => (
@@ -351,7 +369,7 @@ function AppContent() {
             aria-label={colorMode === "dark" ? t("nav.colorModeLight") : t("nav.colorModeDark")}
             onClick={() => setColorMode((m) => (m === "dark" ? "light" : "dark"))}
           >
-            {colorMode === "dark" ? "☀️" : "🌙"}
+            {colorMode === "dark" ? <Sun size={15} strokeWidth={1.8} /> : <Moon size={15} strokeWidth={1.8} />}
           </button>
           <button
             type="button"
@@ -360,10 +378,15 @@ function AppContent() {
             aria-label={sidebarCollapsed ? t("common.expand") : t("common.collapse")}
             onClick={() => setSidebarCollapsed((value) => !value)}
           >
-            {sidebarCollapsed ? "›" : "‹"}
+            {sidebarCollapsed ? <PanelLeftOpen size={15} strokeWidth={1.8} /> : <PanelLeftClose size={15} strokeWidth={1.8} />}
           </button>
         </div>
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" aria-label="功能模块">
+          <div className="sidebar-section-label">工作</div>
+          <button className={`nav-item ${activeTab === "chat" ? "active" : ""}`} onClick={() => navigateTab("chat")} title={t("nav.chat")}>
+            <span className="nav-icon"><MessageSquare size={17} strokeWidth={1.8} /></span>
+            <span className="nav-label">{t("nav.chat")}</span>
+          </button>
           <button
             className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" || activeTab === "harmony-cut" ? "active" : ""}`}
             onClick={() => {
@@ -374,9 +397,9 @@ function AppContent() {
             }}
             title="线上营销工作台"
           >
-            <span className="nav-icon">📈</span>
+            <span className="nav-icon"><LineChart size={17} strokeWidth={1.8} /></span>
             <span className="nav-label">线上营销工作台</span>
-            <span className="nav-caret">{marketingExpanded ? "⌄" : "›"}</span>
+            <span className="nav-caret">{marketingExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
           </button>
           {marketingExpanded && (
             <div className="nav-subitems">
@@ -408,9 +431,9 @@ function AppContent() {
             }}
             title="AI 创作"
           >
-            <span className="nav-icon">✦</span>
+            <span className="nav-icon"><Sparkles size={17} strokeWidth={1.8} /></span>
             <span className="nav-label">AI 创作</span>
-            <span className="nav-caret">{creativeExpanded ? "⌄" : "›"}</span>
+            <span className="nav-caret">{creativeExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
           </button>
           {creativeExpanded && (
             <div className="nav-subitems">
@@ -418,18 +441,23 @@ function AppContent() {
               <button className={`nav-subitem ${activeTab === "creative-image" ? "active" : ""}`} onClick={() => navigateTab("creative-image")}>Harvis 图片创作</button>
             </div>
           )}
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`nav-item ${activeTab === tab.id ? "active" : ""}`}
-              onClick={() => navigateTab(tab.id)}
-              title={tab.label}
-            >
-              <span className="nav-icon">{tab.icon}</span>
-              <span className="nav-label">{tab.label}</span>
-            </button>
-          ))}
+          <div className="sidebar-section-label sidebar-section-label-resources">资源与管理</div>
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                className={`nav-item ${activeTab === tab.id ? "active" : ""}`}
+                onClick={() => navigateTab(tab.id)}
+                title={tab.label}
+              >
+                <span className="nav-icon"><Icon size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">{tab.label}</span>
+              </button>
+            );
+          })}
         </nav>
+        <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label="会话列表" />
         <div className="sidebar-footer user-footer">
           {userMenuOpen && (
             <div className="user-menu">
@@ -451,7 +479,7 @@ function AppContent() {
             title={t("nav.minimalMode")}
             onClick={() => windowApi.enterMinimalMode()}
           >
-            <span className="nav-icon">⚪</span>
+            <span className="nav-icon"><Circle size={16} strokeWidth={1.8} /></span>
             <span className="nav-label">{t("nav.minimalMode")}</span>
           </button>
           <button className="user-card" onClick={() => setUserMenuOpen((value) => !value)}>
@@ -468,6 +496,9 @@ function AppContent() {
           {mountedTabs.has("chat") && (
             <div className="tab-panel" hidden={activeTab !== "chat"}>
               <Chat
+                sidebarHost={chatSidebarHost}
+                sidebarCollapsed={sidebarCollapsed}
+                onFocusChat={() => setActiveTab("chat")}
                 onNavigateTab={(tab, opts) => {
                   if (tab === "skills") navigateTab("skills");
                   if (tab === "school") navigateTab("school", { schoolSubTab: opts?.schoolSubTab ?? "koi" });

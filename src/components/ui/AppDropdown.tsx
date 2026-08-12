@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./AppDropdown.css";
 
 export type AppMenuItem = {
   id: string;
   label: string;
-  icon?: string;
+  icon?: ReactNode;
   selected?: boolean;
   action?: boolean;
   /** Non-interactive row (e.g. current path). */
@@ -20,7 +20,7 @@ export type AppDropdownProps = {
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
   disabled?: boolean;
-  icon?: string;
+  icon?: ReactNode;
   searchPlaceholder?: string;
   emptyLabel?: string;
   closeOnSelect?: boolean;

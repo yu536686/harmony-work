@@ -1,21 +1,33 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Building2,
+  Gamepad2,
+  Inbox,
+  MessageCircle,
+  Paperclip,
+  Radio,
+  Send,
+  SquareTerminal,
+  UserRound,
+  Webhook,
+  X,
+  Zap,
+} from "lucide-react";
 import type { Session } from "../../services/tauri";
 
-/** Map a session.source value to a compact display emoji. */
-function sourceIcon(source: string): string {
-  if (source === "chat" || !source) return "👤";
-  if (source === "cli") return "⌨";
-  if (source.includes("telegram")) return "✈";
-  if (source.includes("feishu") || source.includes("lark")) return "📘";
-  if (source.includes("wechat")) return "🟢";
-  if (source.includes("wecom")) return "💬";
-  if (source.includes("dingtalk")) return "📎";
-  if (source.includes("slack")) return "⚡";
-  if (source.includes("discord")) return "🎮";
-  if (source.includes("teams")) return "🟦";
-  if (source.includes("matrix")) return "⬛";
-  if (source.includes("webhook")) return "🔗";
-  return "📩";
+function SourceIcon({ source }: { source: string }) {
+  const props = { size: 14, strokeWidth: 1.8, "aria-hidden": true } as const;
+  if (source === "chat" || !source) return <UserRound {...props} />;
+  if (source === "cli") return <SquareTerminal {...props} />;
+  if (source.includes("telegram")) return <Send {...props} />;
+  if (source.includes("feishu") || source.includes("lark")) return <Building2 {...props} />;
+  if (source.includes("wechat") || source.includes("wecom")) return <MessageCircle {...props} />;
+  if (source.includes("dingtalk")) return <Paperclip {...props} />;
+  if (source.includes("slack")) return <Zap {...props} />;
+  if (source.includes("discord")) return <Gamepad2 {...props} />;
+  if (source.includes("teams") || source.includes("matrix")) return <Radio {...props} />;
+  if (source.includes("webhook")) return <Webhook {...props} />;
+  return <Inbox {...props} />;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -115,7 +127,6 @@ export default function SessionPicker({
   }, [filtered]);
 
   const renderRow = (s: Session) => {
-    const icon = sourceIcon(s.source);
     const title = (s.title ?? t("chat.defaultTitle"))
       .replace(/^🐠\s*/, "")
       .replace(/^Piscis CLI/, "小亨 CLI");
@@ -126,7 +137,7 @@ export default function SessionPicker({
         onClick={() => onSelect(s.id)}
       >
         <span className="session-picker-item-icon" aria-hidden="true">
-          {icon}
+          <SourceIcon source={s.source} />
         </span>
         <span className="session-picker-item-title">{title}</span>
         <span className="session-picker-item-count">{s.message_count}</span>
@@ -135,7 +146,7 @@ export default function SessionPicker({
           title={t("chat.deleteChat")}
           onClick={(e) => onDelete(e, s.id, title)}
         >
-          ✕
+          <X size={12} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
     );
