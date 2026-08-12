@@ -2524,19 +2524,19 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
             <div className="empty-state-desc">{t("chat.cliEmptyDesc")}</div>
           </div>
         ) : (
-          <div className="empty-state">
+          <div className="empty-state chat-welcome-state">
             {sendError && (
               <div className="error-banner" role="alert" style={{ marginBottom: 16, maxWidth: 480, width: "100%" }}>
                 <span>{sendError}</span>
                 <button className="error-dismiss" onClick={() => setSendError(null)}>✕</button>
               </div>
             )}
-            <div className="empty-state-icon">
+            <div className="empty-state-icon chat-welcome-logo">
               <img src="/piscis.png" alt="小亨 WorkBuddy" style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 14, opacity: 0.7 }} />
             </div>
-            <div className="empty-state-title">{t("chat.welcome")}</div>
+            <div className="empty-state-title chat-welcome-title">{t("chat.welcome")}</div>
             <div className="empty-state-desc">{t("chat.welcomeDesc")}</div>
-            <button className="btn btn-primary" onClick={handleNewSession}>
+            <button className="btn btn-primary chat-welcome-action" onClick={handleNewSession}>
               {t("chat.newChatBtn")}
             </button>
           </div>

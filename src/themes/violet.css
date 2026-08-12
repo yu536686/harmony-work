@@ -1,62 +1,36 @@
-/* ============================================================
-   OpenPiscis — Violet Theme (紫罗兰)
-   深邃紫调，现代科技感
-   ============================================================ */
+/* Default light workspace theme. Kept under the historical "violet" id so
+   existing user preferences and native title-bar settings stay compatible. */
 
 :root[data-theme="violet"] {
-  /* 背景层次 */
-  --bg-primary:    #0f0f13;
-  --bg-secondary:  #1a1a22;
-  --bg-tertiary:   #242430;
-  --bg-hover:      #2e2e3e;
-
-  /* 边框 */
-  --border:        #333345;
-
-  /* 主色调 — 紫罗兰 */
-  --accent:        #7c6af7;
-  --accent-hover:  #9585ff;
-  --accent-dim:    rgba(124, 106, 247, 0.15);
-  --accent-muted:  rgba(124, 106, 247, 0.15);
-  --accent-glow:   0 0 20px rgba(124, 106, 247, 0.25);
-
-  /* 文字 */
-  --text-primary:   #e8e8f0;
-  --text-secondary: #9090a8;
-  --text-muted:     #606078;
-
-  /* 状态色 */
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --error:   #f87171;
-
-  /* 消息气泡 */
-  --msg-user-bg:      rgba(124, 106, 247, 0.12);
-  --msg-user-border:  rgba(124, 106, 247, 0.25);
-  --msg-ai-bg:        #1a1a22;
-  --msg-ai-border:    #333345;
-
-  /* 侧边栏 */
-  --sidebar-bg:     #13131a;
-  --sidebar-border: #2a2a38;
-
-  --topbar-bg:         #13131a;
-  --panel-sidebar-bg:  #13131a;
-
-  /* 滚动条 */
-  --scrollbar-thumb: #3a3a50;
-
-  /* 阴影 */
-  --shadow:    0 2px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
-
-  /* 圆角 */
-  --radius:    8px;
+  --bg-primary: #f7f7f8;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f7f7f8;
+  --bg-hover: #ececef;
+  --border: #e4e4e8;
+  --accent: #4285f4;
+  --accent-hover: #2469d8;
+  --accent-dim: #e8f0fe;
+  --accent-muted: #e8f0fe;
+  --accent-glow: 0 6px 18px rgba(66, 133, 244, 0.18);
+  --text-primary: #242426;
+  --text-secondary: #727278;
+  --text-muted: #a5a5ac;
+  --success: #16836d;
+  --warning: #ad721a;
+  --error: #c54747;
+  --msg-user-bg: #f1f1fa;
+  --msg-user-border: #dfdfee;
+  --msg-ai-bg: #ffffff;
+  --msg-ai-border: #e4e4e8;
+  --sidebar-bg: #f1f1f3;
+  --sidebar-border: #e4e4e8;
+  --topbar-bg: #ffffff;
+  --panel-sidebar-bg: #f1f1f3;
+  --scrollbar-thumb: #c7c7cf;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 18px 48px rgba(24, 24, 27, 0.10);
+  --radius: 8px;
   --radius-lg: 12px;
-
-  /* 字体 */
-  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 
 :root[data-color-mode="dark"][data-theme="violet"] {

@@ -48,6 +48,7 @@ function AppContent() {
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
   const [creativeExpanded, setCreativeExpanded] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -88,6 +89,10 @@ function AppContent() {
       return next;
     });
   }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem("workbuddy.sidebarCollapsed", String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
   // Pond IDE assistant → jump to main Chat (鱼池CLI tab).
   useEffect(() => {
@@ -329,7 +334,7 @@ function AppContent() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-brand">
@@ -347,6 +352,15 @@ function AppContent() {
             onClick={() => setColorMode((m) => (m === "dark" ? "light" : "dark"))}
           >
             {colorMode === "dark" ? "☀️" : "🌙"}
+          </button>
+          <button
+            type="button"
+            className="sidebar-collapse-toggle"
+            title={sidebarCollapsed ? t("common.expand") : t("common.collapse")}
+            aria-label={sidebarCollapsed ? t("common.expand") : t("common.collapse")}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            {sidebarCollapsed ? "›" : "‹"}
           </button>
         </div>
         <nav className="sidebar-nav">

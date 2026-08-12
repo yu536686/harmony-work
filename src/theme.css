@@ -1,95 +1,84 @@
 /* ============================================================
-   OpenPiscis — Theme System Entry Point
-   导入所有主题，默认激活 violet
+   WorkBuddy — Design-token entry point
+   Values are documented in the project root design.md.
    ============================================================ */
 
 @import "./themes/violet.css";
 @import "./themes/gold.css";
 @import "./themes/light.css";
 
-/* 默认主题 = Harmony Light（在 :root 上直接应用，无需 data-theme） */
+/* Fallback values. The active theme supplies the same semantic tokens. */
 :root {
-  /* 背景层次 */
-  --bg-primary:    #eef3ff;
-  --bg-secondary:  rgba(255, 255, 255, 0.86);
-  --bg-tertiary:   #f3f6ff;
-  --bg-hover:      #e9efff;
+  --wb-bg-canvas: #f7f7f8;
+  --wb-bg-sidebar: #f1f1f3;
+  --wb-bg-surface: #ffffff;
+  --wb-bg-subtle: #f7f7f8;
+  --wb-bg-hover: #ececef;
+  --wb-text-primary: #242426;
+  --wb-text-secondary: #727278;
+  --wb-text-tertiary: #a5a5ac;
+  --wb-border: #e4e4e8;
+  --wb-interactive: #1d1d20;
+  --wb-interactive-hover: #36363a;
+  --wb-accent: #4285f4;
+  --wb-accent-soft: #e8f0fe;
+  --wb-success: #16836d;
+  --wb-warning: #ad721a;
+  --wb-danger: #c54747;
 
-  /* 边框 */
-  --border:        rgba(122, 137, 184, 0.18);
-  --border-color:  var(--border);
-
-  /* 主色调 — 紫罗兰 */
-  --accent:        #6658f6;
-  --accent-hover:  #5346db;
-  --accent-dim:    rgba(102, 88, 246, 0.12);
-  --accent-muted:  rgba(102, 88, 246, 0.10);
-  --accent-glow:   0 18px 42px rgba(102, 88, 246, 0.18);
-  --accent-color:  var(--accent);
-
-  /* 文字 */
-  --text-primary:   #202536;
-  --text-secondary: #667085;
-  --text-muted:     #9aa4ba;
-
-  /* 状态色 */
-  --success: #2fbd6f;
-  --warning: #e6a323;
-  --error:   #e25555;
-  --context-usage-caution: #9f91ff;
-  --context-usage-warn:    #8a78ff;
-  --context-usage-hot:     #7c6af7;
-
-  /* 消息气泡 */
-  --msg-user-bg:      rgba(102, 88, 246, 0.10);
-  --msg-user-border:  rgba(102, 88, 246, 0.20);
-  --msg-ai-bg:        rgba(255, 255, 255, 0.88);
-  --msg-ai-border:    rgba(122, 137, 184, 0.18);
-
-  /* 侧边栏 */
-  --sidebar-bg:     rgba(255, 255, 255, 0.66);
-  --sidebar-border: rgba(122, 137, 184, 0.16);
-
-  /* 顶栏 / 侧列面板（比 bg-secondary 更柔和，避免刺眼） */
-  --topbar-bg:         rgba(255, 255, 255, 0.72);
-  --panel-sidebar-bg:  rgba(255, 255, 255, 0.66);
-
-  /* 左侧品牌栏主导高度；右侧各页顶栏与之对齐（不压缩品牌区） */
-  --chrome-header-height: 56px;
-
-  /* 工具栏/输入行控件 — 与 btn-header、btn-icon 同高 */
-  --control-height:     32px;
-  --control-font-size:  12px;
-
-  /* 滚动条 */
-  --scrollbar-thumb: rgba(137, 148, 186, 0.42);
-
-  /* 阴影 */
-  --shadow:    0 12px 28px rgba(82, 99, 151, 0.10);
-  --shadow-lg: 0 24px 60px rgba(82, 99, 151, 0.16);
-
-  /* 圆角 */
-  --radius:    12px;
-  --radius-lg: 20px;
-
-  /* 字体 — 包含 Segoe UI Emoji 确保 Windows 上 emoji 正常渲染 */
-  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", system-ui, sans-serif;
+  --bg-primary: var(--wb-bg-canvas);
+  --bg-secondary: var(--wb-bg-surface);
+  --bg-tertiary: var(--wb-bg-subtle);
+  --bg-hover: var(--wb-bg-hover);
+  --border: var(--wb-border);
+  --border-color: var(--border);
+  --accent: var(--wb-accent);
+  --accent-hover: #2469d8;
+  --accent-dim: var(--wb-accent-soft);
+  --accent-muted: var(--wb-accent-soft);
+  --accent-glow: 0 6px 18px rgba(66, 133, 244, 0.18);
+  --accent-color: var(--accent);
+  --text-primary: var(--wb-text-primary);
+  --text-secondary: var(--wb-text-secondary);
+  --text-muted: var(--wb-text-tertiary);
+  --success: var(--wb-success);
+  --warning: var(--wb-warning);
+  --error: var(--wb-danger);
+  --context-usage-caution: #5d8fe8;
+  --context-usage-warn: #b7791f;
+  --context-usage-hot: var(--wb-danger);
+  --msg-user-bg: #f1f1fa;
+  --msg-user-border: #dfdfee;
+  --msg-ai-bg: var(--wb-bg-surface);
+  --msg-ai-border: var(--wb-border);
+  --sidebar-bg: var(--wb-bg-sidebar);
+  --sidebar-border: var(--wb-border);
+  --topbar-bg: var(--wb-bg-surface);
+  --panel-sidebar-bg: var(--wb-bg-sidebar);
+  --chrome-header-height: 52px;
+  --control-height: 34px;
+  --control-font-size: 12px;
+  --scrollbar-thumb: #c7c7cf;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 18px 48px rgba(24, 24, 27, 0.10);
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
-
-  /* 界面字体缩放倍率（设置页可调，默认 1） */
   --font-scale: 1;
-
-  /* accent-muted: 用于微弱高亮，各主题可覆盖 */
-  --accent-muted: rgba(124, 106, 247, 0.15);
+  --motion-fast: 150ms;
+  --motion-standard: 220ms;
+  --motion-slow: 320ms;
+  --motion-ease: cubic-bezier(.2, .8, .2, 1);
 }
 
-/* 主题切换过渡动画 */
+/* Color transitions are short and do not animate geometry. */
 *, *::before, *::after {
   transition:
-    background-color 0.25s ease,
-    border-color 0.25s ease,
-    color 0.2s ease,
-    box-shadow 0.25s ease;
+    background-color var(--motion-standard) ease,
+    border-color var(--motion-standard) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-standard) ease;
 }
 
 /* 排除不需要过渡的元素（避免动画干扰） */
@@ -101,4 +90,13 @@ select {
     background-color 0.25s ease,
     border-color 0.15s ease,
     color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
 }
