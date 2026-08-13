@@ -15,7 +15,7 @@ export interface ChatProject {
 interface BuildChatProjectsOptions {
   sessions: Session[];
   defaultWorkspace: string;
-  workspaceDirectories: string[];
+  projectDirectories: string[];
   labels?: {
     im: string;
     cli: string;
@@ -45,6 +45,11 @@ export function projectNameFromPath(path: string, fallback = DEFAULT_LABELS.unas
   return parts[parts.length - 1] || fallback;
 }
 
+export function isLegacyInternalProjectPath(path: string): boolean {
+  const name = projectNameFromPath(path, "").toLowerCase();
+  return name === "xiaoheng" || name === ".piscis";
+}
+
 export function joinWorkspacePath(root: string, name: string): string {
   const separator = root.includes("\\") || /^[a-z]:/i.test(root) ? "\\" : "/";
   return `${root.replace(/[\\/]+$/, "")}${separator}${name.replace(/^[\\/]+/, "")}`;
@@ -57,7 +62,7 @@ function newestFirst(a: Session, b: Session): number {
 export function buildChatProjects({
   sessions,
   defaultWorkspace,
-  workspaceDirectories,
+  projectDirectories,
   labels = DEFAULT_LABELS,
 }: BuildChatProjectsOptions): ChatProject[] {
   const workspaceProjects = new Map<string, ChatProject>();
@@ -79,8 +84,7 @@ export function buildChatProjects({
     return project;
   };
 
-  if (defaultWorkspace.trim()) ensureWorkspace(defaultWorkspace);
-  for (const directory of workspaceDirectories) {
+  for (const directory of projectDirectories) {
     if (directory.trim()) ensureWorkspace(directory);
   }
 
@@ -109,7 +113,13 @@ export function buildChatProjects({
     } else if (kind === "cli") {
       cliProject.sessions.push(item);
     } else {
-      ensureWorkspace(item.workspace_root?.trim() || defaultWorkspace).sessions.push(item);
+      const workspace = item.workspace_root?.trim() || defaultWorkspace;
+      const registered = workspaceProjects.get(normalizeWorkspacePath(workspace));
+      if (registered) {
+        registered.sessions.push(item);
+      } else {
+        cliProject.sessions.push(item);
+      }
     }
   }
 

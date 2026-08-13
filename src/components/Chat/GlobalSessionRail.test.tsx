@@ -34,6 +34,7 @@ describe("GlobalSessionRail", () => {
         onProjectSelect={vi.fn()}
         onSelect={onSelect}
         onDelete={vi.fn()}
+        onRemoveProject={vi.fn()}
         onCreateProject={vi.fn()}
         t={t}
       />,
@@ -45,6 +46,33 @@ describe("GlobalSessionRail", () => {
     expect(screen.getByText("季度营销复盘")).toBeInTheDocument();
     await userEvent.click(screen.getByText("季度营销复盘"));
     expect(onSelect).toHaveBeenCalledWith("session-1");
+  });
+
+  it("offers a safe remove action only for user projects", async () => {
+    const onRemoveProject = vi.fn();
+    const project = { id: "workspace:c:/harmony", name: "Harmony", path: "C:\\Harmony", kind: "workspace" as const, system: false, sessions };
+    render(
+      <GlobalSessionRail
+        collapsed={false}
+        projects={[
+          project,
+          { id: "system:im", name: "IM 会话", path: null, kind: "im", system: true, sessions: [] },
+        ]}
+        activeProjectId={project.id}
+        activeSessionId="session-1"
+        labels={{ projects: "项目", createProject: "新建项目", emptyProject: "暂无对话", removeProject: "移除项目" }}
+        onProjectSelect={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+        onRemoveProject={onRemoveProject}
+        onCreateProject={vi.fn()}
+        t={t}
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: "移除项目" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "移除项目" }));
+    expect(onRemoveProject).toHaveBeenCalledWith(project);
   });
 
   it("does not render an unreadable second rail when the application sidebar is collapsed", () => {
@@ -60,6 +88,7 @@ describe("GlobalSessionRail", () => {
         onProjectSelect={vi.fn()}
         onSelect={vi.fn()}
         onDelete={vi.fn()}
+        onRemoveProject={vi.fn()}
         onCreateProject={vi.fn()}
         t={t}
       />,

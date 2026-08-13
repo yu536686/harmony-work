@@ -83,6 +83,49 @@ struct MainChatRouteAttempt {
     output_tokens: u32,
 }
 
+fn deterministic_identity_answer(input: &str) -> Option<&'static str> {
+    let normalized: String = input
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !"，。！？,.!?；;：:'\"（）()".contains(*ch))
+        .collect();
+    let mut core = normalized.as_str();
+    for prefix in ["请问", "请", "我想知道", "我想问", "麻烦问一下"] {
+        if let Some(rest) = core.strip_prefix(prefix) {
+            core = rest;
+            break;
+        }
+    }
+    for suffix in ["呀", "啊", "呢", "吗", "吧"] {
+        if let Some(rest) = core.strip_suffix(suffix) {
+            core = rest;
+            break;
+        }
+    }
+    let is_identity_question = matches!(
+        core,
+        "你是谁"
+            | "你叫什么"
+            | "你叫什么名字"
+            | "你的名字是什么"
+            | "介绍一下你自己"
+            | "介绍下你自己"
+            | "介绍一下自己"
+            | "介绍下自己"
+            | "介绍你自己"
+            | "你是哪位"
+            | "你是什么ai"
+            | "whoareyou"
+            | "whatisyourname"
+            | "whatsyourname"
+            | "tellmeaboutyourself"
+    );
+    is_identity_question.then_some(
+        "我是小亨 WorkBuddy，是你的桌面 AI 工作伙伴。我可以协助你处理对话、文件、项目、技能、自动化和多 Agent 协作。",
+    )
+}
+
 fn parse_route_decision(text: &str) -> Option<MainChatRouteDecision> {
     let trimmed = text.trim();
     let candidate = if trimmed.starts_with("```") {
@@ -195,7 +238,8 @@ async fn route_main_chat_intent(
         .take(8)
         .collect();
     recent.reverse();
-    let system = r#"You are the lightweight intent router and direct-response layer for Xiaoheng WorkBuddy.
+    let system = r#"You are the lightweight intent router and direct-response layer for 小亨 WorkBuddy.
+The only public assistant and product name is exactly `小亨 WorkBuddy`. Never spell it as 小珩, 小衡, 小行, 小亨工作台, Piscis, or any other variant. For an identity question, use route=direct and identify yourself exactly as 小亨 WorkBuddy.
 Return one JSON object only, with this schema:
 {"route":"direct|agent|workflow|multi_agent","answer":string|null,"tool_groups":string[],"needs_plan":boolean}
 
@@ -579,6 +623,23 @@ pub(crate) async fn archive_plan_before_clear(
         plans.get(session_id).cloned().unwrap_or_default()
     };
     persist_plan_snapshot_items(db_arc, session_id, &items, label).await;
+}
+
+async fn clear_session_task_contract(
+    db_arc: &Arc<tokio::sync::Mutex<crate::store::Database>>,
+    session_id: &str,
+) {
+    let db = db_arc.lock().await;
+    let Ok(Some(existing)) = db.load_task_state("session", session_id) else {
+        return;
+    };
+    let _ = db.update_task_state(
+        &existing.id,
+        Some(""),
+        Some("{}"),
+        Some(""),
+        Some("completed"),
+    );
 }
 
 async fn persist_session_task_contract(
@@ -1087,11 +1148,11 @@ async fn build_chat_prompt_artifacts(
     })
 }
 
-pub(crate) async fn resolve_session_workspace_root(
+pub(crate) async fn resolve_session_workspace_context(
     state: &State<'_, AppState>,
     session_id: &str,
     default_workspace_root: String,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let db = state.db.lock().await;
     let override_root = db
         .get_session(session_id)
@@ -1099,7 +1160,18 @@ pub(crate) async fn resolve_session_workspace_root(
         .and_then(|session| session.workspace_root)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    Ok(override_root.unwrap_or(default_workspace_root))
+    let has_session_workspace = override_root.is_some();
+    Ok((override_root.unwrap_or(default_workspace_root), has_session_workspace))
+}
+
+pub(crate) async fn resolve_session_workspace_root(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    default_workspace_root: String,
+) -> Result<String, String> {
+    resolve_session_workspace_context(state, session_id, default_workspace_root)
+        .await
+        .map(|(workspace_root, _)| workspace_root)
 }
 
 #[tauri::command]
@@ -1215,6 +1287,7 @@ pub async fn chat_send(
     clear_plan: Option<bool>,
 ) -> Result<(), String> {
     let merged_attachments = merge_frontend_attachments(attachment, attachments);
+    let replace_task_contract = clear_plan.unwrap_or(true);
     let has_explicit_skills = explicit_skills
         .as_ref()
         .is_some_and(|items| !items.is_empty());
@@ -1226,6 +1299,53 @@ pub async fn chat_send(
         explicit_skills,
         persona_koi_id,
     );
+
+    if merged_attachments.is_empty()
+        && !has_explicit_skills
+        && persona_koi_id.as_deref().is_none_or(str::is_empty)
+    {
+        if let Some(answer) = deterministic_identity_answer(&content) {
+            if replace_task_contract {
+                archive_plan_before_clear(
+                    &state.db,
+                    &state.plan_state,
+                    &session_id,
+                    &content,
+                )
+                .await;
+                let mut plans = state.plan_state.lock().await;
+                plans.remove(&session_id);
+                drop(plans);
+                clear_session_task_contract(&state.db, &session_id).await;
+            }
+            {
+                let db = state.db.lock().await;
+                db.append_message(&session_id, "user", &content)
+                    .map_err(|error| error.to_string())?;
+                db.append_message(&session_id, "assistant", answer)
+                    .map_err(|error| error.to_string())?;
+                db.update_session_status(&session_id, "idle")
+                    .map_err(|error| error.to_string())?;
+            }
+            emit_agent_event(&app, &session_id, &AgentEvent::TextSegmentStart { iteration: 1 });
+            emit_agent_event(
+                &app,
+                &session_id,
+                &AgentEvent::TextDelta {
+                    delta: answer.to_string(),
+                },
+            );
+            emit_agent_event(
+                &app,
+                &session_id,
+                &AgentEvent::Done {
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                },
+            );
+            return Ok(());
+        }
+    }
 
     // Load settings
     let (
@@ -1282,8 +1402,9 @@ pub async fn chat_send(
             settings.enable_project_instructions,
         )
     };
-    let workspace_root =
-        resolve_session_workspace_root(&state, &session_id, workspace_root).await?;
+    let (workspace_root, has_session_workspace) =
+        resolve_session_workspace_context(&state, &session_id, workspace_root).await?;
+    let allow_outside_workspace = allow_outside_workspace && !has_session_workspace;
 
     if let Some(koi_id) = persona_koi_id
         .as_deref()
@@ -1441,7 +1562,6 @@ pub async fn chat_send(
 
     // Save user message to DB (use effective_content which may include file path annotation)
     // clear_plan defaults to true; pass false to preserve an existing plan (continue previous tasks).
-    let replace_task_contract = clear_plan.unwrap_or(true);
     if replace_task_contract {
         archive_plan_before_clear(
             &state.db,
@@ -1452,6 +1572,8 @@ pub async fn chat_send(
         .await;
         let mut plans = state.plan_state.lock().await;
         plans.remove(&session_id);
+        drop(plans);
+        clear_session_task_contract(&state.db, &session_id).await;
     }
     piscis_kernel::agent::vision::clear_selection(&session_id).await;
 
@@ -3015,7 +3137,7 @@ fn build_compact_main_system_prompt(
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z");
     format!(
-        r#"You are 小亨 WorkBuddy, the user's desktop AI work assistant. Piscis is an internal engine codename; never introduce yourself as Piscis.
+        r#"You are 小亨 WorkBuddy, the user's desktop AI work assistant. Your only public name is exactly `小亨 WorkBuddy`; never spell it as 小珩, 小衡, 小行, 小亨工作台, Piscis, or any other variant. Piscis is an internal engine codename; never introduce yourself as Piscis.
 Current local time: {now}
 Workspace: `{workspace}`. {outside_note}
 
@@ -3067,7 +3189,7 @@ You are coordinating work inside an existing pool.\n\
 }
 
 fn build_piscis_core_prompt_compact() -> &'static str {
-    "You are 小亨 WorkBuddy, the user's desktop AI work assistant and system-level coordinator running on the user's local machine. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis.\n\
+    "You are 小亨 WorkBuddy, the user's desktop AI work assistant and system-level coordinator running on the user's local machine. Your only public name is exactly `小亨 WorkBuddy`; never spell it as 小珩, 小衡, 小行, 小亨工作台, Piscis, or any other variant. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis.\n\
 You must be truthful, tool-grounded, and conservative about assumptions.\n\
 - Use only the tools and context available in this run.\n\
 - Prefer the smallest effective action that preserves project momentum.\n\
@@ -3172,7 +3294,7 @@ pub fn build_system_prompt_with_env(
     let now = chrono::Utc::now();
     let date_str = now.format("%Y-%m-%d (%A) %H:%M:%S UTC").to_string();
     let os_identity = format!(
-        "You are 小亨 WorkBuddy, the user's desktop AI work assistant. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis. You run on the user's local {os_display} machine and can control the entire desktop environment."
+        "You are 小亨 WorkBuddy, the user's desktop AI work assistant. Your only public name is exactly `小亨 WorkBuddy`; never spell it as 小珩, 小衡, 小行, 小亨工作台, Piscis, or any other variant. Piscis is only an internal engine codename; never introduce yourself to the user as Piscis. You run on the user's local {os_display} machine and can control the entire desktop environment."
     );
     format!(
         r#"{os_identity}
@@ -4959,8 +5081,9 @@ pub async fn get_context_preview(
             settings.enable_project_instructions,
         )
     };
-    let workspace_root =
-        resolve_session_workspace_root(&state, &session_id, workspace_root).await?;
+    let (workspace_root, has_session_workspace) =
+        resolve_session_workspace_context(&state, &session_id, workspace_root).await?;
+    let allow_outside_workspace = allow_outside_workspace && !has_session_workspace;
 
     // Build context messages from history — this is the exact payload sent to the LLM
     let budget = compute_context_budget(context_window, max_tokens);
@@ -5161,7 +5284,7 @@ mod tests {
     use super::{
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
         derive_headless_session_source, extract_tool_minimals_from_history,
-        minimal_tool_result_blocks, parse_route_decision, paths_match_for_pool_binding,
+        deterministic_identity_answer, minimal_tool_result_blocks, parse_route_decision, paths_match_for_pool_binding,
         resolve_headless_memory_owner_id, resolve_headless_scene_kind,
         resolve_pool_session_for_workspace, route_tool_allowlist, HeadlessRunOptions,
         SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCIS_POOL,
@@ -5437,6 +5560,29 @@ mod tests {
             "image, poster, and music workflows must receive the Harvis runtime tool"
         );
         assert!(!tools.contains("memory_store"));
+    }
+
+    #[test]
+    fn identity_questions_use_the_exact_public_product_name() {
+        for question in [
+            "你是谁",
+            "你是谁呀？",
+            "你叫什么名字？",
+            "请介绍下自己",
+            "你是哪位？",
+            "who are you?",
+            "What is your name?",
+        ] {
+            let answer = deterministic_identity_answer(question)
+                .expect("identity question should be handled by the host");
+            assert!(answer.contains("小亨 WorkBuddy"));
+            assert!(!answer.contains("小珩"));
+            assert!(!answer.contains("小衡"));
+            assert!(!answer.contains("小行"));
+            assert!(!answer.contains("小亨工作台"));
+        }
+        assert!(deterministic_identity_answer("你是谁，顺便帮我编译项目").is_none());
+        assert!(deterministic_identity_answer("介绍一下你自己，然后列出已安装技能").is_none());
     }
 
     #[test]

@@ -18,8 +18,12 @@ import {
   Sun,
   Wrench,
   Circle,
+  Minus,
+  Square as WindowSquare,
+  X,
   type LucideIcon,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type ChatAttachment, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
@@ -54,8 +58,33 @@ type MarketTab = "experts" | "team" | "skills";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
 const REGISTER_URL = "http://www.harmonywatch.cn:8090";
+
+function WindowTitlebar() {
+  const appWindow = getCurrentWindow();
+  return (
+    <div
+      className="window-titlebar"
+      data-tauri-drag-region
+      onDoubleClick={() => { void appWindow.toggleMaximize(); }}
+    >
+      <div className="window-drag-region" data-tauri-drag-region />
+      <div className="window-controls" onDoubleClick={(event) => event.stopPropagation()}>
+        <button type="button" aria-label="最小化" title="最小化" onClick={() => { void appWindow.minimize(); }}>
+          <Minus size={14} strokeWidth={1.7} aria-hidden="true" />
+        </button>
+        <button type="button" aria-label="最大化或还原" title="最大化或还原" onClick={() => { void appWindow.toggleMaximize(); }}>
+          <WindowSquare size={11} strokeWidth={1.7} aria-hidden="true" />
+        </button>
+        <button type="button" className="window-close" aria-label="关闭" title="关闭" onClick={() => { void appWindow.close(); }}>
+          <X size={14} strokeWidth={1.7} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function AppContent() {
   const dispatch = useDispatch();
@@ -124,13 +153,6 @@ function AppContent() {
     document.documentElement.setAttribute('data-color-mode', colorMode);
     localStorage.setItem('piscis-theme', theme);
     localStorage.setItem('piscis-color-mode', colorMode);
-    // Sync window border/title bar color with theme (Windows 11+)
-    if (!IS_OVERLAY) {
-      const apply = () => windowApi.setThemeBorder(theme).catch(() => {});
-      apply();
-      const tid = setTimeout(apply, 800); // Retry after window ready
-      return () => clearTimeout(tid);
-    }
   }, [theme, colorMode]);
 
   useEffect(() => {
@@ -624,7 +646,10 @@ export default function App() {
   }
   return (
     <Provider store={store}>
-      <AppContent />
+      <div className="desktop-window">
+        {IS_WINDOWS && <WindowTitlebar />}
+        <div className="desktop-window-content"><AppContent /></div>
+      </div>
     </Provider>
   );
 }

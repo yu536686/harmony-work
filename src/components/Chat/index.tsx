@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { RootState, chatActions, sessionsActions, skillsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
 import { artifactsApi, chatApi, journalApi, sessionsApi, gatewayApi, koiApi, AgentEventType, ChannelInfo, type ChatMessage, type SessionArtifact, type JournalChange, type KoiWithStats } from "../../services/tauri";
-import { settingsApi, skillsApi, type Skill } from "../../services/tauri";
+import { skillsApi, type Skill } from "../../services/tauri";
 import { ideApi } from "../../services/tauri/ide";
 import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type PendingAttachmentItem } from "./composerUtils";
 import type { Settings } from "../../services/tauri";
@@ -39,10 +39,12 @@ import {
 import { composerSelectableSkills } from "../../utils/skills";
 import {
   buildChatProjects,
+  isLegacyInternalProjectPath,
   joinWorkspacePath,
   normalizeWorkspacePath,
   projectIdForWorkspace,
   projectNameFromPath,
+  type ChatProject,
 } from "../../utils/chatProjects";
 import {
   handleInputHistoryKeyDown,
@@ -392,6 +394,42 @@ interface ChatProps {
   newChatRequest?: number;
 }
 
+const PROJECT_STORAGE_KEY = "workbuddy.chatProjectDirectories.v3";
+const LEGACY_PROJECT_STORAGE_PREFIX = "workbuddy.chatProjectDirectories.v2.";
+
+function readProjectDirectories(): string[] {
+  try {
+    const current = localStorage.getItem(PROJECT_STORAGE_KEY);
+    if (current !== null) {
+      const parsed = JSON.parse(current);
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (item): item is string =>
+              typeof item === "string" && Boolean(item.trim()) && !isLegacyInternalProjectPath(item),
+          )
+        : [];
+    }
+
+    const migrated: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(LEGACY_PROJECT_STORAGE_PREFIX)) continue;
+      const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+      if (!Array.isArray(parsed)) continue;
+      for (const item of parsed) {
+        if (typeof item !== "string" || !item.trim() || isLegacyInternalProjectPath(item)) continue;
+        if (!migrated.some((path) => normalizeWorkspacePath(path) === normalizeWorkspacePath(item))) {
+          migrated.push(item);
+        }
+      }
+    }
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(migrated));
+    return migrated;
+  } catch {
+    return [];
+  }
+}
+
 export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = false, onFocusChat, newChatRequest = 0 }: ChatProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -409,10 +447,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionKind>("chat");
   const [isDraft, setIsDraft] = useState(() => !activeSessionId);
-  const [draftWorkspace, setDraftWorkspace] = useState(() => settings?.workspace_root || "");
-  const [workspaceDirectories, setWorkspaceDirectories] = useState<string[]>([]);
+  const [draftWorkspace, setDraftWorkspace] = useState("");
+  const [projectDirectories, setProjectDirectories] = useState<string[]>(readProjectDirectories);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
+  const [projectParentDirectory, setProjectParentDirectory] = useState(() => settings?.workspace_root || "");
   const [projectCreateError, setProjectCreateError] = useState<string | null>(null);
   const [projectCreating, setProjectCreating] = useState(false);
   const [listenerReadySessionId, setListenerReadySessionId] = useState<string | null>(null);
@@ -479,7 +518,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const beginDraft = useCallback((workspacePath?: string) => {
     setSessionFilter("chat");
     setIsDraft(true);
-    setDraftWorkspace(workspacePath || globalWorkspace);
+    setDraftWorkspace(workspacePath || "");
     setWorkspaceDisplayOverride(null);
     dispatch(sessionsActions.setActiveSession(null));
     setInput("");
@@ -489,7 +528,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     setSendError(null);
     onFocusChat?.();
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [dispatch, globalWorkspace, onFocusChat]);
+  }, [dispatch, onFocusChat]);
 
   useEffect(() => {
     if (lastNewChatRequestRef.current === newChatRequest) return;
@@ -520,45 +559,33 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
   const [workspaceDisplayOverride, setWorkspaceDisplayOverride] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [projectRemoveTarget, setProjectRemoveTarget] = useState<ChatProject | null>(null);
   const [deletingSession, setDeletingSession] = useState(false);
 
   useEffect(() => {
-    if (!globalWorkspace) {
-      setWorkspaceDirectories([]);
-      return;
-    }
-    let cancelled = false;
-    ideApi.listFiles(globalWorkspace, 1)
-      .then((nodes) => {
-        if (cancelled) return;
-        setWorkspaceDirectories(
-          nodes
-            .filter((node) => node.is_dir)
-            .map((node) => joinWorkspacePath(globalWorkspace, node.path || node.name)),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setWorkspaceDirectories([]);
-      });
-    return () => { cancelled = true; };
-  }, [globalWorkspace]);
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projectDirectories));
+  }, [projectDirectories]);
+
+  useEffect(() => {
+    if (!projectParentDirectory && globalWorkspace) setProjectParentDirectory(globalWorkspace);
+  }, [globalWorkspace, projectParentDirectory]);
 
   const chatProjects = useMemo(
     () => buildChatProjects({
       sessions,
       defaultWorkspace: globalWorkspace,
-      workspaceDirectories,
+      projectDirectories,
       labels: {
         im: t("chat.imProject"),
         cli: t("chat.cliProject"),
         unassigned: t("chat.unassignedProject"),
       },
     }),
-    [sessions, globalWorkspace, workspaceDirectories, t],
+    [sessions, globalWorkspace, projectDirectories, t],
   );
 
   const activeProjectId = useMemo(() => {
-    if (isDraft) return projectIdForWorkspace(draftWorkspace || globalWorkspace);
+    if (isDraft) return draftWorkspace ? projectIdForWorkspace(draftWorkspace) : null;
     if (!displaySession) {
       if (sessionFilter === "im") return "system:im";
       if (sessionFilter === "cli") return "system:cli";
@@ -567,8 +594,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     const kind = classifySession(displaySession);
     if (kind === "im") return "system:im";
     if (kind === "cli") return "system:cli";
-    return projectIdForWorkspace(displaySession.workspace_root || globalWorkspace);
-  }, [isDraft, draftWorkspace, globalWorkspace, displaySession, sessionFilter]);
+    const workspace = displaySession.workspace_root || globalWorkspace;
+    return projectDirectories.some(
+      (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(workspace),
+    ) ? projectIdForWorkspace(workspace) : "system:cli";
+  }, [isDraft, draftWorkspace, displaySession, sessionFilter, globalWorkspace, projectDirectories]);
   // History pagination: capacity starts at CHAT_INITIAL_SIZE, grows by CHAT_LAZY_STEP on each lazy-load
   const CHAT_INITIAL_SIZE = 200;
   const CHAT_LAZY_STEP = 10;
@@ -1726,27 +1756,22 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     ? normalizeWorkspacePath(displayedWorkspace) !== normalizeWorkspacePath(globalWorkspace)
     : workspaceDisplayOverride !== null || Boolean(displaySession?.workspace_root);
 
-  const enableOutsideWorkspaceIfNeeded = useCallback(async (dirPath: string) => {
-    const isOutside = globalWorkspace
-      && !normalizeWorkspacePath(dirPath).startsWith(normalizeWorkspacePath(globalWorkspace));
-    if (!isOutside || !settings || settings.allow_outside_workspace) return;
-    await settingsApi.save({ allow_outside_workspace: true });
-    const updated = await settingsApi.get();
-    dispatch({ type: "settings/setSettings", payload: updated });
-    setInfoNotice(t("chat.workspaceOutsideAutoEnabled"));
-    setTimeout(() => setInfoNotice(null), 5000);
-  }, [globalWorkspace, settings, dispatch, t]);
+  const registerProjectDirectory = useCallback((path: string) => {
+    setProjectDirectories((current) => current.some(
+      (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(path),
+    ) ? current : [...current, path]);
+  }, []);
 
   const applyWorkspace = useCallback(async (dirPath: string) => {
-    setWorkspaceDisplayOverride(dirPath);
-    await enableOutsideWorkspaceIfNeeded(dirPath);
     if (isDraft || !displaySessionId) {
       setDraftWorkspace(dirPath);
+      setWorkspaceDisplayOverride(dirPath);
       return;
     }
     await sessionsApi.setWorkspace(displaySessionId, dirPath);
     dispatch(sessionsActions.updateSessionWorkspace({ id: displaySessionId, workspace_root: dirPath }));
-  }, [enableOutsideWorkspaceIfNeeded, isDraft, displaySessionId, dispatch]);
+    setWorkspaceDisplayOverride(dirPath);
+  }, [isDraft, displaySessionId, dispatch]);
 
   const handleWorkspaceBrowse = useCallback(async () => {
     try {
@@ -1754,17 +1779,18 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       if (!selected) return;
       const dirPath = selected as string;
       await applyWorkspace(dirPath);
+      registerProjectDirectory(dirPath);
     } catch (e) {
       setWorkspaceDisplayOverride(null);
       console.error("workspace browse error:", e);
     }
-  }, [applyWorkspace, t]);
+  }, [applyWorkspace, registerProjectDirectory, t]);
 
   const handleWorkspaceReset = useCallback(async () => {
     try {
       setWorkspaceDisplayOverride(null);
       if (isDraft || !displaySessionId) {
-        setDraftWorkspace(globalWorkspace);
+        setDraftWorkspace("");
         return;
       }
       await sessionsApi.setWorkspace(displaySessionId, null);
@@ -1775,7 +1801,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     } catch (e) {
       console.error("workspace reset error:", e);
     }
-  }, [isDraft, displaySessionId, globalWorkspace, dispatch]);
+  }, [isDraft, displaySessionId, dispatch]);
 
   const workspaceTriggerLabel = useMemo(() => {
     return projectNameFromPath(displayedWorkspace, t("chat.unassignedProject"));
@@ -1808,15 +1834,38 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       if (project?.path) await applyWorkspace(project.path);
     } else if (id === "__create__") {
       setProjectName("");
+      setProjectParentDirectory(globalWorkspace);
       setProjectCreateError(null);
       setProjectDialogOpen(true);
     } else if (id === "__browse__") await handleWorkspaceBrowse();
     else if (id === "__reset__") await handleWorkspaceReset();
   }, [chatProjects, applyWorkspace, handleWorkspaceBrowse, handleWorkspaceReset]);
 
+  const chooseProjectParentDirectory = useCallback(async () => {
+    const selected = await openFileDialog({ directory: true, title: t("chat.projectLocationBrowse") });
+    if (selected && typeof selected === "string") setProjectParentDirectory(selected);
+  }, [t]);
+
+  const addExistingProjectDirectory = useCallback(async () => {
+    setProjectCreating(true);
+    setProjectCreateError(null);
+    try {
+      const selected = await openFileDialog({ directory: true, title: t("chat.projectExistingBrowse") });
+      if (!selected || typeof selected !== "string") return;
+      beginDraft(selected);
+      registerProjectDirectory(selected);
+      setProjectDialogOpen(false);
+    } catch (error) {
+      setProjectCreateError(t("chat.projectCreateFailed", { error: String(error) }));
+    } finally {
+      setProjectCreating(false);
+    }
+  }, [registerProjectDirectory, beginDraft, t]);
+
   const createProject = useCallback(async () => {
     const name = projectName.trim();
-    if (!globalWorkspace) {
+    const parentDirectory = projectParentDirectory.trim();
+    if (!parentDirectory) {
       setProjectCreateError(t("chat.projectRootMissing"));
       return;
     }
@@ -1824,17 +1873,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       setProjectCreateError(t("chat.projectNameInvalid"));
       return;
     }
-    const path = joinWorkspacePath(globalWorkspace, name);
+    const path = joinWorkspacePath(parentDirectory, name);
     setProjectCreating(true);
     setProjectCreateError(null);
     try {
-      const exists = workspaceDirectories.some(
+      const exists = projectDirectories.some(
         (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(path),
       );
       if (!exists) await ideApi.fileAction(path, "create_dir");
-      setWorkspaceDirectories((current) => current.some(
-        (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(path),
-      ) ? current : [...current, path]);
+      registerProjectDirectory(path);
       setProjectDialogOpen(false);
       beginDraft(path);
     } catch (error) {
@@ -1842,7 +1889,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     } finally {
       setProjectCreating(false);
     }
-  }, [projectName, globalWorkspace, workspaceDirectories, beginDraft, t]);
+  }, [projectName, projectParentDirectory, projectDirectories, registerProjectDirectory, beginDraft, t]);
 
   // ── File drag-and-drop (Tauri v2 events) ─────────────────────────────────
   // Tauri v2 intercepts native drag-and-drop and emits its own events.
@@ -2034,7 +2081,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       try {
         const session = await sessionsApi.create(t("chat.newChat"));
         createdSessionId = session.id;
-        const workspace = draftWorkspace || globalWorkspace;
+        const workspace = draftWorkspace;
         if (workspace) {
           await sessionsApi.setWorkspace(session.id, workspace);
           session.workspace_root = workspace;
@@ -2263,13 +2310,16 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             projects: t("chat.projects"),
             createProject: t("chat.createProject"),
             emptyProject: t("chat.projectEmpty"),
+            removeProject: t("chat.removeProject"),
           }}
           onProjectSelect={(project) => {
-            if (project.kind === "workspace") beginDraft(project.path || globalWorkspace);
-            else {
+            if (project.kind === "workspace" && project.path) {
+              beginDraft(project.path);
+            } else {
+              const firstSession = project.sessions[0];
               setIsDraft(false);
-              setSessionFilter(project.kind);
-              dispatch(sessionsActions.setActiveSession(project.sessions[0]?.id ?? null));
+              setSessionFilter(firstSession ? classifySession(firstSession) : project.kind === "workspace" ? "chat" : project.kind);
+              dispatch(sessionsActions.setActiveSession(firstSession?.id ?? null));
             }
             onFocusChat?.();
           }}
@@ -2281,8 +2331,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             onFocusChat?.();
           }}
           onDelete={requestDeleteSession}
+          onRemoveProject={setProjectRemoveTarget}
           onCreateProject={() => {
             setProjectName("");
+            setProjectParentDirectory(globalWorkspace);
             setProjectCreateError(null);
             setProjectDialogOpen(true);
           }}
@@ -2779,11 +2831,23 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               placeholder={t("chat.projectNamePlaceholder")}
               disabled={projectCreating}
             />
+            <label className="project-create-location-label">{t("chat.projectLocation")}</label>
+            <div className="project-create-location-row">
+              <div className="project-create-path">
+                {projectParentDirectory || t("chat.projectRootMissing")}
+              </div>
+              <button type="button" className="btn" disabled={projectCreating} onClick={() => void chooseProjectParentDirectory()}>
+                {t("common.browse")}
+              </button>
+            </div>
             {projectCreateError && <div className="project-create-error" role="alert">{projectCreateError}</div>}
             <div className="project-create-path">
-              {globalWorkspace ? joinWorkspacePath(globalWorkspace, projectName || t("chat.projectNamePlaceholder")) : t("chat.projectRootMissing")}
+              {projectParentDirectory ? joinWorkspacePath(projectParentDirectory, projectName || t("chat.projectNamePlaceholder")) : t("chat.projectRootMissing")}
             </div>
             <div className="project-create-actions">
+              <button type="button" className="btn project-add-existing" disabled={projectCreating} onClick={() => void addExistingProjectDirectory()}>
+                {t("chat.addExistingProject")}
+              </button>
               <button type="button" className="btn" disabled={projectCreating} onClick={() => setProjectDialogOpen(false)}>{t("common.cancel")}</button>
               <button type="submit" className="btn btn-primary" disabled={projectCreating || !projectName.trim()}>
                 {projectCreating ? t("common.loading") : t("common.create")}
@@ -3005,6 +3069,25 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         loading={deletingSession}
         onConfirm={confirmDeleteSession}
         onCancel={() => !deletingSession && setDeleteTarget(null)}
+      />
+      <ConfirmDialog
+        open={!!projectRemoveTarget}
+        title={t("chat.removeProjectTitle")}
+        message={t("chat.removeProjectMessage", { name: projectRemoveTarget?.name ?? "" })}
+        confirmLabel={t("chat.removeProject")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={() => {
+          const path = projectRemoveTarget?.path;
+          if (path) {
+            setProjectDirectories((current) => current.filter(
+              (directory) => normalizeWorkspacePath(directory) !== normalizeWorkspacePath(path),
+            ));
+            if (isDraft && normalizeWorkspacePath(draftWorkspace) === normalizeWorkspacePath(path)) beginDraft();
+          }
+          setProjectRemoveTarget(null);
+        }}
+        onCancel={() => setProjectRemoveTarget(null)}
       />
 
       {/* Plan resume dialog — shown when user sends a message while unfinished todos exist */}

@@ -7,10 +7,11 @@ interface GlobalSessionRailProps {
   projects: ChatProject[];
   activeProjectId: string | null;
   activeSessionId: string | null;
-  labels: { projects: string; createProject: string; emptyProject: string };
+  labels: { projects: string; createProject: string; emptyProject: string; removeProject?: string };
   onProjectSelect: (project: ChatProject) => void;
   onSelect: (id: string) => void;
   onDelete: (event: React.MouseEvent, id: string, title: string) => void;
+  onRemoveProject: (project: ChatProject) => void;
   onCreateProject: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
   imFooter?: React.ReactNode;
@@ -25,6 +26,7 @@ export default function GlobalSessionRail({
   onProjectSelect,
   onSelect,
   onDelete,
+  onRemoveProject,
   onCreateProject,
   t,
   imFooter,
@@ -69,17 +71,33 @@ export default function GlobalSessionRail({
           const isActive = project.id === activeProjectId;
           return (
             <div key={project.id} className="project-tree-group" role="treeitem" aria-expanded={isExpanded}>
-              <button
-                type="button"
-                className={`project-tree-folder ${isActive ? "active" : ""}`}
-                onClick={() => toggleProject(project)}
-                title={project.path ?? project.name}
-              >
-                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <Folder size={15} strokeWidth={1.8} />
-                <span>{project.name}</span>
-                {project.sessions.length > 0 && <small>{project.sessions.length}</small>}
-              </button>
+              <div className="project-tree-folder-row">
+                <button
+                  type="button"
+                  className={`project-tree-folder ${isActive ? "active" : ""}`}
+                  onClick={() => toggleProject(project)}
+                  title={project.path ?? project.name}
+                >
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <Folder size={15} strokeWidth={1.8} />
+                  <span>{project.name}</span>
+                  {project.sessions.length > 0 && <small>{project.sessions.length}</small>}
+                </button>
+                {!project.system && project.path && (
+                  <button
+                    type="button"
+                    className="project-tree-remove"
+                    aria-label={labels.removeProject ?? "Remove project"}
+                    title={labels.removeProject ?? "Remove project"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRemoveProject(project);
+                    }}
+                  >
+                    <Trash2 size={12} strokeWidth={1.8} />
+                  </button>
+                )}
+              </div>
               {isExpanded && (
                 <div className="project-tree-children" role="group">
                   {project.sessions.map((session) => (

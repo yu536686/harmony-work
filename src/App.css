@@ -109,9 +109,54 @@ body {
    Layout
    ============================================================ */
 
+.desktop-window {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.window-titlebar {
+  height: 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  z-index: 10000;
+}
+
+.window-drag-region { flex: 1; min-width: 0; }
+.window-controls { display: flex; align-items: stretch; }
+.window-controls button {
+  width: 46px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: default;
+}
+.window-controls button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.window-controls .window-close:hover { background: #c42b1c; color: #fff; }
+
+.desktop-window-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.desktop-window-content > .loading-screen { height: 100%; }
+
 .app {
   display: flex;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   padding: 0;
   gap: 0;
@@ -356,7 +401,16 @@ body {
   padding-bottom: 10px;
 }
 
+.project-tree-folder-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 7px;
+}
+
 .project-tree-folder {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
@@ -371,6 +425,22 @@ body {
   text-align: left;
   font-size: 12px;
 }
+
+.project-tree-remove {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+}
+
+.project-tree-folder-row:hover .project-tree-remove { color: var(--text-tertiary); }
+.project-tree-remove:hover { color: var(--error) !important; background: color-mix(in srgb, var(--error) 8%, transparent); }
 
 .project-tree-folder.active { color: var(--text-primary); font-weight: 650; }
 .project-tree-folder span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
