@@ -19,6 +19,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { RootState, chatActions, sessionsActions, skillsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
 import { artifactsApi, chatApi, journalApi, sessionsApi, gatewayApi, koiApi, AgentEventType, ChannelInfo, type ChatMessage, type SessionArtifact, type JournalChange, type KoiWithStats } from "../../services/tauri";
 import { settingsApi, skillsApi, type Skill } from "../../services/tauri";
+import { ideApi } from "../../services/tauri/ide";
 import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type PendingAttachmentItem } from "./composerUtils";
 import type { Settings } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
@@ -36,6 +37,13 @@ import {
   pickMainChatActiveSession,
 } from "../../utils/session";
 import { composerSelectableSkills } from "../../utils/skills";
+import {
+  buildChatProjects,
+  joinWorkspacePath,
+  normalizeWorkspacePath,
+  projectIdForWorkspace,
+  projectNameFromPath,
+} from "../../utils/chatProjects";
 import {
   handleInputHistoryKeyDown,
   pushInputHistory,
@@ -381,9 +389,10 @@ interface ChatProps {
   sidebarHost?: HTMLElement | null;
   sidebarCollapsed?: boolean;
   onFocusChat?: () => void;
+  newChatRequest?: number;
 }
 
-export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = false, onFocusChat }: ChatProps = {}) {
+export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = false, onFocusChat, newChatRequest = 0 }: ChatProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
@@ -399,6 +408,23 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const [undoingReview, setUndoingReview] = useState(false);
   const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionKind>("chat");
+  const [isDraft, setIsDraft] = useState(() => !activeSessionId);
+  const [draftWorkspace, setDraftWorkspace] = useState(() => settings?.workspace_root || "");
+  const [workspaceDirectories, setWorkspaceDirectories] = useState<string[]>([]);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [projectCreateError, setProjectCreateError] = useState<string | null>(null);
+  const [projectCreating, setProjectCreating] = useState(false);
+  const [listenerReadySessionId, setListenerReadySessionId] = useState<string | null>(null);
+  const [historyReadySessionId, setHistoryReadySessionId] = useState<string | null>(null);
+  const [queuedFirstSend, setQueuedFirstSend] = useState<{
+    sessionId: string;
+    content: string;
+    attachments: PendingAttachmentItem[];
+    skills: Skill[];
+    koi: KoiWithStats | null;
+  } | null>(null);
+  const lastNewChatRequestRef = useRef(newChatRequest);
 
   const pendingAutoSendRef = useRef<string | null>(null);
 
@@ -407,6 +433,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (!pendingMainChatNav) return;
     setSessionFilter(pendingMainChatNav.filter);
     if (pendingMainChatNav.sessionId) {
+      setIsDraft(false);
       dispatch(sessionsActions.setActiveSession(pendingMainChatNav.sessionId));
     }
     if (pendingMainChatNav.composerDraft) {
@@ -447,6 +474,33 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     ? sessions.find((s) => s.id === displaySessionId)
     : undefined;
 
+  const globalWorkspace = settings?.workspace_root || "";
+
+  const beginDraft = useCallback((workspacePath?: string) => {
+    setSessionFilter("chat");
+    setIsDraft(true);
+    setDraftWorkspace(workspacePath || globalWorkspace);
+    setWorkspaceDisplayOverride(null);
+    dispatch(sessionsActions.setActiveSession(null));
+    setInput("");
+    setPendingAttachments([]);
+    setSelectedSkills([]);
+    setSelectedKoi(null);
+    setSendError(null);
+    onFocusChat?.();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [dispatch, globalWorkspace, onFocusChat]);
+
+  useEffect(() => {
+    if (lastNewChatRequestRef.current === newChatRequest) return;
+    lastNewChatRequestRef.current = newChatRequest;
+    beginDraft();
+  }, [newChatRequest, beginDraft]);
+
+  useEffect(() => {
+    if (activeSessionId) setIsDraft(false);
+  }, [activeSessionId]);
+
   // ── Input history navigation (up/down arrows) ──────────────────────────
 
   // Composer: one-shot attachments/skills per send; Koi persona stays until user clears
@@ -467,6 +521,54 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const [workspaceDisplayOverride, setWorkspaceDisplayOverride] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [deletingSession, setDeletingSession] = useState(false);
+
+  useEffect(() => {
+    if (!globalWorkspace) {
+      setWorkspaceDirectories([]);
+      return;
+    }
+    let cancelled = false;
+    ideApi.listFiles(globalWorkspace, 1)
+      .then((nodes) => {
+        if (cancelled) return;
+        setWorkspaceDirectories(
+          nodes
+            .filter((node) => node.is_dir)
+            .map((node) => joinWorkspacePath(globalWorkspace, node.path || node.name)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceDirectories([]);
+      });
+    return () => { cancelled = true; };
+  }, [globalWorkspace]);
+
+  const chatProjects = useMemo(
+    () => buildChatProjects({
+      sessions,
+      defaultWorkspace: globalWorkspace,
+      workspaceDirectories,
+      labels: {
+        im: t("chat.imProject"),
+        cli: t("chat.cliProject"),
+        unassigned: t("chat.unassignedProject"),
+      },
+    }),
+    [sessions, globalWorkspace, workspaceDirectories, t],
+  );
+
+  const activeProjectId = useMemo(() => {
+    if (isDraft) return projectIdForWorkspace(draftWorkspace || globalWorkspace);
+    if (!displaySession) {
+      if (sessionFilter === "im") return "system:im";
+      if (sessionFilter === "cli") return "system:cli";
+      return null;
+    }
+    const kind = classifySession(displaySession);
+    if (kind === "im") return "system:im";
+    if (kind === "cli") return "system:cli";
+    return projectIdForWorkspace(displaySession.workspace_root || globalWorkspace);
+  }, [isDraft, draftWorkspace, globalWorkspace, displaySession, sessionFilter]);
   // History pagination: capacity starts at CHAT_INITIAL_SIZE, grows by CHAT_LAZY_STEP on each lazy-load
   const CHAT_INITIAL_SIZE = 200;
   const CHAT_LAZY_STEP = 10;
@@ -852,7 +954,12 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   // Load messages when the active session ID changes.
   // Also sync running state from DB to fix stale state if im_session_done was missed.
   useEffect(() => {
-    if (!displaySessionId) return;
+    if (!displaySessionId) {
+      setHistoryReadySessionId(null);
+      return;
+    }
+    let cancelled = false;
+    setHistoryReadySessionId(null);
     setCapacity(CHAT_INITIAL_SIZE);
     setUnreadCount(0);
     scrollRestoreRef.current = null;
@@ -894,9 +1001,12 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         }
       } catch (e) {
         console.error('[Chat] failed to load messages on session switch:', e);
+      } finally {
+        if (!cancelled) setHistoryReadySessionId(displaySessionId);
       }
     };
     load();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displaySessionId, dispatch]);
 
@@ -1009,6 +1119,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const activeSessionIdForFilterRef = useRef(activeSessionId);
   activeSessionIdForFilterRef.current = activeSessionId;
   useEffect(() => {
+    if (isDraft) return;
     const currentSessions = sessionsRef.current;
     const currentActiveId = activeSessionIdForFilterRef.current;
     const visibleSessions = currentSessions.filter((x) =>
@@ -1017,16 +1128,17 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     const s = currentActiveId ? currentSessions.find((x) => x.id === currentActiveId) : null;
     if (s && visibleSessions.some((x) => x.id === s.id)) return;
     dispatch(sessionsActions.setActiveSession(pickMainChatActiveSession(currentSessions, sessionFilter)));
-  }, [sessionFilter, dispatch]);
+  }, [sessionFilter, dispatch, isDraft]);
 
   // Heartbeat / pool coordination sessions are internal — never keep them as the
   // main Chat active session (sidebar hides them but messages would still load).
   useEffect(() => {
+    if (isDraft) return;
     if (!activeSessionId) return;
     const current = sessions.find((s) => s.id === activeSessionId);
     if (!current || isMainChatVisibleSession(current, sessionFilter)) return;
     dispatch(sessionsActions.setActiveSession(pickMainChatActiveSession(sessions, sessionFilter)));
-  }, [sessions, activeSessionId, sessionFilter, dispatch]);
+  }, [sessions, activeSessionId, sessionFilter, dispatch, isDraft]);
 
   // Subscribe to agent events for the visible main-chat session only (not heartbeat / pool internal).
   useEffect(() => {
@@ -1044,6 +1156,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     // like freezeStreaming and getMessages on done, which must target THIS session,
     // not whatever session happens to be active when the event fires.
     const boundSessionId = displaySessionId;
+    setListenerReadySessionId(null);
     console.log('[Chat] registering event listener for session:', boundSessionId);
     chatApi.onEvent(displaySessionId, (event: AgentEventType) => {
       console.log('[Chat] received event:', event.type, 'for session:', boundSessionId);
@@ -1240,6 +1353,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         unlisten();
       } else {
         unlistenRef.current = unlisten;
+        setListenerReadySessionId(boundSessionId);
       }
     });
 
@@ -1329,20 +1443,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     // Scroll to bottom of the steps scroll container so the latest step is always visible
     el.scrollTop = el.scrollHeight;
   }, [steps]);
-
-  const handleNewSession = useCallback(async () => {
-    // Switch to main-chat filter *before* the async create so the post-create
-    // visibility effect does not reset activeSessionId while filter is still im/cli.
-    setSessionFilter("chat");
-    onFocusChat?.();
-    try {
-      const session = await sessionsApi.create(t("chat.newChat"));
-      dispatch(sessionsActions.addSession(session));
-      dispatch(sessionsActions.setActiveSession(session.id));
-    } catch (e) {
-      setSendError(t("chat.failedCreate", { error: String(e) }));
-    }
-  }, [dispatch, onFocusChat, t]);
 
   // Refresh the full session list when opening Pond CLI so assistant / headless
   // sessions created outside the main chat flow appear in the sidebar.
@@ -1618,52 +1718,55 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   // ── Workspace selector ──────────────────────────────────────────────────
   // The effective workspace for the active session:
   //   session.workspace_root > settings.workspace_root > ""
-  const effectiveWorkspace = displaySession?.workspace_root || settings?.workspace_root || "";
+  const effectiveWorkspace = isDraft
+    ? draftWorkspace || globalWorkspace
+    : displaySession?.workspace_root || globalWorkspace;
   const displayedWorkspace = workspaceDisplayOverride ?? effectiveWorkspace;
-  const hasSessionWorkspace = workspaceDisplayOverride !== null || Boolean(displaySession?.workspace_root);
-  const globalWorkspace = settings?.workspace_root || "";
+  const hasSessionWorkspace = isDraft
+    ? normalizeWorkspacePath(displayedWorkspace) !== normalizeWorkspacePath(globalWorkspace)
+    : workspaceDisplayOverride !== null || Boolean(displaySession?.workspace_root);
+
+  const enableOutsideWorkspaceIfNeeded = useCallback(async (dirPath: string) => {
+    const isOutside = globalWorkspace
+      && !normalizeWorkspacePath(dirPath).startsWith(normalizeWorkspacePath(globalWorkspace));
+    if (!isOutside || !settings || settings.allow_outside_workspace) return;
+    await settingsApi.save({ allow_outside_workspace: true });
+    const updated = await settingsApi.get();
+    dispatch({ type: "settings/setSettings", payload: updated });
+    setInfoNotice(t("chat.workspaceOutsideAutoEnabled"));
+    setTimeout(() => setInfoNotice(null), 5000);
+  }, [globalWorkspace, settings, dispatch, t]);
+
+  const applyWorkspace = useCallback(async (dirPath: string) => {
+    setWorkspaceDisplayOverride(dirPath);
+    await enableOutsideWorkspaceIfNeeded(dirPath);
+    if (isDraft || !displaySessionId) {
+      setDraftWorkspace(dirPath);
+      return;
+    }
+    await sessionsApi.setWorkspace(displaySessionId, dirPath);
+    dispatch(sessionsActions.updateSessionWorkspace({ id: displaySessionId, workspace_root: dirPath }));
+  }, [enableOutsideWorkspaceIfNeeded, isDraft, displaySessionId, dispatch]);
 
   const handleWorkspaceBrowse = useCallback(async () => {
-    if (!displaySessionId) return;
     try {
-    const selected = await openFileDialog({ directory: true, title: t("chat.workspaceBrowseTitle") });
+      const selected = await openFileDialog({ directory: true, title: t("chat.workspaceBrowseTitle") });
       if (!selected) return;
       const dirPath = selected as string;
-    setWorkspaceDisplayOverride(dirPath);
-
-      // Check if the selected dir is outside the global workspace
-      const isOutside = globalWorkspace && !dirPath.startsWith(globalWorkspace);
-
-      // Set the session workspace override
-      await sessionsApi.setWorkspace(displaySessionId, dirPath);
-
-      // Auto-enable allow_outside_workspace if needed
-      if (isOutside && settings && !settings.allow_outside_workspace) {
-        await settingsApi.save({ allow_outside_workspace: true });
-        // Refresh settings in Redux
-        const updated = await settingsApi.get();
-        dispatch({ type: "settings/setSettings", payload: updated });
-        // Notify the user
-        setInfoNotice(t("chat.workspaceOutsideAutoEnabled"));
-        // Auto-dismiss the notification after 5 seconds
-        setTimeout(() => setInfoNotice(null), 5000);
-      }
-
-      // Refresh the session in local state so the dropdown updates
-      dispatch(sessionsActions.updateSessionWorkspace({
-        id: displaySessionId,
-        workspace_root: dirPath,
-      }));
+      await applyWorkspace(dirPath);
     } catch (e) {
       setWorkspaceDisplayOverride(null);
       console.error("workspace browse error:", e);
     }
-  }, [displaySessionId, globalWorkspace, settings, dispatch, t]);
+  }, [applyWorkspace, t]);
 
   const handleWorkspaceReset = useCallback(async () => {
-    if (!displaySessionId) return;
     try {
       setWorkspaceDisplayOverride(null);
+      if (isDraft || !displaySessionId) {
+        setDraftWorkspace(globalWorkspace);
+        return;
+      }
       await sessionsApi.setWorkspace(displaySessionId, null);
       dispatch(sessionsActions.updateSessionWorkspace({
         id: displaySessionId,
@@ -1672,38 +1775,74 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     } catch (e) {
       console.error("workspace reset error:", e);
     }
-  }, [displaySessionId, dispatch]);
+  }, [isDraft, displaySessionId, globalWorkspace, dispatch]);
 
   const workspaceTriggerLabel = useMemo(() => {
-    const path = displayedWorkspace || t("chat.workspaceLabel");
-    if (path.length <= 40) return path;
-    const parts = path.split(/[/\\]/).filter(Boolean);
-    if (parts.length >= 2) return `…/${parts.slice(-2).join("/")}`;
-    return `…${path.slice(-38)}`;
+    return projectNameFromPath(displayedWorkspace, t("chat.unassignedProject"));
   }, [displayedWorkspace, t]);
 
   const workspaceMenuItems = useMemo((): ComposerMenuItem[] => {
-    const rows: ComposerMenuItem[] = [
-      {
-        id: "__current__",
-        label: displayedWorkspace || t("chat.workspaceNotSet"),
-        icon: "📁",
-        selected: Boolean(displayedWorkspace),
-        disabled: true,
-      },
-      { id: "__browse__", label: t("chat.workspaceBrowse"), icon: "📂", action: true },
-    ];
+    const rows: ComposerMenuItem[] = chatProjects
+      .filter((project) => project.kind === "workspace" && project.path)
+      .map((project) => ({
+        id: `__project__:${project.id}`,
+        label: project.name,
+        icon: <FolderOpen size={14} strokeWidth={1.8} />,
+        selected: normalizeWorkspacePath(project.path!) === normalizeWorkspacePath(displayedWorkspace),
+      }));
+    rows.push(
+      { id: "__create__", label: t("chat.createProject"), icon: "+", action: true },
+      { id: "__browse__", label: t("chat.workspaceBrowse"), icon: <FolderOpen size={14} strokeWidth={1.8} />, action: true },
+    );
     if (hasSessionWorkspace) {
       rows.push({ id: "__reset__", label: t("chat.workspaceReset"), icon: "↩", action: true });
     }
     return rows;
-  }, [displayedWorkspace, hasSessionWorkspace, t]);
+  }, [chatProjects, displayedWorkspace, hasSessionWorkspace, t]);
 
   const handleWorkspaceMenuSelect = useCallback(async (id: string) => {
     setComposerMenuOpen(null);
-    if (id === "__browse__") await handleWorkspaceBrowse();
+    if (id.startsWith("__project__:")) {
+      const projectId = id.slice("__project__:".length);
+      const project = chatProjects.find((item) => item.id === projectId);
+      if (project?.path) await applyWorkspace(project.path);
+    } else if (id === "__create__") {
+      setProjectName("");
+      setProjectCreateError(null);
+      setProjectDialogOpen(true);
+    } else if (id === "__browse__") await handleWorkspaceBrowse();
     else if (id === "__reset__") await handleWorkspaceReset();
-  }, [handleWorkspaceBrowse, handleWorkspaceReset]);
+  }, [chatProjects, applyWorkspace, handleWorkspaceBrowse, handleWorkspaceReset]);
+
+  const createProject = useCallback(async () => {
+    const name = projectName.trim();
+    if (!globalWorkspace) {
+      setProjectCreateError(t("chat.projectRootMissing"));
+      return;
+    }
+    if (!name || name === "." || name === ".." || /[<>:"/\\|?*]/.test(name)) {
+      setProjectCreateError(t("chat.projectNameInvalid"));
+      return;
+    }
+    const path = joinWorkspacePath(globalWorkspace, name);
+    setProjectCreating(true);
+    setProjectCreateError(null);
+    try {
+      const exists = workspaceDirectories.some(
+        (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(path),
+      );
+      if (!exists) await ideApi.fileAction(path, "create_dir");
+      setWorkspaceDirectories((current) => current.some(
+        (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(path),
+      ) ? current : [...current, path]);
+      setProjectDialogOpen(false);
+      beginDraft(path);
+    } catch (error) {
+      setProjectCreateError(t("chat.projectCreateFailed", { error: String(error) }));
+    } finally {
+      setProjectCreating(false);
+    }
+  }, [projectName, globalWorkspace, workspaceDirectories, beginDraft, t]);
 
   // ── File drag-and-drop (Tauri v2 events) ─────────────────────────────────
   // Tauri v2 intercepts native drag-and-drop and emits its own events.
@@ -1745,6 +1884,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   useEffect(() => { isImSessionRef2.current = isImSession; }, [isImSession]);
   const runningRef2 = useRef(running);
   useEffect(() => { runningRef2.current = running; }, [running]);
+  const isDraftRef = useRef(isDraft);
+  useEffect(() => { isDraftRef.current = isDraft; }, [isDraft]);
 
   useEffect(() => {
     let unlistenEnter: UnlistenFn | null = null;
@@ -1753,7 +1894,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
 
     const setup = async () => {
       unlistenEnter = await listen<{ paths: string[] }>("tauri://drag-enter", () => {
-        if (activeSessionIdRef2.current && !isImSessionRef2.current && !runningRef2.current) {
+        if ((activeSessionIdRef2.current || isDraftRef.current) && !isImSessionRef2.current && !runningRef2.current) {
           setIsDragging(true);
         }
       });
@@ -1765,7 +1906,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       unlistenDrop = await listen<{ paths: string[] }>("tauri://drag-drop", async (e) => {
         setIsDragging(false);
         // Only allow drop in chat sessions (not IM, not empty state)
-        if (!activeSessionIdRef2.current || isImSessionRef2.current || runningRef2.current) return;
+        if ((!activeSessionIdRef2.current && !isDraftRef.current) || isImSessionRef2.current || runningRef2.current) return;
 
         const paths = e.payload.paths;
         if (!paths || paths.length === 0) return;
@@ -1793,25 +1934,26 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     skills: Skill[],
     koi: KoiWithStats | null,
     clearPlan: boolean,
+    targetSessionId = displaySessionId,
   ) => {
-    if (!displaySessionId) return;
+    if (!targetSessionId) return;
 
     if (content.trim()) {
-      pushInputHistory(`chat:${displaySessionId}`, content);
+      pushInputHistory(`chat:${targetSessionId}`, content);
     }
 
-    dispatch(chatActions.clearToolSteps(displaySessionId));
-    if (clearPlan) dispatch(chatActions.clearPlan(displaySessionId));
-    dispatch(chatActions.clearStreaming(displaySessionId));
+    dispatch(chatActions.clearToolSteps(targetSessionId));
+    if (clearPlan) dispatch(chatActions.clearPlan(targetSessionId));
+    dispatch(chatActions.clearStreaming(targetSessionId));
     setReviewBySession((all) => {
-      if (!all[displaySessionId]) return all;
+      if (!all[targetSessionId]) return all;
       const next = { ...all };
-      delete next[displaySessionId];
+      delete next[targetSessionId];
       return next;
     });
-    dispatch(chatActions.clearFrozenBubble(displaySessionId));
+    dispatch(chatActions.clearFrozenBubble(targetSessionId));
 
-    const currentMessages = messagesBySession[displaySessionId] ?? [];
+    const currentMessages = messagesBySession[targetSessionId] ?? [];
     if (currentMessages.length === 0) {
       const raw = (
         content ||
@@ -1822,8 +1964,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       ).replace(/\s+/g, " ").trim();
       const title = raw.length > 30 ? raw.slice(0, 30) + "…" : raw;
       if (title) {
-        sessionsApi.rename(displaySessionId, title).catch(() => {});
-        dispatch(sessionsActions.updateSessionTitle({ id: displaySessionId, title }));
+        sessionsApi.rename(targetSessionId, title).catch(() => {});
+        dispatch(sessionsActions.updateSessionTitle({ id: targetSessionId, title }));
       }
     }
 
@@ -1840,20 +1982,20 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       : content;
 
     dispatch(chatActions.appendMessage({
-      sessionId: displaySessionId,
+      sessionId: targetSessionId,
       message: {
         id: `optimistic_${Date.now()}`,
-        session_id: displaySessionId,
+        session_id: targetSessionId,
         role: "user",
         content: displayContent,
         created_at: new Date().toISOString(),
       },
     }));
 
-    dispatch(chatActions.setRunning({ sessionId: displaySessionId, running: true }));
+    dispatch(chatActions.setRunning({ sessionId: targetSessionId, running: true }));
 
     try {
-      await chatApi.send(displaySessionId, content, {
+      await chatApi.send(targetSessionId, content, {
         attachments: attachments.map((a) => a.attachment),
         explicitSkills: skills.map((s) => s.id),
         personaKoiId: koi?.id,
@@ -1862,8 +2004,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       });
     } catch (e) {
       console.error('[Chat] send error:', e);
-      dispatch(chatActions.setRunning({ sessionId: displaySessionId, running: false }));
-      dispatch(chatActions.clearStreaming(displaySessionId));
+      dispatch(chatActions.setRunning({ sessionId: targetSessionId, running: false }));
+      dispatch(chatActions.clearStreaming(targetSessionId));
       setSendError(`${e}`);
     }
   }, [displaySessionId, messagesBySession, dispatch, t, selectedModelOverride]);
@@ -1876,7 +2018,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   );
 
   const handleSend = useCallback(async () => {
-    if (!canSend || !displaySessionId || running) return;
+    if (!canSend || running) return;
 
     const content = input.trim();
     setInput("");
@@ -1885,6 +2027,40 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     const skills = selectedSkills;
     const koi = selectedKoi;
     clearPendingComposer();
+
+    let targetSessionId = displaySessionId;
+    if (!targetSessionId) {
+      let createdSessionId: string | null = null;
+      try {
+        const session = await sessionsApi.create(t("chat.newChat"));
+        createdSessionId = session.id;
+        const workspace = draftWorkspace || globalWorkspace;
+        if (workspace) {
+          await sessionsApi.setWorkspace(session.id, workspace);
+          session.workspace_root = workspace;
+        }
+        dispatch(sessionsActions.addSession(session));
+        dispatch(sessionsActions.setActiveSession(session.id));
+        setSessionFilter("chat");
+        setIsDraft(false);
+        setQueuedFirstSend({
+          sessionId: session.id,
+          content,
+          attachments: pending,
+          skills,
+          koi,
+        });
+        return;
+      } catch (error) {
+        if (createdSessionId) await sessionsApi.delete(createdSessionId).catch(() => {});
+        setInput(content);
+        setPendingAttachments(pending);
+        setSelectedSkills(skills);
+        setSelectedKoi(koi);
+        setSendError(t("chat.failedCreate", { error: String(error) }));
+        return;
+      }
+    }
 
     const unfinished = activePlan.filter(
       (item) => item.status === "pending" || item.status === "in_progress"
@@ -1899,16 +2075,64 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       return;
     }
 
-    await doSend(content, pending, skills, koi, true);
-  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer]);
+    await doSend(content, pending, skills, koi, true, targetSessionId);
+  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t]);
+
+  // The event listener for a newly created session is registered by an earlier
+  // effect in this component. Sending from this later effect prevents losing
+  // the first streamed events between session creation and React commit.
+  useEffect(() => {
+    if (
+      !queuedFirstSend
+      || displaySessionId !== queuedFirstSend.sessionId
+      || listenerReadySessionId !== queuedFirstSend.sessionId
+      || historyReadySessionId !== queuedFirstSend.sessionId
+      || running
+    ) return;
+    const queued = queuedFirstSend;
+    setQueuedFirstSend(null);
+    void doSend(
+      queued.content,
+      queued.attachments,
+      queued.skills,
+      queued.koi,
+      true,
+      queued.sessionId,
+    );
+  }, [queuedFirstSend, displaySessionId, listenerReadySessionId, historyReadySessionId, running, doSend]);
 
   useEffect(() => {
     const draft = pendingAutoSendRef.current;
-    if (!draft || !displaySessionId || running) return;
+    if (!draft || running) return;
     pendingAutoSendRef.current = null;
-    setInput("");
-    void doSend(draft, [], [], null, true);
-  }, [displaySessionId, running, doSend]);
+    void (async () => {
+      let targetSessionId = displaySessionId;
+      if (!targetSessionId) {
+        let createdSessionId: string | null = null;
+        try {
+          const session = await sessionsApi.create(t("chat.newChat"));
+          createdSessionId = session.id;
+          const workspace = draftWorkspace || globalWorkspace;
+          if (workspace) {
+            await sessionsApi.setWorkspace(session.id, workspace);
+            session.workspace_root = workspace;
+          }
+          dispatch(sessionsActions.addSession(session));
+          dispatch(sessionsActions.setActiveSession(session.id));
+          setSessionFilter("chat");
+          setIsDraft(false);
+          setQueuedFirstSend({ sessionId: session.id, content: draft, attachments: [], skills: [], koi: null });
+        } catch (error) {
+          if (createdSessionId) await sessionsApi.delete(createdSessionId).catch(() => {});
+          setInput(draft);
+          setSendError(t("chat.failedCreate", { error: String(error) }));
+        }
+      } else {
+        setInput("");
+        void doSend(draft, [], [], null, true, targetSessionId);
+      }
+    })();
+  }, [displaySessionId, running, doSend, draftWorkspace, globalWorkspace, dispatch, t]);
 
   const handleCancel = useCallback(() => {
     if (displaySessionId) {
@@ -1970,9 +2194,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
   };
 
-  // ── Filtered session list (single source of truth) ───────────────────────
-  const sessionsForKind = (kind: SessionKind) =>
-    sessions.filter((s) => isMainChatVisibleSession(s, kind));
   const kindLabel = (kind: SessionKind) =>
     kind === "chat" ? t("chat.filterChat") : kind === "im" ? t("chat.filterIM") : t("chat.filterCli");
 
@@ -2035,33 +2256,38 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     ? createPortal(
         <GlobalSessionRail
           collapsed={sidebarCollapsed}
-          activeKind={sessionFilter}
-          counts={{
-            chat: sessionsForKind("chat").length,
-            im: sessionsForKind("im").length,
-            cli: sessionsForKind("cli").length,
-          }}
-          sessions={sessionsForKind(sessionFilter)}
+          projects={chatProjects}
+          activeProjectId={activeProjectId}
           activeSessionId={displaySessionId}
           labels={{
-            conversations: t("chat.chats"),
-            chat: kindLabel("chat"),
-            im: kindLabel("im"),
-            cli: kindLabel("cli"),
+            projects: t("chat.projects"),
+            createProject: t("chat.createProject"),
+            emptyProject: t("chat.projectEmpty"),
           }}
-          onKindChange={(kind) => {
-            setSessionFilter(kind);
+          onProjectSelect={(project) => {
+            if (project.kind === "workspace") beginDraft(project.path || globalWorkspace);
+            else {
+              setIsDraft(false);
+              setSessionFilter(project.kind);
+              dispatch(sessionsActions.setActiveSession(project.sessions[0]?.id ?? null));
+            }
             onFocusChat?.();
           }}
           onSelect={(id) => {
+            const selected = sessions.find((session) => session.id === id);
+            setSessionFilter(classifySession(selected));
+            setIsDraft(false);
             dispatch(sessionsActions.setActiveSession(id));
             onFocusChat?.();
           }}
           onDelete={requestDeleteSession}
-          onNew={handleNewSession}
+          onCreateProject={() => {
+            setProjectName("");
+            setProjectCreateError(null);
+            setProjectDialogOpen(true);
+          }}
           t={t}
-          emptyHint={sessionFilter === "cli" ? t("chat.cliNoSessionsHint") : undefined}
-          footer={sessionFilter === "im" ? imConnectFooter : undefined}
+          imFooter={imConnectFooter}
         />,
         sidebarHost,
       )
@@ -2072,7 +2298,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       {sessionRail}
       <div className="chat-layout">
       {/* Main chat area */}
-      <div className="chat-main">
+      <div className={`chat-main ${isDraft ? "is-draft" : ""}`}>
         {/* Top bar: task tabs */}
         <div className="chat-topbar">
           <div className="chat-topbar-current">
@@ -2121,8 +2347,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             <div className="drag-overlay-text">📎 {t("chat.dropFiles")}</div>
           </div>
         )}
-        {displaySessionId ? (
+        {(displaySessionId || isDraft) ? (
           <>
+            {displaySessionId ? (
+              <>
             {sendError && (
               <div className="error-banner" role="alert">
                 <span>{sendError}</span>
@@ -2345,6 +2573,20 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                 </ul>
               </div>
             )}
+              </>
+            ) : (
+              <div className="chat-draft-intro">
+                {sendError && (
+                  <div className="error-banner" role="alert">
+                    <span>{sendError}</span>
+                    <button className="error-dismiss" onClick={() => setSendError(null)}>✕</button>
+                  </div>
+                )}
+                <img src="/piscis.png" alt="" className="chat-draft-logo" aria-hidden="true" />
+                <h1>{t("chat.draftTitle")}</h1>
+                <p>{t("chat.draftDesc", { project: workspaceTriggerLabel })}</p>
+              </div>
+            )}
 
             {!isImSession && <div
               className={`input-area${isDragging ? " drag-over" : ""}`}
@@ -2508,24 +2750,48 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             <div className="empty-state-desc">{t("chat.cliEmptyDesc")}</div>
           </div>
         ) : (
-          <div className="empty-state chat-welcome-state">
-            {sendError && (
-              <div className="error-banner" role="alert" style={{ marginBottom: 16, maxWidth: 480, width: "100%" }}>
-                <span>{sendError}</span>
-                <button className="error-dismiss" onClick={() => setSendError(null)}>✕</button>
-              </div>
-            )}
-            <div className="empty-state-icon chat-welcome-logo">
-              <img src="/piscis.png" alt="小亨 WorkBuddy" style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 14, opacity: 0.7 }} />
-            </div>
-            <div className="empty-state-title chat-welcome-title">{t("chat.welcome")}</div>
-            <div className="empty-state-desc">{t("chat.welcomeDesc")}</div>
-            <button className="btn btn-primary chat-welcome-action" onClick={handleNewSession}>
-              {t("chat.newChatBtn")}
-            </button>
+          <div className="empty-state">
+            <div className="empty-state-title">{t("chat.noChats")}</div>
           </div>
         )}
       </div>
+
+      {projectDialogOpen && (
+        <div className="permission-overlay" onClick={() => !projectCreating && setProjectDialogOpen(false)}>
+          <form
+            className="project-create-dialog"
+            onSubmit={(event) => { event.preventDefault(); void createProject(); }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="project-create-heading">
+              <FolderOpen size={18} strokeWidth={1.8} />
+              <div>
+                <h3>{t("chat.createProject")}</h3>
+                <p>{t("chat.createProjectDesc")}</p>
+              </div>
+            </div>
+            <label htmlFor="project-name">{t("chat.projectName")}</label>
+            <input
+              id="project-name"
+              autoFocus
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder={t("chat.projectNamePlaceholder")}
+              disabled={projectCreating}
+            />
+            {projectCreateError && <div className="project-create-error" role="alert">{projectCreateError}</div>}
+            <div className="project-create-path">
+              {globalWorkspace ? joinWorkspacePath(globalWorkspace, projectName || t("chat.projectNamePlaceholder")) : t("chat.projectRootMissing")}
+            </div>
+            <div className="project-create-actions">
+              <button type="button" className="btn" disabled={projectCreating} onClick={() => setProjectDialogOpen(false)}>{t("common.cancel")}</button>
+              <button type="submit" className="btn btn-primary" disabled={projectCreating || !projectName.trim()}>
+                {projectCreating ? t("common.loading") : t("common.create")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {permissionRequest && (
         <div className="permission-overlay">

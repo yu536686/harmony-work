@@ -1,90 +1,112 @@
-import type { ReactNode } from "react";
-import { MessageCircle, Plus, Radio, SquareTerminal } from "lucide-react";
-import type { Session } from "../../services/tauri";
-import SessionPicker from "./SessionPicker";
-
-export type GlobalSessionKind = "chat" | "im" | "cli";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, Folder, FolderPlus, MessageSquare, Trash2 } from "lucide-react";
+import type { ChatProject } from "../../utils/chatProjects";
 
 interface GlobalSessionRailProps {
   collapsed: boolean;
-  activeKind: GlobalSessionKind;
-  counts: Record<GlobalSessionKind, number>;
-  sessions: Session[];
+  projects: ChatProject[];
+  activeProjectId: string | null;
   activeSessionId: string | null;
-  labels: Record<GlobalSessionKind, string> & { conversations: string };
-  onKindChange: (kind: GlobalSessionKind) => void;
+  labels: { projects: string; createProject: string; emptyProject: string };
+  onProjectSelect: (project: ChatProject) => void;
   onSelect: (id: string) => void;
   onDelete: (event: React.MouseEvent, id: string, title: string) => void;
-  onNew: () => void;
+  onCreateProject: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
-  emptyHint?: string;
-  footer?: ReactNode;
+  imFooter?: React.ReactNode;
 }
-
-const KIND_ICONS = {
-  chat: MessageCircle,
-  im: Radio,
-  cli: SquareTerminal,
-} as const;
 
 export default function GlobalSessionRail({
   collapsed,
-  activeKind,
-  counts,
-  sessions,
+  projects,
+  activeProjectId,
   activeSessionId,
   labels,
-  onKindChange,
+  onProjectSelect,
   onSelect,
   onDelete,
-  onNew,
+  onCreateProject,
   t,
-  emptyHint,
-  footer,
+  imFooter,
 }: GlobalSessionRailProps) {
-  return (
-    <section className={`global-session-rail ${collapsed ? "is-collapsed" : ""}`}>
-      <button type="button" className="global-new-chat" onClick={onNew} aria-label={t("chat.newChat")}>
-        <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
-        {!collapsed && <span>{t("chat.newChat")}</span>}
-      </button>
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(projects.filter((project) => project.sessions.length > 0).map((project) => project.id)),
+  );
 
-      {!collapsed && <div className="sidebar-section-label">{labels.conversations}</div>}
-      <nav className="global-session-filters" aria-label={labels.conversations}>
-        {(["chat", "im", "cli"] as GlobalSessionKind[]).map((kind) => {
-          const Icon = KIND_ICONS[kind];
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setExpanded((current) => {
+      if (current.has(activeProjectId)) return current;
+      const next = new Set(current);
+      next.add(activeProjectId);
+      return next;
+    });
+  }, [activeProjectId]);
+
+  if (collapsed) return null;
+
+  const toggleProject = (project: ChatProject) => {
+    if (project.id !== activeProjectId) onProjectSelect(project);
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(project.id)) next.delete(project.id);
+      else next.add(project.id);
+      return next;
+    });
+  };
+
+  return (
+    <section className="global-session-rail">
+      <div className="project-rail-heading">
+        <span>{labels.projects}</span>
+        <button type="button" onClick={onCreateProject} aria-label={labels.createProject} title={labels.createProject}>
+          <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="project-tree" role="tree" aria-label={labels.projects}>
+        {projects.map((project) => {
+          const isExpanded = expanded.has(project.id);
+          const isActive = project.id === activeProjectId;
           return (
-            <button
-              key={kind}
-              type="button"
-              className={`global-session-filter ${activeKind === kind ? "active" : ""}`}
-              onClick={() => onKindChange(kind)}
-              aria-label={labels[kind]}
-              aria-pressed={activeKind === kind}
-              title={labels[kind]}
-            >
-              <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-              {!collapsed && <span>{labels[kind]}</span>}
-              {!collapsed && counts[kind] > 0 && <small>{counts[kind]}</small>}
-            </button>
+            <div key={project.id} className="project-tree-group" role="treeitem" aria-expanded={isExpanded}>
+              <button
+                type="button"
+                className={`project-tree-folder ${isActive ? "active" : ""}`}
+                onClick={() => toggleProject(project)}
+                title={project.path ?? project.name}
+              >
+                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <Folder size={15} strokeWidth={1.8} />
+                <span>{project.name}</span>
+                {project.sessions.length > 0 && <small>{project.sessions.length}</small>}
+              </button>
+              {isExpanded && (
+                <div className="project-tree-children" role="group">
+                  {project.sessions.map((session) => (
+                    <div key={session.id} className={`project-session-row ${session.id === activeSessionId ? "active" : ""}`}>
+                      <button type="button" className="project-session-select" onClick={() => onSelect(session.id)} title={session.title}>
+                        <MessageSquare size={13} strokeWidth={1.8} />
+                        <span>{session.title || t("chat.defaultTitle")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="project-session-delete"
+                        aria-label={t("chat.deleteChat")}
+                        title={t("chat.deleteChat")}
+                        onClick={(event) => onDelete(event, session.id, session.title || t("chat.defaultTitle"))}
+                      >
+                        <Trash2 size={12} strokeWidth={1.8} />
+                      </button>
+                    </div>
+                  ))}
+                  {project.sessions.length === 0 && <div className="project-tree-empty">{labels.emptyProject}</div>}
+                  {project.kind === "im" && imFooter}
+                </div>
+              )}
+            </div>
           );
         })}
-      </nav>
-
-      {!collapsed && (
-        <SessionPicker
-          embedded
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelect={onSelect}
-          onDelete={onDelete}
-          onClose={() => {}}
-          t={t}
-          allowCreate={false}
-          emptyHint={emptyHint}
-          footer={footer}
-        />
-      )}
+      </div>
     </section>
   );
 }

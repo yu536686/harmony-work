@@ -8,7 +8,7 @@ import {
   ChevronRight,
   Clock3,
   LineChart,
-  MessageSquare,
+  SquarePen,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -68,6 +68,7 @@ function AppContent() {
   const [creativeExpanded, setCreativeExpanded] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
   const [chatSidebarHost, setChatSidebarHost] = useState<HTMLDivElement | null>(null);
+  const [newChatRequest, setNewChatRequest] = useState(0);
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -381,11 +382,19 @@ function AppContent() {
             {sidebarCollapsed ? <PanelLeftOpen size={15} strokeWidth={1.8} /> : <PanelLeftClose size={15} strokeWidth={1.8} />}
           </button>
         </div>
+        <div className="sidebar-body">
         <nav className="sidebar-nav" aria-label="功能模块">
           <div className="sidebar-section-label">工作</div>
-          <button className={`nav-item ${activeTab === "chat" ? "active" : ""}`} onClick={() => navigateTab("chat")} title={t("nav.chat")}>
-            <span className="nav-icon"><MessageSquare size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">{t("nav.chat")}</span>
+          <button
+            className={`nav-item ${activeTab === "chat" ? "active" : ""}`}
+            onClick={() => {
+              setActiveTab("chat");
+              setNewChatRequest((value) => value + 1);
+            }}
+            title={t("chat.newChat")}
+          >
+            <span className="nav-icon"><SquarePen size={17} strokeWidth={1.8} /></span>
+            <span className="nav-label">{t("chat.newChat")}</span>
           </button>
           <button
             className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" || activeTab === "harmony-cut" ? "active" : ""}`}
@@ -457,7 +466,8 @@ function AppContent() {
             );
           })}
         </nav>
-        <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label="会话列表" />
+        <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label={t("chat.projects")} />
+        </div>
         <div className="sidebar-footer user-footer">
           {userMenuOpen && (
             <div className="user-menu">
@@ -498,6 +508,7 @@ function AppContent() {
               <Chat
                 sidebarHost={chatSidebarHost}
                 sidebarCollapsed={sidebarCollapsed}
+                newChatRequest={newChatRequest}
                 onFocusChat={() => setActiveTab("chat")}
                 onNavigateTab={(tab, opts) => {
                   if (tab === "skills") navigateTab("skills");

@@ -131,6 +131,7 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
             "office" => &["presentation", "office", "com", "com_invoke", "pdf"],
             "media" => &[
                 "harmony_cut",
+                "harvis_creative",
                 "file_list",
                 "file_search",
                 "process_control",
@@ -205,6 +206,7 @@ Use route=multi_agent only for genuinely multi-role, parallel, sustained project
 
 Choose only required tool_groups from: files, runtime, web, office, media, desktop, skills, collaboration, memory, im, interaction, ssh, all.
 Route local video/material editing requests to route=workflow with tool_groups=["media","files","runtime","interaction"]. This includes requests mentioning HarmonyCut, 商摄快剪, 剪辑, 成片, 视频素材, 剪映草稿, CapCut/JianYing draft, 标记工作台, or a local media folder path.
+Route image, poster, music, or BGM creation requests to route=workflow with tool_groups=["media","files","interaction"]. This includes requests mentioning Harvis, 生图, 文生图, 图生图, 海报, 图片创作, 音乐创作, BGM, Suno, or 七夕海报. The media group exposes the Harvis runtime tool when it is enabled.
 Do not route greetings, identity questions, explanations, rewriting, or ordinary conversation to tools. Route requests about current time, live data, local files, installed capabilities, running projects, or external systems to tools. Never output tool-call markup."#;
     let request = LlmRequest {
         messages: recent,
@@ -5425,6 +5427,16 @@ mod tests {
         assert!(tools.contains("office"));
         assert!(tools.contains("app_control"));
         assert!(!tools.contains("web_search"));
+    }
+
+    #[test]
+    fn media_route_exposes_harvis_creative() {
+        let tools = route_tool_allowlist(&["media".to_string()]).expect("media tool set");
+        assert!(
+            tools.contains("harvis_creative"),
+            "image, poster, and music workflows must receive the Harvis runtime tool"
+        );
+        assert!(!tools.contains("memory_store"));
     }
 
     #[test]

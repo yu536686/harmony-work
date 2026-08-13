@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import GlobalSessionRail from "./GlobalSessionRail";
 
@@ -17,48 +18,54 @@ const sessions = [
 const t = (key: string) => key;
 
 describe("GlobalSessionRail", () => {
-  it("renders new-chat action, filters and sessions in the global sidebar", () => {
+  it("renders one project tree and selects conversations inside folders", async () => {
+    const onSelect = vi.fn();
     render(
       <GlobalSessionRail
         collapsed={false}
-        activeKind="chat"
-        counts={{ chat: 1, im: 0, cli: 0 }}
-        sessions={sessions}
+        projects={[
+          { id: "workspace:c:/harmony", name: "Harmony", path: "C:\\Harmony", kind: "workspace", system: false, sessions },
+          { id: "system:im", name: "IM 会话", path: null, kind: "im", system: true, sessions: [] },
+          { id: "system:cli", name: "CLI 会话", path: null, kind: "cli", system: true, sessions: [] },
+        ]}
+        activeProjectId="workspace:c:/harmony"
         activeSessionId="session-1"
-        labels={{ chat: "对话", im: "IM", cli: "CLI", conversations: "会话" }}
-        onKindChange={vi.fn()}
-        onSelect={vi.fn()}
+        labels={{ projects: "项目", createProject: "新建项目", emptyProject: "暂无对话" }}
+        onProjectSelect={vi.fn()}
+        onSelect={onSelect}
         onDelete={vi.fn()}
-        onNew={vi.fn()}
+        onCreateProject={vi.fn()}
         t={t}
       />,
     );
 
-    expect(screen.getByRole("button", { name: "chat.newChat" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "会话" })).toBeInTheDocument();
+    expect(screen.getByRole("tree", { name: "项目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建项目" })).toBeInTheDocument();
+    expect(screen.getByText("Harmony")).toBeInTheDocument();
     expect(screen.getByText("季度营销复盘")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("季度营销复盘"));
+    expect(onSelect).toHaveBeenCalledWith("session-1");
   });
 
-  it("keeps the compact filters available when the application sidebar is collapsed", () => {
+  it("does not render an unreadable second rail when the application sidebar is collapsed", () => {
     render(
       <GlobalSessionRail
         collapsed
-        activeKind="chat"
-        counts={{ chat: 1, im: 2, cli: 3 }}
-        sessions={sessions}
+        projects={[
+          { id: "workspace:c:/harmony", name: "Harmony", path: "C:\\Harmony", kind: "workspace", system: false, sessions },
+        ]}
+        activeProjectId="workspace:c:/harmony"
         activeSessionId="session-1"
-        labels={{ chat: "对话", im: "IM", cli: "CLI", conversations: "会话" }}
-        onKindChange={vi.fn()}
+        labels={{ projects: "项目", createProject: "新建项目", emptyProject: "暂无对话" }}
+        onProjectSelect={vi.fn()}
         onSelect={vi.fn()}
         onDelete={vi.fn()}
-        onNew={vi.fn()}
+        onCreateProject={vi.fn()}
         t={t}
       />,
     );
 
     expect(screen.queryByText("季度营销复盘")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "对话" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "IM" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "CLI" })).toBeInTheDocument();
+    expect(screen.queryByRole("tree", { name: "项目" })).not.toBeInTheDocument();
   });
 });
