@@ -1,13 +1,75 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub use crate::agent::harness::ToolDefMode;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExposure {
+    Core,
+    Deferred,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionMode {
+    Parallel,
+    Exclusive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRisk {
+    Read,
+    Write,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolMetadata {
+    pub category: &'static str,
+    pub exposure: ToolExposure,
+    pub execution: ToolExecutionMode,
+    pub risk: ToolRisk,
+    pub timeout_secs: u64,
+    pub produces_artifacts: bool,
+}
+
+impl ToolMetadata {
+    pub fn legacy(read_only: bool) -> Self {
+        Self {
+            category: "general",
+            exposure: ToolExposure::Core,
+            execution: if read_only {
+                ToolExecutionMode::Parallel
+            } else {
+                ToolExecutionMode::Exclusive
+            },
+            risk: if read_only {
+                ToolRisk::Read
+            } else {
+                ToolRisk::Write
+            },
+            timeout_secs: 120,
+            produces_artifacts: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSearchHit {
+    pub definition: crate::llm::ToolDef,
+    pub metadata: ToolMetadata,
+    pub score: usize,
+}
 
 /// Snapshot of Settings fields that tools may need at runtime.
 /// This avoids taking the full Settings lock inside async tool code.
@@ -190,6 +252,13 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Runtime policy used for exposure, scheduling and audit presentation.
+    /// The default preserves legacy behavior; specialised tools can opt into
+    /// deferred discovery or stronger risk metadata without changing callers.
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata::legacy(self.is_read_only())
+    }
+
     /// Whether this tool requires user confirmation
     fn needs_confirmation(&self, _input: &Value) -> bool {
         false
@@ -369,6 +438,103 @@ impl ToolRegistry {
     pub fn to_tool_defs_for(&self, name: &str, mode: ToolDefMode) -> Option<crate::llm::ToolDef> {
         self.get(name).map(|t| tool_def_for(t, mode))
     }
+
+    /// Tool definitions sent on a model step. Deferred tools stay out of the
+    /// request until a successful `tool_search` loads them for the run.
+    pub fn direct_tool_defs(
+        &self,
+        mode: ToolDefMode,
+        loaded_deferred: &HashSet<String>,
+    ) -> Vec<crate::llm::ToolDef> {
+        let mut definitions: Vec<_> = self
+            .tools
+            .iter()
+            .filter(|tool| match tool.metadata().exposure {
+                ToolExposure::Core => true,
+                ToolExposure::Deferred => loaded_deferred.contains(tool.name()),
+                ToolExposure::Hidden => false,
+            })
+            .map(|tool| tool_def_for(tool.as_ref(), mode))
+            .collect();
+        let has_unloaded = self.tools.iter().any(|tool| {
+            tool.metadata().exposure == ToolExposure::Deferred
+                && !loaded_deferred.contains(tool.name())
+        });
+        if has_unloaded {
+            definitions.push(tool_search_def());
+        }
+        definitions
+    }
+
+    pub fn search_deferred(&self, query: &str, limit: usize) -> Vec<ToolSearchHit> {
+        let normalized = query.trim().to_lowercase();
+        if normalized.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let tokens: Vec<_> = normalized
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .collect();
+        let mut hits: Vec<_> = self
+            .tools
+            .iter()
+            .filter(|tool| tool.metadata().exposure == ToolExposure::Deferred)
+            .filter_map(|tool| {
+                let metadata = tool.metadata();
+                let name = tool.name().to_lowercase();
+                let haystack = format!(
+                    "{} {} {}",
+                    name,
+                    metadata.category,
+                    tool.description_minimal().to_lowercase()
+                );
+                let mut score = tokens
+                    .iter()
+                    .filter(|token| haystack.contains(**token))
+                    .count();
+                if name == normalized {
+                    score += 8;
+                } else if name.contains(&normalized) {
+                    score += 4;
+                }
+                (score > 0).then(|| ToolSearchHit {
+                    definition: tool_def_for(tool.as_ref(), ToolDefMode::Full),
+                    metadata,
+                    score,
+                })
+            })
+            .collect();
+        hits.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| left.definition.name.cmp(&right.definition.name))
+        });
+        hits.truncate(limit.min(12));
+        hits
+    }
+
+    pub fn execution_mode(&self, name: &str) -> ToolExecutionMode {
+        self.get(name)
+            .map(Tool::metadata)
+            .map(|metadata| metadata.execution)
+            .unwrap_or(ToolExecutionMode::Exclusive)
+    }
+}
+
+pub fn tool_search_def() -> crate::llm::ToolDef {
+    crate::llm::ToolDef {
+        name: "tool_search".to_string(),
+        description: "Search specialised installed tools and load matching tool schemas for the current run. Use once when the required capability is not already present.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": { "type": "string" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 12 }
+            }
+        }),
+    }
 }
 
 fn tool_def_for(tool: &dyn Tool, mode: ToolDefMode) -> crate::llm::ToolDef {
@@ -498,6 +664,8 @@ mod tests {
         description: &'static str,
     }
 
+    struct DeferredFakeTool;
+
     #[async_trait]
     impl Tool for FakeTool {
         fn name(&self) -> &str {
@@ -512,6 +680,64 @@ mod tests {
         async fn call(&self, _input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
             Ok(ToolResult::ok(""))
         }
+    }
+
+    #[async_trait]
+    impl Tool for DeferredFakeTool {
+        fn name(&self) -> &str {
+            "harvis_image_generate"
+        }
+        fn description(&self) -> &str {
+            "Generate an image through Harvis"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}}})
+        }
+        fn metadata(&self) -> ToolMetadata {
+            ToolMetadata {
+                category: "media",
+                exposure: ToolExposure::Deferred,
+                execution: ToolExecutionMode::Exclusive,
+                risk: ToolRisk::External,
+                timeout_secs: 180,
+                produces_artifacts: true,
+            }
+        }
+        async fn call(&self, _input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+            Ok(ToolResult::ok(""))
+        }
+    }
+
+    #[test]
+    fn tool_metadata_defaults_to_core_and_exclusive() {
+        let tool = FakeTool {
+            schema: json!({"type": "object"}),
+            description: "fake",
+        };
+        let metadata = tool.metadata();
+        assert_eq!(metadata.exposure, ToolExposure::Core);
+        assert_eq!(metadata.execution, ToolExecutionMode::Exclusive);
+        assert_eq!(metadata.risk, ToolRisk::Write);
+    }
+
+    #[test]
+    fn deferred_tools_are_searched_instead_of_directly_exposed() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FakeTool {
+            schema: json!({"type": "object"}),
+            description: "Core file helper",
+        }));
+        registry.register(Box::new(DeferredFakeTool));
+
+        let direct = registry.direct_tool_defs(ToolDefMode::Minimal, &std::collections::HashSet::new());
+        assert!(direct.iter().any(|tool| tool.name == "fake"));
+        assert!(direct.iter().any(|tool| tool.name == "tool_search"));
+        assert!(!direct.iter().any(|tool| tool.name == "harvis_image_generate"));
+
+        let hits = registry.search_deferred("Harvis image poster", 5);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].definition.name, "harvis_image_generate");
+        assert_eq!(hits[0].metadata.category, "media");
     }
 
     #[test]
