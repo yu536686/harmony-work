@@ -95,6 +95,7 @@ export interface ChatAttachment {
 }
 
 export type AgentEventType =
+  | { type: "run_status"; iteration: number; phase: "thinking" | "executing_tools" | "retrying" | "closing"; detail: string }
   | { type: "text_segment_start"; iteration: number }
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; id: string; name: string; input: unknown }

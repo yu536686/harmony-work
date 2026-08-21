@@ -20,7 +20,7 @@ use piscis_kernel::agent::messages::AgentEvent;
 use piscis_kernel::agent::plan::{summarize_todos, PlanTodoItem};
 use piscis_kernel::agent::tool::ToolContext;
 use piscis_kernel::llm::{
-    build_client_with_timeout, ContentBlock, LlmMessage, LlmRequest, MessageContent, ToolDef,
+    build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef,
 };
 use piscis_kernel::policy::PolicyGate;
 use piscis_kernel::project_context::render_project_instruction_context;
@@ -64,41 +64,6 @@ struct ChatPromptArtifacts {
     /// When the session workspace matches a pool's `project_dir`.
     bound_pool_id: Option<String>,
     memory_owner_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct MainChatRouteDecision {
-    route: String,
-    #[serde(default)]
-    answer: Option<String>,
-    #[serde(default)]
-    tool_groups: Vec<String>,
-    #[serde(default)]
-    needs_plan: bool,
-}
-
-struct MainChatRouteAttempt {
-    decision: Option<MainChatRouteDecision>,
-    input_tokens: u32,
-    output_tokens: u32,
-}
-
-fn parse_route_decision(text: &str) -> Option<MainChatRouteDecision> {
-    let trimmed = text.trim();
-    let candidate = if trimmed.starts_with("```") {
-        trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim()
-    } else {
-        trimmed
-    };
-    serde_json::from_str(candidate).ok().or_else(|| {
-        let start = candidate.find('{')?;
-        let end = candidate.rfind('}')?;
-        serde_json::from_str(&candidate[start..=end]).ok()
-    })
 }
 
 fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
@@ -171,74 +136,6 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
         names.insert("app_control");
     }
     (!names.is_empty()).then_some(names)
-}
-
-async fn route_main_chat_intent(
-    client: &dyn piscis_kernel::llm::LlmClient,
-    model: &str,
-    messages: &[LlmMessage],
-) -> MainChatRouteAttempt {
-    let mut recent: Vec<LlmMessage> = messages
-        .iter()
-        .rev()
-        .filter_map(|message| {
-            let text = message.content.as_text();
-            if text.trim().is_empty() {
-                return None;
-            }
-            Some(LlmMessage {
-                role: message.role.clone(),
-                content: MessageContent::text(&text.chars().take(1600).collect::<String>()),
-            })
-        })
-        .take(8)
-        .collect();
-    recent.reverse();
-    let system = r#"You are the lightweight intent router and direct-response layer for Xiaoheng WorkBuddy.
-Return one JSON object only, with this schema:
-{"route":"direct|agent|workflow|multi_agent","answer":string|null,"tool_groups":string[],"needs_plan":boolean}
-
-Use route=direct and provide the complete user-facing answer when the request can be answered from conversation context and stable reasoning without files, current external state, tools, skills, desktop actions, or project execution.
-Use route=agent when one flexible tool-using agent is appropriate.
-Use route=workflow for a concrete deliverable or repeatable operation such as creating Office files, media, installing/building software, or browser automation.
-Use route=multi_agent only for genuinely multi-role, parallel, sustained project work or when the user explicitly requests team collaboration.
-
-Choose only required tool_groups from: files, runtime, web, office, media, desktop, skills, collaboration, memory, im, interaction, ssh, all.
-Route local video/material editing requests to route=workflow with tool_groups=["media","files","runtime","interaction"]. This includes requests mentioning HarmonyCut, 商摄快剪, 剪辑, 成片, 视频素材, 剪映草稿, CapCut/JianYing draft, 标记工作台, or a local media folder path.
-Do not route greetings, identity questions, explanations, rewriting, or ordinary conversation to tools. Route requests about current time, live data, local files, installed capabilities, running projects, or external systems to tools. Never output tool-call markup."#;
-    let request = LlmRequest {
-        messages: recent,
-        system: Some(system.to_string()),
-        tools: vec![],
-        model: model.to_string(),
-        max_tokens: 900,
-        stream: false,
-        vision_override: Some(false),
-    };
-    match client.complete(request).await {
-        Ok(response) => MainChatRouteAttempt {
-            decision: parse_route_decision(&response.content),
-            input_tokens: response.input_tokens,
-            output_tokens: response.output_tokens,
-        },
-        Err(error) => {
-            tracing::warn!(
-                "main-chat intent routing failed; using full agent: {}",
-                error
-            );
-            MainChatRouteAttempt {
-                decision: None,
-                input_tokens: 0,
-                output_tokens: 0,
-            }
-        }
-    }
-}
-
-fn emit_agent_event(app: &AppHandle, session_id: &str, event: &AgentEvent) {
-    let payload = serde_json::to_value(event).unwrap_or_default();
-    let _ = app.emit(&format!("agent_event_{}", session_id), payload.clone());
-    let _ = app.emit("agent_broadcast", payload);
 }
 
 fn merge_frontend_attachments(
@@ -1213,9 +1110,6 @@ pub async fn chat_send(
     clear_plan: Option<bool>,
 ) -> Result<(), String> {
     let merged_attachments = merge_frontend_attachments(attachment, attachments);
-    let has_explicit_skills = explicit_skills
-        .as_ref()
-        .is_some_and(|items| !items.is_empty());
     tracing::info!(
         "chat_send called: session={} content_len={} attachments={} explicit_skills={:?} persona_koi={:?}",
         session_id,
@@ -1497,9 +1391,11 @@ pub async fn chat_send(
         }
     }
 
-    // Build the provider client once. A lightweight model-driven routing call
-    // decides whether this message can be answered directly or needs the full
-    // tool loop, and selects the smallest relevant tool surface for that loop.
+    // Build the provider client once and let the main agent make the decision
+    // in its first turn. A separate router doubled the first-request latency,
+    // spent tokens before doing work, and occasionally injected planning tools
+    // based on a lossy classification. The main harness already has the live
+    // system context, skills and tool contracts needed for the decision.
     let client = build_client_with_timeout(
         &provider,
         &api_key,
@@ -1510,100 +1406,6 @@ pub async fn chat_send(
         },
         llm_read_timeout_secs,
     );
-    let route_attempt = route_main_chat_intent(client.as_ref(), &model, &llm_messages).await;
-    if route_attempt.input_tokens > 0 || route_attempt.output_tokens > 0 {
-        let db = state.db.lock().await;
-        if let Err(error) = db.update_session_usage_totals(
-            &session_id,
-            route_attempt.input_tokens,
-            route_attempt.output_tokens,
-        ) {
-            tracing::warn!("failed to persist routing usage totals: {}", error);
-        }
-    }
-    let mut route_decision = route_attempt
-        .decision
-        .unwrap_or_else(|| MainChatRouteDecision {
-            route: "agent".to_string(),
-            answer: None,
-            tool_groups: vec!["all".to_string()],
-            needs_plan: false,
-        });
-    if route_decision.tool_groups.is_empty() && route_decision.route != "direct" {
-        route_decision.tool_groups = match route_decision.route.as_str() {
-            "workflow" => vec![
-                "files",
-                "runtime",
-                "media",
-                "office",
-                "skills",
-                "interaction",
-            ],
-            "multi_agent" => vec!["collaboration", "files", "runtime", "web"],
-            _ => vec!["files", "runtime", "web", "skills", "interaction"],
-        }
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    }
-    if route_decision.needs_plan
-        && !route_decision
-            .tool_groups
-            .iter()
-            .any(|group| group == "collaboration")
-    {
-        route_decision.tool_groups.push("collaboration".to_string());
-    }
-    let has_unfinished_plan = {
-        let plans = state.plan_state.lock().await;
-        plans.get(&session_id).is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item.status == "pending" || item.status == "in_progress")
-        })
-    };
-    let direct_answer = route_decision
-        .answer
-        .as_deref()
-        .map(str::trim)
-        .filter(|answer| !answer.is_empty());
-    let direct_allowed = route_decision.route == "direct"
-        && direct_answer.is_some()
-        && merged_attachments.is_empty()
-        && !has_explicit_skills
-        && persona_koi_id.as_deref().is_none_or(str::is_empty)
-        && !has_unfinished_plan;
-    if direct_allowed {
-        let answer = direct_answer.unwrap().to_string();
-        {
-            let db = state.db.lock().await;
-            db.append_message(&session_id, "assistant", &answer)
-                .map_err(|error| error.to_string())?;
-            db.update_session_status(&session_id, "idle")
-                .map_err(|error| error.to_string())?;
-        }
-        emit_agent_event(
-            &app,
-            &session_id,
-            &AgentEvent::TextSegmentStart { iteration: 1 },
-        );
-        emit_agent_event(&app, &session_id, &AgentEvent::TextDelta { delta: answer });
-        emit_agent_event(
-            &app,
-            &session_id,
-            &AgentEvent::Done {
-                total_input_tokens: route_attempt.input_tokens,
-                total_output_tokens: route_attempt.output_tokens,
-            },
-        );
-        tracing::info!(
-            "chat_send: direct route completed session={} input_tokens={} output_tokens={}",
-            session_id,
-            route_attempt.input_tokens,
-            route_attempt.output_tokens
-        );
-        return Ok(());
-    }
 
     persist_session_task_contract(
         &state.db,
@@ -1633,7 +1435,10 @@ pub async fn chat_send(
         project_instruction_budget_chars,
         enable_project_instructions,
         persona_koi_id.as_deref(),
-        Some(&route_decision.tool_groups),
+        // Main chat uses the complete enabled tool surface. The model chooses
+        // tools from their schemas, like a Gateway, instead of a local keyword
+        // classifier pruning capabilities before the first real turn.
+        None,
     )
     .await?;
     if let Some(ctx) = user_context
@@ -1727,12 +1532,9 @@ pub async fn chat_send(
     .with_hooks(hooks)
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
-    let routed_max_iterations = match route_decision.route.as_str() {
-        "multi_agent" => max_iterations.min(32),
-        "workflow" => max_iterations.min(24),
-        _ => max_iterations.min(16),
-    }
-    .max(4);
+    // A single consistent turn budget is easier to reason about than an
+    // opaque route-dependent budget. Guardrails stop true repeat loops first.
+    let routed_max_iterations = max_iterations.clamp(4, 24);
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: std::path::PathBuf::from(&workspace_root),
@@ -3395,20 +3197,20 @@ When asked about software installed on this machine, ALWAYS follow this order:
 For complex, multi-step tasks, keep a short visible plan using the `plan_todo` tool.
 
 **When to use `plan_todo`:**
-- The task needs meaningful sequencing, tracking, or progress visibility
-- You expect to use several tools or spend more than a trivial amount of time
-- The user would benefit from seeing what is pending, active, or completed
+- The task has at least three dependent execution steps and the user benefits from a visible progress board
+- Create it at most once before the first real execution step. Update it only after a tool result, a deliverable, or a genuine status change.
+- Do not create a plan for greetings, explanations, single reads, straightforward edits, or a normal one-tool action.
 
 **CRITICAL — When NOT to use `plan_todo`:**
 - **NEVER use `plan_todo` as a substitute for multi-agent collaboration.** If the task involves multiple roles, parallel work streams, or sustained team effort, you MUST use `pool_org` to set up a project pool and assign work to Koi agents. Using `plan_todo` to linearly track team tasks yourself defeats the entire purpose of multi-agent collaboration and blocks the user from seeing real progress in the pool/kanban view.
 - Do NOT use `plan_todo` for tasks that should be delegated to Koi agents — those tasks belong in `pool_org(create_todo)` on the kanban board, not in your local plan.
 
 **How to use it well:**
-1. Create a concise plan early, usually 2-7 items
+1. Create a concise plan only when it improves visibility, usually 2-7 items
 2. Keep exactly one item as `in_progress` at a time
 3. Mark items `completed` or `cancelled` as soon as their status changes
 4. If the plan changes substantially, replace the whole list instead of patching it awkwardly
-5. Do not use `plan_todo` for very simple one-step requests
+5. Never resend an unchanged list. `plan_todo` is a projection of work, not the work itself.
 
 **CRITICAL - Never exit with unfinished todos:**
 - Before giving a final response (no tool calls), you MUST ensure every todo is either `completed` or `cancelled`.
@@ -5159,7 +4961,7 @@ mod tests {
     use super::{
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
         derive_headless_session_source, extract_tool_minimals_from_history,
-        minimal_tool_result_blocks, parse_route_decision, paths_match_for_pool_binding,
+        minimal_tool_result_blocks, paths_match_for_pool_binding,
         resolve_headless_memory_owner_id, resolve_headless_scene_kind,
         resolve_pool_session_for_workspace, route_tool_allowlist, HeadlessRunOptions,
         SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCIS_POOL,
@@ -5411,16 +5213,9 @@ mod tests {
     }
 
     #[test]
-    fn router_parser_and_tool_groups_are_bounded() {
-        let decision = parse_route_decision(
-            r#"```json
-{"route":"workflow","answer":null,"tool_groups":["files","office"],"needs_plan":true}
-```"#,
-        )
-        .expect("route JSON should parse");
-        assert_eq!(decision.route, "workflow");
-        assert!(decision.needs_plan);
-        let tools = route_tool_allowlist(&decision.tool_groups).expect("bounded tool set");
+    fn tool_group_allowlist_remains_bounded_for_headless_scenes() {
+        let tools = route_tool_allowlist(&["files".to_string(), "office".to_string()])
+            .expect("bounded tool set");
         assert!(tools.contains("file_write"));
         assert!(tools.contains("office"));
         assert!(tools.contains("app_control"));

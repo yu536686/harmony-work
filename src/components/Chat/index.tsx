@@ -373,7 +373,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streaming, toolSteps, planBySession, isRunning, contextUsage } = useSelector(
+  const { messagesBySession, streaming, toolSteps, planBySession, isRunning, contextUsage, runStatusBySession } = useSelector(
     (s: RootState) => s.chat
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
@@ -763,15 +763,16 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   const running = displaySessionId ? isRunning[displaySessionId] ?? false : false;
   const steps = displaySessionId ? toolSteps[displaySessionId] ?? [] : [];
   const activePlan = displaySessionId ? planBySession[displaySessionId] ?? [] : [];
+  const runStatus = displaySessionId ? runStatusBySession[displaySessionId] ?? null : null;
   const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
 
-  const hasTaskPanel = activePlan.length > 0 || steps.length > 0 || activeArtifacts.length > 0;
+  const hasTaskPanel = activePlan.length > 0 || steps.length > 0 || activeArtifacts.length > 0 || runStatus !== null;
   const [taskPanelOpen, setTaskPanelOpen] = useState(true);
-  const [taskPanelTab, setTaskPanelTab] = useState<"todo" | "tools" | "artifacts">("todo");
+  const [taskPanelTab, setTaskPanelTab] = useState<"activity" | "todo" | "tools" | "artifacts">("activity");
   // Top-bar task tab click: toggle the panel when re-selecting the active tab,
   // otherwise switch to the tab and make sure the panel is open.
   const selectTaskTab = useCallback(
-    (tab: "todo" | "tools" | "artifacts") => {
+    (tab: "activity" | "todo" | "tools" | "artifacts") => {
       setTaskPanelTab((prev) => {
         if (prev === tab) {
           setTaskPanelOpen((open) => !open);
@@ -814,7 +815,11 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   }, [running, activePlan.length, steps.length, activeArtifacts.length]);
   useEffect(() => {
     if (!hasTaskPanel) return;
-    if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length > 0) {
+    if (taskPanelTab === "activity" && !runStatus) {
+      if (activePlan.length > 0) setTaskPanelTab("todo");
+      else if (steps.length > 0) setTaskPanelTab("tools");
+      else if (activeArtifacts.length > 0) setTaskPanelTab("artifacts");
+    } else if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length > 0) {
       setTaskPanelTab("tools");
     } else if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length === 0 && activeArtifacts.length > 0) {
       setTaskPanelTab("artifacts");
@@ -827,7 +832,7 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
     } else if (taskPanelTab === "artifacts" && activeArtifacts.length === 0 && steps.length > 0) {
       setTaskPanelTab("tools");
     }
-  }, [taskPanelTab, activePlan.length, steps.length, activeArtifacts.length, hasTaskPanel]);
+  }, [taskPanelTab, activePlan.length, steps.length, activeArtifacts.length, hasTaskPanel, runStatus]);
   const activeSessionKind = classifySession(displaySession);
   const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
@@ -1041,6 +1046,16 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
       const sid = activeSessionIdRef.current;
       if (!sid) return;
       switch (event.type) {
+        case "run_status":
+          dispatch(chatActions.setRunStatus({
+            sessionId: sid,
+            status: { iteration: event.iteration, phase: event.phase, detail: event.detail },
+          }));
+          if (event.iteration === 1) {
+            setTaskPanelOpen(true);
+            setTaskPanelTab("activity");
+          }
+          break;
         case "text_segment_start":
           // Flush any buffered delta before starting a new segment
           flushBufferedDelta(sid);
@@ -2099,6 +2114,16 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
           {hasTaskPanel && (
             <div className="chat-topbar-tasks" role="tablist" aria-label="Task panel tabs">
               <button
+                className={`chat-topbar-task-tab ${taskPanelTab === "activity" && taskPanelOpen ? "active" : ""}`}
+                onClick={() => selectTaskTab("activity")}
+                disabled={!runStatus}
+                role="tab"
+                aria-selected={taskPanelTab === "activity"}
+              >
+                Activity
+                {runStatus && <span className="chat-topbar-task-count">{runStatus.iteration}</span>}
+              </button>
+              <button
                 className={`chat-topbar-task-tab ${taskPanelTab === "todo" && taskPanelOpen ? "active" : ""}`}
                 onClick={() => selectTaskTab("todo")}
                 disabled={activePlan.length === 0}
@@ -2155,6 +2180,16 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
             {hasTaskPanel && taskPanelOpen && (
               <div className="session-task-panel">
                 <div className="session-task-panel-content">
+                      {taskPanelTab === "activity" && runStatus && (
+                        <div className={`agent-run-status phase-${runStatus.phase}`}>
+                          <span className="agent-run-status-dot" aria-hidden="true" />
+                          <div>
+                            <strong>{runStatus.phase === "thinking" ? "正在规划" : runStatus.phase === "executing_tools" ? "正在执行" : "正在调整"}</strong>
+                            <span>{runStatus.detail}</span>
+                          </div>
+                          <small>第 {runStatus.iteration} 轮</small>
+                        </div>
+                      )}
                       {taskPanelTab === "todo" && activePlan.length > 0 && (
                         <div className="tool-steps-scroll">
                           <PlanPanel items={activePlan} />

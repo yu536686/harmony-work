@@ -1636,6 +1636,20 @@
   min-height: 0;
 }
 
+.agent-run-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.agent-run-status > div { display: grid; gap: 3px; flex: 1; }
+.agent-run-status > div span, .agent-run-status small { color: var(--text-secondary); }
+.agent-run-status small { white-space: nowrap; }
+.agent-run-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-muted, rgba(124,106,247,.12)); }
+.agent-run-status.phase-retrying .agent-run-status-dot { background: #d99117; box-shadow: 0 0 0 4px rgba(217,145,23,.14); }
+
 /* Scrollable body — independent from the flex context */
 .tool-steps-scroll {
   overflow-y: auto;

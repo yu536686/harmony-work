@@ -75,6 +75,8 @@ describe("chatApi", () => {
       attachments: null,
       explicitSkills: null,
       personaKoiId: null,
+      modelOverride: null,
+      userContext: null,
       clearPlan: true,
     });
   });

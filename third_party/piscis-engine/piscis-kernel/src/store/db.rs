@@ -1945,7 +1945,7 @@ impl Database {
     pub fn list_memories(&self) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, kind, evidence_session_id, evidence_tool_use_id, last_seen_at \
-             FROM memories ORDER BY confidence DESC, updated_at DESC"
+             FROM memories ORDER BY COALESCE(last_seen_at, updated_at, created_at) DESC, updated_at DESC, confidence DESC"
         )?;
         let rows = stmt.query_map([], Self::map_memory)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1956,7 +1956,7 @@ impl Database {
     pub fn list_memories_for_owner(&self, owner_id: &str) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, kind, evidence_session_id, evidence_tool_use_id, last_seen_at \
-             FROM memories WHERE owner_id = ?1 ORDER BY confidence DESC, updated_at DESC"
+             FROM memories WHERE owner_id = ?1 ORDER BY COALESCE(last_seen_at, updated_at, created_at) DESC, updated_at DESC, confidence DESC"
         )?;
         let rows = stmt.query_map(params![owner_id], Self::map_memory)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

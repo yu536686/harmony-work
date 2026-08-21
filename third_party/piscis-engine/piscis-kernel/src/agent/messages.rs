@@ -29,6 +29,15 @@ pub struct LayeredTokenBreakdownSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// A compact, non-chain-of-thought execution marker. The UI can expose
+    /// this in an expandable activity timeline so users can locate failures
+    /// without the agent narrating internal reasoning into the chat.
+    RunStatus {
+        iteration: u32,
+        /// `thinking` | `executing_tools` | `retrying` | `closing`
+        phase: String,
+        detail: String,
+    },
     /// A new LLM call is starting — frontend should replace the current streaming bubble
     /// with a fresh one (slide old one out, slide new one in).
     /// `iteration` is the 1-based loop iteration index.

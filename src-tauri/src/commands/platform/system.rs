@@ -1228,13 +1228,19 @@ fn run_shell_command(command: &str) -> Result<String, String> {
 /// and npm-based installation work from the packaged app as well as from a
 /// development terminal.
 fn bootstrap_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
-    let mut command = std_command(program);
     #[cfg(target_os = "macos")]
-    command.env(
-        "PATH",
-        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    );
-    command
+    {
+        let mut command = std_command(program);
+        command.env(
+            "PATH",
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        );
+        command
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std_command(program)
+    }
 }
 
 #[cfg(target_os = "linux")]

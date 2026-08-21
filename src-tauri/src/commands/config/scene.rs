@@ -48,23 +48,32 @@ fn modified_ms(path: &Path) -> u128 {
 
 fn skill_dir_signature(skills_dir: &Path) -> SkillDirSignature {
     let mut signature = SkillDirSignature::default();
-    let Ok(entries) = std::fs::read_dir(skills_dir) else {
-        return signature;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+    let scan_roots = [
+        skills_dir.to_path_buf(),
+        crate::skills::provenance::installed_dir(skills_dir),
+        crate::skills::provenance::draft_dir(skills_dir),
+        crate::skills::provenance::learned_dir(skills_dir),
+    ];
+    for root in scan_roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
+        };
+        signature.latest_modified_ms = signature.latest_modified_ms.max(modified_ms(&root));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let skill_file = path.join("SKILL.md");
+            if !skill_file.exists() {
+                continue;
+            }
+            signature.entries += 1;
+            signature.latest_modified_ms = signature
+                .latest_modified_ms
+                .max(modified_ms(&path))
+                .max(modified_ms(&skill_file));
         }
-        let skill_file = path.join("SKILL.md");
-        if !skill_file.exists() {
-            continue;
-        }
-        signature.entries += 1;
-        signature.latest_modified_ms = signature
-            .latest_modified_ms
-            .max(modified_ms(&path))
-            .max(modified_ms(&skill_file));
     }
     signature
 }
