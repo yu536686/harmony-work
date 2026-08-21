@@ -10,7 +10,7 @@ use super::compaction_strategy::{
     CompactionRequest, CompactionResult, CompactionStrategy, CompactionTrigger,
 };
 use super::messages::AgentEvent;
-use super::tool::{ToolContext, ToolRegistry};
+use super::tool::{ToolContext, ToolExecutionMode, ToolRegistry};
 use super::vision;
 use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, MessageContent};
 use crate::policy::{PolicyDecision, PolicyGate};
@@ -33,6 +33,47 @@ const DEFAULT_MAX_ITERATIONS: usize = 24;
 const TOOL_TIMEOUT_SECS: u64 = 120;
 const LLM_MAX_RETRIES: u32 = 3;
 const READ_TOOL_MAX_CONCURRENCY: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolExecutionGroup {
+    Parallel(Vec<usize>),
+    Exclusive(usize),
+}
+
+fn plan_tool_execution_groups(
+    registry: &ToolRegistry,
+    calls: &[(String, String, serde_json::Value)],
+    blocked_ids: &[String],
+) -> Vec<ToolExecutionGroup> {
+    let mut groups = Vec::new();
+    let mut parallel = Vec::new();
+
+    let flush_parallel = |groups: &mut Vec<ToolExecutionGroup>, parallel: &mut Vec<usize>| {
+        if !parallel.is_empty() {
+            groups.push(ToolExecutionGroup::Parallel(std::mem::take(parallel)));
+        }
+    };
+
+    for (index, (id, name, _)) in calls.iter().enumerate() {
+        if blocked_ids.contains(id) {
+            continue;
+        }
+        match registry.execution_mode(name) {
+            ToolExecutionMode::Parallel => {
+                parallel.push(index);
+                if parallel.len() == READ_TOOL_MAX_CONCURRENCY {
+                    flush_parallel(&mut groups, &mut parallel);
+                }
+            }
+            ToolExecutionMode::Exclusive => {
+                flush_parallel(&mut groups, &mut parallel);
+                groups.push(ToolExecutionGroup::Exclusive(index));
+            }
+        }
+    }
+    flush_parallel(&mut groups, &mut parallel);
+    groups
+}
 
 // ── Runtime guard thresholds ─────────────────────────────────────────────────
 // Purpose: ONLY prevent true infinite loops / dead loops where the agent is
@@ -659,7 +700,10 @@ fn stable_hash_input(name: &str, input: &serde_json::Value) -> u64 {
     if let Some(obj) = normalized.as_object_mut() {
         obj.remove("_trace_id");
         if name == "plan_todo" {
-            if let Some(todos) = obj.get_mut("todos").and_then(serde_json::Value::as_array_mut) {
+            if let Some(todos) = obj
+                .get_mut("todos")
+                .and_then(serde_json::Value::as_array_mut)
+            {
                 for todo in todos {
                     if let Some(todo_obj) = todo.as_object_mut() {
                         if let Some(id) = todo_obj.get("id").and_then(serde_json::Value::as_str) {
@@ -672,8 +716,13 @@ fn stable_hash_input(name: &str, input: &serde_json::Value) -> u64 {
                             todo_obj.insert("id".into(), serde_json::Value::String(canonical_id));
                         }
                         for field in ["content", "status"] {
-                            if let Some(value) = todo_obj.get(field).and_then(serde_json::Value::as_str) {
-                                todo_obj.insert(field.into(), serde_json::Value::String(value.trim().to_string()));
+                            if let Some(value) =
+                                todo_obj.get(field).and_then(serde_json::Value::as_str)
+                            {
+                                todo_obj.insert(
+                                    field.into(),
+                                    serde_json::Value::String(value.trim().to_string()),
+                                );
                             }
                         }
                     }
@@ -2108,9 +2157,7 @@ impl AgentLoop {
                     "Recover by retrying the same tool with valid JSON arguments and smaller string fields."
                 }
             };
-            let content = format!(
-                "{err}\n{guidance}\nRaw arguments preview:\n{raw_preview}"
-            );
+            let content = format!("{err}\n{guidance}\nRaw arguments preview:\n{raw_preview}");
             let _ = event_tx
                 .send(AgentEvent::ToolStart {
                     id: id.to_string(),
@@ -3708,39 +3755,10 @@ impl AgentLoop {
                     .await;
             }
 
-            // Execute tools — read-only concurrently, write serially.
-            // Blocked tools (by loop detector) get a synthetic error result instead.
-            let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
+            // Execute tools in model order. Consecutive parallel-safe calls may
+            // overlap, while exclusive tools form barriers on both sides.
+            let mut results_by_call: HashMap<String, Vec<ContentBlock>> = HashMap::new();
 
-            // Separate blocked, read-only, and write calls
-            let active_calls: Vec<_> = tool_calls
-                .iter()
-                .filter(|(id, _, _)| !blocked_tool_ids.contains(id))
-                .cloned()
-                .collect();
-            let read_only_calls: Vec<_> = active_calls
-                .iter()
-                .filter(|(_, name, _)| {
-                    self.registry
-                        .get(name)
-                        .map(|t| t.is_read_only())
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            let write_calls: Vec<_> = active_calls
-                .iter()
-                .filter(|(_, name, _)| {
-                    !self
-                        .registry
-                        .get(name)
-                        .map(|t| t.is_read_only())
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-
-            // Inject synthetic error results for blocked tools
             for (id, name, _) in &tool_calls {
                 if blocked_tool_ids.contains(id) {
                     let msg = warning_messages
@@ -3748,11 +3766,14 @@ impl AgentLoop {
                         .find(|m| m.contains(name.as_str()))
                         .cloned()
                         .unwrap_or_else(|| format!("工具 '{}' 被循环检测器阻断。", name));
-                    tool_result_blocks.push(ContentBlock::ToolResult {
-                        tool_use_id: id.clone(),
-                        content: format!("[循环检测] {}", msg),
-                        is_error: true,
-                    });
+                    results_by_call.insert(
+                        id.clone(),
+                        vec![ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: format!("[循环检测] {}", msg),
+                            is_error: true,
+                        }],
+                    );
                     let _ = event_tx
                         .send(AgentEvent::ToolEnd {
                             id: id.clone(),
@@ -3764,38 +3785,37 @@ impl AgentLoop {
                 }
             }
 
-            // Execute read-only tools concurrently
-            if !read_only_calls.is_empty() {
-                let mut start = 0usize;
-                while start < read_only_calls.len() {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let end = (start + READ_TOOL_MAX_CONCURRENCY).min(read_only_calls.len());
-                    let batch = &read_only_calls[start..end];
-                    let futs: Vec<_> = batch
-                        .iter()
-                        .map(|(id, name, input)| {
-                            self.execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
-                        })
-                        .collect();
-                    for blocks in join_all(futs).await {
-                        tool_result_blocks.extend(blocks);
-                    }
-                    start = end;
-                }
-            }
-
-            // Execute write tools serially
-            for (id, name, input) in &write_calls {
+            for group in
+                plan_tool_execution_groups(self.registry.as_ref(), &tool_calls, &blocked_tool_ids)
+            {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let blocks = self
-                    .execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
-                    .await;
-                tool_result_blocks.extend(blocks);
+                match group {
+                    ToolExecutionGroup::Parallel(indexes) => {
+                        let futures = indexes.iter().map(|index| {
+                            let (id, name, input) = &tool_calls[*index];
+                            self.execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
+                        });
+                        let completed = join_all(futures).await;
+                        for (index, blocks) in indexes.into_iter().zip(completed) {
+                            results_by_call.insert(tool_calls[index].0.clone(), blocks);
+                        }
+                    }
+                    ToolExecutionGroup::Exclusive(index) => {
+                        let (id, name, input) = &tool_calls[index];
+                        let blocks = self
+                            .execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
+                            .await;
+                        results_by_call.insert(id.clone(), blocks);
+                    }
+                }
             }
+
+            let mut tool_result_blocks: Vec<ContentBlock> = tool_calls
+                .iter()
+                .flat_map(|(id, _, _)| results_by_call.remove(id).unwrap_or_default())
+                .collect();
 
             crate::agent::message_utils::ensure_tool_results_complete(
                 &tool_calls,
@@ -4467,13 +4487,15 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
 mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results, confirm_flags_handle,
-        is_structural_schema_error, maybe_schema_correction_envelope,
-        serialize_tool_results_with_receipts, AgentLoop, CIRCUIT_BREAKER_THRESHOLD, LoopDetectorState,
-        LoopLevel,
-        CRITICAL_THRESHOLD, CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS,
-        CTX_TRIM_HEAD, CTX_TRIM_TAIL, DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
+        is_structural_schema_error, maybe_schema_correction_envelope, plan_tool_execution_groups,
+        serialize_tool_results_with_receipts, AgentLoop, LoopDetectorState, LoopLevel,
+        ToolExecutionGroup, CIRCUIT_BREAKER_THRESHOLD, CRITICAL_THRESHOLD,
+        CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+        DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
     };
-    use crate::agent::tool::{Tool, ToolContext, ToolRegistry, ToolSettings};
+    use crate::agent::tool::{
+        Tool, ToolContext, ToolExecutionMode, ToolMetadata, ToolRegistry, ToolSettings,
+    };
     use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
     use crate::policy::PolicyGate;
     use anyhow::Result;
@@ -4629,6 +4651,74 @@ mod tests {
         ) -> Result<crate::agent::tool::ToolResult> {
             unreachable!("schema helper tool should not be executed in unit tests");
         }
+    }
+
+    struct ScheduledTool {
+        name: &'static str,
+        execution: ToolExecutionMode,
+    }
+
+    #[async_trait]
+    impl Tool for ScheduledTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "Tool used to test ordered scheduling."
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        fn metadata(&self) -> ToolMetadata {
+            ToolMetadata {
+                execution: self.execution,
+                ..ToolMetadata::legacy(self.execution == ToolExecutionMode::Parallel)
+            }
+        }
+
+        async fn call(
+            &self,
+            _input: Value,
+            _ctx: &ToolContext,
+        ) -> Result<crate::agent::tool::ToolResult> {
+            unreachable!("scheduler unit test does not execute tools")
+        }
+    }
+
+    #[test]
+    fn tool_scheduler_preserves_barriers_and_model_order() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(ScheduledTool {
+            name: "read_a",
+            execution: ToolExecutionMode::Parallel,
+        }));
+        registry.register(Box::new(ScheduledTool {
+            name: "read_b",
+            execution: ToolExecutionMode::Parallel,
+        }));
+        registry.register(Box::new(ScheduledTool {
+            name: "write",
+            execution: ToolExecutionMode::Exclusive,
+        }));
+
+        let calls = vec![
+            ("a".into(), "read_a".into(), json!({})),
+            ("b".into(), "read_b".into(), json!({})),
+            ("c".into(), "write".into(), json!({})),
+            ("d".into(), "read_a".into(), json!({})),
+        ];
+
+        assert_eq!(
+            plan_tool_execution_groups(&registry, &calls, &[]),
+            vec![
+                ToolExecutionGroup::Parallel(vec![0, 1]),
+                ToolExecutionGroup::Exclusive(2),
+                ToolExecutionGroup::Parallel(vec![3]),
+            ]
+        );
     }
 
     // ── Test data helpers ─────────────────────────────────────────────────────
