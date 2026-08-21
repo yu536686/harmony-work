@@ -10,11 +10,11 @@ pub mod harmony_cut;
 pub mod harvis_creative;
 pub mod im_channel;
 pub mod im_send;
-pub mod presentation;
 #[cfg(target_os = "windows")]
 pub mod office;
 #[cfg(target_os = "windows")]
 pub mod powershell;
+pub mod presentation;
 pub mod skill_list;
 pub mod skill_manage;
 pub mod system_info;

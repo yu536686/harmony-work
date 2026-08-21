@@ -44,8 +44,11 @@ const READ_TOOL_MAX_CONCURRENCY: usize = 4;
 const TOOL_CALL_HISTORY_SIZE: usize = 48;
 const WARNING_THRESHOLD: usize = 6;
 const CRITICAL_THRESHOLD: usize = 12;
-const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
-const PLAN_BOOKKEEPING_WARNING_THRESHOLD: usize = 2;
+// A repeated call needs several observed, unchanged results before it is
+// rejected. The previous value (3) converted a normal recoverable retry into
+// a user-visible "global circuit breaker", especially for plan updates.
+const CIRCUIT_BREAKER_THRESHOLD: usize = 8;
+const PLAN_REPEAT_REMINDERS: &[usize] = &[3, 5, 8];
 const RESEARCH_WARNING_THRESHOLD: usize = 8;
 const RESEARCH_CRITICAL_THRESHOLD: usize = 16;
 const RESEARCH_RECENT_WINDOW: usize = 24;
@@ -244,7 +247,6 @@ enum LoopDetector {
     GlobalCircuitBreaker,
     /// A visible plan is bookkeeping. Repeating it should redirect the model
     /// to actual work, never halt all tool execution for the task.
-    PlanBookkeeping,
     /// Vision-agent screenshot-analyze loop: the agent is spending too much
     /// time re-describing the scene with screenshots instead of committing
     /// to concrete actions (click, type, press). Nudges the model to
@@ -333,30 +335,33 @@ impl LoopDetectorState {
     ) -> LoopDetectionResult {
         let pending_hash = stable_hash_input(pending_name, pending_input);
 
-        if pending_name == "plan_todo" {
-            let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
-            if no_progress_streak >= PLAN_BOOKKEEPING_WARNING_THRESHOLD {
+        // 1. Per-call no-progress guard: same tool+input with no progress.
+        // It deliberately guards only this call; other calls in the same
+        // model turn remain executable so a model can recover with a new
+        // action instead of being forced into a fabricated final answer.
+        let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
+        if is_progress_projection_tool(pending_name) {
+            let attempted_count = no_progress_streak.saturating_add(1);
+            if PLAN_REPEAT_REMINDERS.contains(&attempted_count) {
                 return LoopDetectionResult {
                     level: LoopLevel::Warning,
-                    detector: Some(LoopDetector::PlanBookkeeping),
-                    count: no_progress_streak,
+                    detector: Some(LoopDetector::GlobalCircuitBreaker),
+                    count: attempted_count,
                     message: format!(
-                        "计划板已连续{}次没有变化。不要再调用 plan_todo；现在直接调用能推进当前步骤的真实工具。",
-                        no_progress_streak
+                        "计划工具 '{}' 已连续{}次提交相同内容。计划板没有实际变化；请执行下一项真实工作，只有状态或内容变化时再更新计划。",
+                        pending_name, attempted_count
                     ),
                 };
             }
+            return LoopDetectionResult::ok();
         }
-
-        // 1. Global circuit breaker: same tool+input with no progress
-        let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
         if no_progress_streak >= CIRCUIT_BREAKER_THRESHOLD {
             return LoopDetectionResult {
                 level: LoopLevel::Critical,
                 detector: Some(LoopDetector::GlobalCircuitBreaker),
                 count: no_progress_streak,
                 message: format!(
-                    "全局熔断：工具 '{}' 已连续{}次调用且结果无变化，强制终止该工具调用。请换一种方法。",
+                    "重复调用保护：工具 '{}' 已连续{}次调用且结果无变化，本次调用被拒绝。请换参数、换工具或基于已有结果收束。",
                     pending_name, no_progress_streak
                 ),
             };
@@ -695,6 +700,14 @@ fn same_tool_family(a: &str, b: &str) -> bool {
     let a_research = KNOWLEDGE_GATHERING_TOOLS.iter().any(|t| a.contains(t));
     let b_research = KNOWLEDGE_GATHERING_TOOLS.iter().any(|t| b.contains(t));
     a_research && b_research
+}
+
+/// `plan_todo` is a progress projection, not the work itself. Repeated
+/// identical updates should be ignored by the tool and reminded at measured
+/// intervals, but they must never consume the entire turn by hard-blocking
+/// every call in the batch.
+fn is_progress_projection_tool(name: &str) -> bool {
+    matches!(name, "plan_todo" | "plan_update" | "plan_write")
 }
 
 /// Compute a stable hash of a single tool result content string.
@@ -3147,6 +3160,16 @@ impl AgentLoop {
                 messages.len()
             );
 
+            // Signal the inspectable activity timeline before requesting the model.
+            // This is deliberately operational state, never hidden reasoning.
+            let _ = event_tx
+                .send(AgentEvent::RunStatus {
+                    iteration: _iteration as u32 + 1,
+                    phase: "thinking".to_string(),
+                    detail: "正在判断下一步并选择必要工具".to_string(),
+                })
+                .await;
+
             // Signal frontend that a new LLM call is starting — it should replace the
             // current streaming bubble with a fresh one (slide old out, slide new in).
             let _ = event_tx
@@ -3649,20 +3672,13 @@ impl AgentLoop {
                 }
             }
 
-            let all_tools_blocked =
-                !blocked_tool_ids.is_empty() && blocked_tool_ids.len() == tool_calls.len();
-
-            // If all tool calls are blocked, surface a stronger reminder but still
-            // let the agent see synthetic tool failures and produce a final answer
-            // from the evidence it already has.
-            if all_tools_blocked {
-                let combined_msg = warning_messages.join("\n");
-                let _ = event_tx
-                    .send(AgentEvent::TextDelta {
-                        delta: format!("\n\n[系统] {}\n", combined_msg),
-                    })
-                    .await;
-            }
+            let _ = event_tx
+                .send(AgentEvent::RunStatus {
+                    iteration: _iteration as u32 + 1,
+                    phase: "executing_tools".to_string(),
+                    detail: format!("正在执行 {} 个工具调用", tool_calls.len()),
+                })
+                .await;
 
             // Build assistant message with tool calls
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
@@ -3825,9 +3841,9 @@ impl AgentLoop {
                 }
             }
 
-            let warning_reminder = if all_tools_blocked {
+            let warning_reminder = if !blocked_tool_ids.is_empty() {
                 Some(format!(
-                    "[系统提醒]\n{}\n本轮所有工具调用都已被循环检测器阻断。现在必须停止继续沿用刚才的工具路径，直接基于已有证据给出当前最佳答复；如果信息仍有缺口，请明确列出不确定项、现有判断依据与后续建议，不要继续调用工具。",
+                    "[运行时提醒]\n{}\n只有上述重复调用被拒绝，其他工具仍可使用。请基于已有结果选择不同的下一步；不要重复相同参数。",
                     warning_messages.join("\n")
                 ))
             } else if !warning_messages.is_empty() && blocked_tool_ids.is_empty() {
@@ -3882,6 +3898,13 @@ impl AgentLoop {
             }
 
             if let Some(reminder) = warning_reminder {
+                let _ = event_tx
+                    .send(AgentEvent::RunStatus {
+                        iteration: _iteration as u32 + 1,
+                        phase: "retrying".to_string(),
+                        detail: "检测到重复路径，正在基于已有结果调整下一步".to_string(),
+                    })
+                    .await;
                 let reminder_msg = LlmMessage {
                     role: "user".into(),
                     content: MessageContent::text(&reminder),
@@ -4445,8 +4468,8 @@ mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results, confirm_flags_handle,
         is_structural_schema_error, maybe_schema_correction_envelope,
-        serialize_tool_results_with_receipts, stable_hash_result, AgentLoop, LoopDetector,
-        LoopDetectorState, LoopLevel, CIRCUIT_BREAKER_THRESHOLD,
+        serialize_tool_results_with_receipts, AgentLoop, CIRCUIT_BREAKER_THRESHOLD, LoopDetectorState,
+        LoopLevel,
         CRITICAL_THRESHOLD, CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS,
         CTX_TRIM_HEAD, CTX_TRIM_TAIL, DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
     };
@@ -4467,27 +4490,24 @@ mod tests {
     }
 
     #[test]
-    fn repeated_plan_bookkeeping_never_uses_the_global_circuit_breaker() {
-        let input = json!({
-            "todos": [{
-                "id": "todo-1",
-                "content": "read the data",
-                "status": "in_progress"
-            }]
-        });
-        let batch = vec![("call-plan".to_string(), "plan_todo".to_string(), input.clone())];
+    fn plan_projection_warns_without_becoming_a_hard_circuit_breaker() {
         let mut detector = LoopDetectorState {
             history: Vec::new(),
             consecutive_vision_only_turns: 0,
         };
-
-        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
-            detector.record("plan_todo", &input, stable_hash_result("plan unchanged"));
+        let input = json!({"todos": [{"id": "inspect", "status": "in_progress"}]});
+        for _ in 0..2 {
+            detector.record("plan_todo", &input, 42);
         }
+        let detection = detector.detect("plan_todo", &input, &[]);
+        assert_eq!(detection.level, LoopLevel::Warning);
+        assert_eq!(detection.count, 3);
 
-        let detection = detector.detect("plan_todo", &input, &batch);
-        assert!(matches!(detection.level, LoopLevel::Warning));
-        assert!(matches!(detection.detector, Some(LoopDetector::PlanBookkeeping)));
+        for _ in 0..5 {
+            detector.record("shell", &json!({"command": "dir"}), 7);
+        }
+        let shell = detector.detect("shell", &json!({"command": "dir"}), &[]);
+        assert_ne!(shell.level, LoopLevel::Critical);
     }
 
     // ── Mock LLM clients ──────────────────────────────────────────────────────

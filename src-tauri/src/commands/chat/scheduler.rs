@@ -292,11 +292,6 @@ pub async fn trigger_consolidation_for_session(
         )
     };
 
-    {
-        let db = state.db.lock().await;
-        let _ = db.record_task_run(&task.id);
-    }
-
     let app_h = state.app_handle.clone();
     let task_id_clone = task.id.clone();
     let db_arc = state.db.clone();
@@ -579,12 +574,6 @@ pub async fn run_task_now(state: State<'_, AppState>, task_id: String) -> Result
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Task {} not found", task_id))?
     };
-
-    // Record the run
-    {
-        let db = state.db.lock().await;
-        db.record_task_run(&task_id).map_err(|e| e.to_string())?;
-    }
 
     // Execute the task asynchronously
     let app_h = state.app_handle.clone();

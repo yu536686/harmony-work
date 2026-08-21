@@ -1,6 +1,6 @@
 # 小亨 WorkBuddy 设计规范
 
-> 版本：0.8.9 Frameless Project Workspace
+> 版本：0.9.1 Harness v2 Workspace
 > 状态：当前项目的唯一前端视觉基线
 
 ## 使用规则

@@ -172,6 +172,12 @@ export interface ContextUsageSnapshot {
   layeredBreakdown?: LayeredTokenBreakdownSnapshot;
 }
 
+export interface RunStatusSnapshot {
+  iteration: number;
+  phase: "thinking" | "executing_tools" | "retrying" | "closing";
+  detail: string;
+}
+
 /** p8 — layered token attribution mirroring the Rust
  *  `LayeredTokenBreakdownSnapshot`. All values are raw token estimates;
  *  sum approximately equals `estimatedInputTokens`. */
@@ -216,6 +222,8 @@ interface ChatState {
    *  progress indicator next to the send button. Populated from AgentEvent.context_usage
    *  during runs and seeded from get_context_preview on session switch / run completion. */
   contextUsage: Record<string, ContextUsageSnapshot>;
+  /** Latest explicit runtime phase for the expandable activity timeline. */
+  runStatusBySession: Record<string, RunStatusSnapshot>;
 }
 
 export const chatSlice = createSlice({
@@ -230,6 +238,7 @@ export const chatSlice = createSlice({
     frozenBubble: {},
     pendingSummary: {},
     contextUsage: {},
+    runStatusBySession: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
@@ -304,6 +313,9 @@ export const chatSlice = createSlice({
     },
     clearContextUsage: (state, action: PayloadAction<string>) => {
       delete state.contextUsage[action.payload];
+    },
+    setRunStatus: (state, action: PayloadAction<{ sessionId: string; status: RunStatusSnapshot }>) => {
+      state.runStatusBySession[action.payload.sessionId] = action.payload.status;
     },
     /** Called on `done`: snapshot streaming text into frozenBubble + pendingSummary, clear streaming.
      *

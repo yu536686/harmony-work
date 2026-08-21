@@ -103,14 +103,22 @@ impl Tool for PresentationTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let path_str = match input["path"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let path_str = match input["path"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(path) => path,
             None => return Ok(ToolResult::err("Missing required parameter: path")),
         };
         if !path_str.to_lowercase().ends_with(".pptx") {
             return Ok(ToolResult::err("path must end with .pptx"));
         }
-        match input["title"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        match input["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(_) => {}
             None => return Ok(ToolResult::err("Missing required parameter: title")),
         };
@@ -119,7 +127,9 @@ impl Tool for PresentationTool {
             _ => return Ok(ToolResult::err("slides must be a non-empty array")),
         };
         if slides.len() > 40 {
-            return Ok(ToolResult::err("slides array is too large; split decks above 40 slides"));
+            return Ok(ToolResult::err(
+                "slides array is too large; split decks above 40 slides",
+            ));
         }
 
         let output_path = resolve_path(path_str, &ctx.workspace_root);
@@ -144,7 +154,12 @@ impl Tool for PresentationTool {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let output = match timeout(Duration::from_secs(PRESENTATION_TIMEOUT_SECS), child.wait_with_output()).await {
+        let output = match timeout(
+            Duration::from_secs(PRESENTATION_TIMEOUT_SECS),
+            child.wait_with_output(),
+        )
+        .await
+        {
             Ok(result) => result?,
             Err(_) => {
                 let _ = std::fs::remove_file(&spec_path);

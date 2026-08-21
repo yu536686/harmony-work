@@ -80,12 +80,26 @@ pub struct SkillList {
 
 #[tauri::command]
 pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+    let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
+    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    loader.load_all().map_err(|e| e.to_string())?;
+    let fs_skill_ids: std::collections::HashSet<String> = loader
+        .list_skills()
+        .into_iter()
+        .map(|s| s.skill_id.clone())
+        .collect();
+
     let db = state.db.lock().await;
     let skills = db.list_skills().map_err(|e| e.to_string())?;
     // Filter out any stale "unnamed" entries left by failed skill parses
     let skills: Vec<_> = skills
         .into_iter()
-        .filter(|s| s.name != "unnamed" && s.id != "unnamed")
+        .filter(|s| s.name != "unnamed" && s.id != "unnamed" && fs_skill_ids.contains(&s.id))
         .collect();
     let total = skills.len();
     Ok(SkillList { skills, total })
