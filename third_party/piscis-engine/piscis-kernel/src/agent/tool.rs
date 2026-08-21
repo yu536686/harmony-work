@@ -62,6 +62,37 @@ impl ToolMetadata {
             produces_artifacts: false,
         }
     }
+
+    pub fn legacy_for(name: &str, read_only: bool) -> Self {
+        let mut metadata = Self::legacy(read_only);
+        if matches!(
+            name,
+            "browser"
+                | "wmi"
+                | "office"
+                | "presentation"
+                | "pdf"
+                | "email"
+                | "vision_context"
+                | "harmony_cut"
+                | "uia"
+                | "screen_capture"
+                | "desktop_automation"
+                | "com"
+                | "com_invoke"
+                | "call_fish"
+                | "call_koi"
+                | "pool_org"
+                | "im_channel_list"
+                | "im_channel_connect"
+                | "im_channel_binding_lookup"
+                | "im_channel_binding_list"
+                | "skill_manage"
+        ) {
+            metadata.exposure = ToolExposure::Deferred;
+        }
+        metadata
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,6 +232,18 @@ impl ToolResult {
         self.image = Some(image);
         self
     }
+    pub fn with_artifacts(
+        mut self,
+        artifacts: Vec<crate::tools::output::ToolArtifact>,
+    ) -> Self {
+        self.meta.get_or_insert_with(Default::default).artifacts = artifacts;
+        self
+    }
+
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.meta.get_or_insert_with(Default::default).data = Some(data);
+        self
+    }
 }
 
 /// The Tool trait — all agent tools implement this
@@ -256,7 +299,7 @@ pub trait Tool: Send + Sync {
     /// The default preserves legacy behavior; specialised tools can opt into
     /// deferred discovery or stronger risk metadata without changing callers.
     fn metadata(&self) -> ToolMetadata {
-        ToolMetadata::legacy(self.is_read_only())
+        ToolMetadata::legacy_for(self.name(), self.is_read_only())
     }
 
     /// Whether this tool requires user confirmation
@@ -718,6 +761,18 @@ mod tests {
         assert_eq!(metadata.exposure, ToolExposure::Core);
         assert_eq!(metadata.execution, ToolExecutionMode::Exclusive);
         assert_eq!(metadata.risk, ToolRisk::Write);
+    }
+
+    #[test]
+    fn specialised_legacy_tools_are_deferred_by_default() {
+        assert_eq!(
+            ToolMetadata::legacy_for("presentation", false).exposure,
+            ToolExposure::Deferred
+        );
+        assert_eq!(
+            ToolMetadata::legacy_for("file_read", true).exposure,
+            ToolExposure::Core
+        );
     }
 
     #[test]

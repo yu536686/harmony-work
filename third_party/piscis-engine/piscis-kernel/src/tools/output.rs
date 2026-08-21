@@ -1,6 +1,7 @@
 //! Shared tool output formatting — smart truncation, error envelopes, diagnostics.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::Write;
 
 /// Machine-readable error category for tool failures.
@@ -38,12 +39,33 @@ impl ToolErrorCode {
 
 /// Metadata appended to successful tool output.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolArtifact {
+    pub name: String,
+    #[serde(default = "default_artifact_type")]
+    pub artifact_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default)]
+    pub content_summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+fn default_artifact_type() -> String {
+    "file".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolMeta {
     pub truncated: bool,
     pub total_bytes: usize,
     pub shown_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ToolArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }
 
 /// Truncation strategy for large tool output.
@@ -105,6 +127,7 @@ pub fn smart_truncate(s: &str, max_bytes: usize, strategy: TruncateStrategy) -> 
                 total_bytes: total,
                 shown_bytes: total,
                 hint: None,
+                ..Default::default()
             },
         );
     }
@@ -135,6 +158,7 @@ fn head_tail_truncate(s: &str, max_bytes: usize, total: usize) -> (String, ToolM
             total_bytes: total,
             shown_bytes: shown,
             hint: Some("Output was truncated. Re-run with a narrower command or filter.".into()),
+            ..Default::default()
         },
     )
 }
@@ -163,6 +187,7 @@ fn error_aware_truncate(s: &str, max_bytes: usize, total: usize) -> (String, Too
             total_bytes: total,
             shown_bytes: picked.len(),
             hint: Some("Non-zero exit or errors detected; key error lines preserved.".into()),
+            ..Default::default()
         },
     )
 }

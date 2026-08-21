@@ -8,7 +8,7 @@
 //! configuration and delegates execution to it, invoking
 //! `build_request` before each outgoing request.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::llm::LlmMessage;
 
@@ -69,7 +69,7 @@ impl HarnessRunner {
         let tools = self
             .config
             .registry
-            .to_tool_defs(self.config.layered_prompt.tool_mode);
+            .direct_tool_defs(self.config.layered_prompt.tool_mode, &HashSet::new());
         ContextBuilder::new(
             messages,
             tool_minimals,

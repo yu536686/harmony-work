@@ -762,8 +762,12 @@ mod tests {
 
     #[test]
     fn accepts_an_absolute_user_selected_save_target() {
-        let path = save_target_path(r"C:\Users\Admin\Desktop\Harvis 成品.mp3").unwrap();
-        assert_eq!(path.to_string_lossy(), r"C:\Users\Admin\Desktop\Harvis 成品.mp3");
+        #[cfg(target_os = "windows")]
+        let expected = r"C:\Users\Admin\Desktop\Harvis 成品.mp3";
+        #[cfg(not(target_os = "windows"))]
+        let expected = "/tmp/Harvis 成品.mp3";
+        let path = save_target_path(expected).unwrap();
+        assert_eq!(path.to_string_lossy(), expected);
     }
 
     #[test]

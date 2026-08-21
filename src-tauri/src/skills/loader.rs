@@ -518,7 +518,7 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        const HARVIS_SKILL_VERSION: &str = "1.2";
+        const HARVIS_SKILL_VERSION: &str = "2.0";
         if let Ok(existing) = std::fs::read_to_string(&skill_file) {
             if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
                 return Ok(());
@@ -530,9 +530,12 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "1.2"
+version: "2.0"
 tools:
-  - harvis_creative
+  - harvis_image_generate
+  - harvis_music_generate
+  - harvis_job_status
+  - harvis_save_result
 triggers:
   - "生成音乐"
   - "背景音乐"
@@ -545,31 +548,31 @@ triggers:
 
 # Harvis AI 创作
 
-仅在用户明确要求生成音乐或图片时使用 `harvis_creative`。先根据用户信息组织一个完整的单次请求，不要为了规划而反复调用工具。工具创建任务前会要求用户确认。
+仅在用户明确要求生成音乐或图片时使用本技能。先组织完整请求，不要为了规划反复调用工具。若工具尚未出现在当前工具列表，先调用一次 `tool_search` 搜索 `Harvis image poster` 或 `Harvis music BGM`，再直接调用匹配工具。
 
 ## 音乐
 
-调用 `create_music`，最小请求为：
+调用 `harvis_music_generate`，最小请求为：
 
 ```json
-{"action":"create_music","request":{"prompt":"elegant luxury instrumental, piano and strings, 45-second brand BGM, no vocals","title":"品牌 BGM","duration":45}}
+{"prompt":"elegant luxury instrumental, piano and strings, 45-second brand BGM, no vocals","title":"品牌 BGM","duration":45}
 ```
 
 默认使用纯音乐。给出简洁英文 `prompt`（或 `tags`）、标题和时长；除非用户明确要求人声，否则加入 `instrumental only, no vocals`，不要写歌词或演唱要求。
 
 ## 图片
 
-文生图直接调用 `create_image`，不需要参考图，也不要声称 Harvis 只能图生图：
+文生图直接调用 `harvis_image_generate`，不需要参考图，也不要声称 Harvis 只能图生图：
 
 ```json
-{"action":"create_image","request":{"mode":"text","prompt":"高端腕表主视觉海报，香槟金棚拍，留白构图","canvasPreset":"vertical"}}
+{"prompt":"高端腕表主视觉海报，香槟金棚拍，留白构图","canvas_preset":"vertical"}
 ```
 
-比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 `outputWidth` 和 `outputHeight`）。只有用户已经在创作界面上传并明确提供 `referenceIds` 时，才使用 `mode: "image"` 图生图。
+比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 `output_width` 和 `output_height`）。只有用户已经上传并明确提供 `reference_ids` 时才传参考图；不传即为文生图。
 
 ## 进度与交付
 
-任务提交后报告 job id 和当前状态。需要查询时调用 `get_job`；不要连续轮询同一个未完成任务。任务成功后，先调用 `save_to_workspace`，它会把全部成品下载到当前会话工作区的 `marketing-assets` 目录，并报告真实 `localPath`。`stage_for_chat` 只负责归档到用户素材库，不能视为已保存到本机；除非用户明确要求继续处理，不要自动发送或执行额外操作。
+任务提交后报告 job id 和当前状态。需要查询时调用 `harvis_job_status`；不要连续轮询同一个未完成任务。任务成功后调用 `harvis_save_result` 并选择 `workspace`，它会把全部成品下载到当前会话工作区的 `marketing-assets` 目录。`material_library` 只负责归档到素材库，不能视为已保存到本机。
 "#,
         )?;
         Ok(())

@@ -300,6 +300,7 @@ impl Tool for FileReadTool {
                     total_bytes: metadata.len() as usize,
                     shown_bytes: preview.len(),
                     hint: Some(hint),
+                    ..Default::default()
                 },
             ));
         }
@@ -347,6 +348,7 @@ impl Tool for FileReadTool {
                     total_bytes: content.len(),
                     shown_bytes: numbered.len(),
                     hint,
+                    ..Default::default()
                 },
             ))
         } else {

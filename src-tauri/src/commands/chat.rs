@@ -140,6 +140,10 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
             "media" => &[
                 "harmony_cut",
                 "harvis_creative",
+                "harvis_image_generate",
+                "harvis_music_generate",
+                "harvis_job_status",
+                "harvis_save_result",
                 "file_list",
                 "file_search",
                 "process_control",
@@ -903,7 +907,10 @@ async fn build_chat_prompt_artifacts(
     let registry = Arc::new(registry);
     // Chat budget estimation uses the same Minimal injection mode the
     // harness will actually send, so the token accounting stays honest.
-    let tool_defs = registry.to_tool_defs(piscis_kernel::agent::tool::ToolDefMode::Minimal);
+    let tool_defs = registry.direct_tool_defs(
+        piscis_kernel::agent::tool::ToolDefMode::Minimal,
+        &std::collections::HashSet::new(),
+    );
 
     let (bound_pool_id, pool_context, bound_pool_name) = if persona_koi.is_some() {
         (None, String::new(), None)

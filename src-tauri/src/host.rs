@@ -640,6 +640,18 @@ impl HostTools for DesktopHostTools {
 
         if self.is_enabled("harvis_creative") {
             registry.register(Box::new(crate::tools::harvis_creative::HarvisCreativeTool));
+            registry.register(Box::new(
+                crate::tools::harvis_creative::HarvisImageGenerateTool,
+            ));
+            registry.register(Box::new(
+                crate::tools::harvis_creative::HarvisMusicGenerateTool,
+            ));
+            registry.register(Box::new(
+                crate::tools::harvis_creative::HarvisJobStatusTool,
+            ));
+            registry.register(Box::new(
+                crate::tools::harvis_creative::HarvisSaveResultTool,
+            ));
         }
 
         if self.is_enabled("presentation") {

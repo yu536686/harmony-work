@@ -30,7 +30,6 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
 const DEFAULT_MAX_ITERATIONS: usize = 24;
-const TOOL_TIMEOUT_SECS: u64 = 120;
 const LLM_MAX_RETRIES: u32 = 3;
 const READ_TOOL_MAX_CONCURRENCY: usize = 4;
 
@@ -73,6 +72,51 @@ fn plan_tool_execution_groups(
     }
     flush_parallel(&mut groups, &mut parallel);
     groups
+}
+
+fn resolve_tool_search(
+    registry: &ToolRegistry,
+    input: &serde_json::Value,
+    loaded_deferred: &mut HashSet<String>,
+) -> std::result::Result<serde_json::Value, String> {
+    let query = input
+        .get("query")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .ok_or_else(|| "tool_search requires a non-empty query".to_string())?;
+    let limit = input
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5)
+        .clamp(1, 12) as usize;
+    let hits = registry.search_deferred(query, limit);
+    let tools: Vec<_> = hits
+        .into_iter()
+        .map(|hit| {
+            loaded_deferred.insert(hit.definition.name.clone());
+            serde_json::json!({
+                "name": hit.definition.name,
+                "description": hit.definition.description,
+                "input_schema": hit.definition.input_schema,
+                "category": hit.metadata.category,
+                "risk": hit.metadata.risk,
+                "execution": hit.metadata.execution,
+                "produces_artifacts": hit.metadata.produces_artifacts,
+                "score": hit.score,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "query": query,
+        "loaded_count": tools.len(),
+        "tools": tools,
+        "instruction": if tools.is_empty() {
+            "No matching specialised tool was found. Continue with core tools or refine the query once."
+        } else {
+            "Matching tool schemas are now loaded for this run. Call the best matching tool next."
+        }
+    }))
 }
 
 // ── Runtime guard thresholds ─────────────────────────────────────────────────
@@ -2337,6 +2381,7 @@ impl AgentLoop {
         } else {
             match self.registry.get(name) {
                 Some(tool) => {
+                    let tool_timeout_secs = tool.metadata().timeout_secs.max(1);
                     // Log key input fields to aid debugging (path, command, query, etc.)
                     let input_hint = match name {
                         "file_read" | "file_write" => {
@@ -2426,7 +2471,7 @@ impl AgentLoop {
                     tokio::select! {
                         biased;
                         res = tokio::time::timeout(
-                            std::time::Duration::from_secs(TOOL_TIMEOUT_SECS),
+                            std::time::Duration::from_secs(tool_timeout_secs),
                             tool.call(input.clone(), &tool_ctx),
                         ) => {
                             match res {
@@ -2443,10 +2488,10 @@ impl AgentLoop {
                                     super::tool::ToolResult::err(friendly)
                                 }
                                 Err(_) => {
-                                    warn!("Tool '{}' timed out after {}s", name, TOOL_TIMEOUT_SECS);
+                                    warn!("Tool '{}' timed out after {}s", name, tool_timeout_secs);
                                     super::tool::ToolResult::err(format!(
                                         "工具 '{}' 执行超时（{}秒）。可能原因：命令阻塞、网络超时或进程挂起。请尝试简化命令或分步执行。",
-                                        name, TOOL_TIMEOUT_SECS
+                                        name, tool_timeout_secs
                                     ))
                                 }
                             }
@@ -2497,6 +2542,30 @@ impl AgentLoop {
                 is_error: result.is_error,
             })
             .await;
+
+        if let (Some(db_arc), Some(meta)) = (&self.db, result.meta.as_ref()) {
+            if !meta.artifacts.is_empty() {
+                let db = db_arc.lock().await;
+                for artifact in &meta.artifacts {
+                    let metadata_json = artifact
+                        .metadata
+                        .as_ref()
+                        .and_then(|value| serde_json::to_string(value).ok());
+                    if let Err(error) = db.add_session_artifact(
+                        &ctx.session_id,
+                        &artifact.name,
+                        &artifact.artifact_type,
+                        artifact.uri.as_deref(),
+                        &artifact.content_summary,
+                        Some(name),
+                        Some(id),
+                        metadata_json.as_deref(),
+                    ) {
+                        warn!("Failed to persist artifact from '{}': {}", name, error);
+                    }
+                }
+            }
+        }
 
         if let Some(ref db_arc) = self.db {
             let action = format!("{} [trace:{}]", audit_action_label(name, input), trace_id);
@@ -2904,6 +2973,7 @@ impl AgentLoop {
         // from the DB backfill on demand in the read path (commands/chat.rs).
         let mut tool_minimals: HashMap<String, String> = HashMap::new();
         let mut tool_names_by_id: HashMap<String, String> = HashMap::new();
+        let mut loaded_deferred_tools: HashSet<String> = HashSet::new();
 
         // Determine the turn_index for this run once, so all messages share the same index.
         // This must be computed before any messages are written.
@@ -3024,7 +3094,10 @@ impl AgentLoop {
             }
             let tool_defs = self
                 .registry
-                .to_tool_defs(crate::agent::tool::ToolDefMode::Minimal);
+                .direct_tool_defs(
+                    crate::agent::tool::ToolDefMode::Minimal,
+                    &loaded_deferred_tools,
+                );
 
             // Drain pending notifications (e.g. @mention alerts from other Koi)
             if let Some(ref rx_mutex) = self.notification_rx {
@@ -3804,9 +3877,44 @@ impl AgentLoop {
                     }
                     ToolExecutionGroup::Exclusive(index) => {
                         let (id, name, input) = &tool_calls[index];
-                        let blocks = self
-                            .execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
-                            .await;
+                        let blocks = if name == "tool_search" {
+                            let _ = event_tx
+                                .send(AgentEvent::ToolStart {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                })
+                                .await;
+                            let (content, is_error) =
+                                match resolve_tool_search(
+                                    self.registry.as_ref(),
+                                    input,
+                                    &mut loaded_deferred_tools,
+                                ) {
+                                    Ok(payload) => (
+                                        serde_json::to_string_pretty(&payload)
+                                            .unwrap_or_else(|_| payload.to_string()),
+                                        false,
+                                    ),
+                                    Err(error) => (error, true),
+                                };
+                            let _ = event_tx
+                                .send(AgentEvent::ToolEnd {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    result: content.clone(),
+                                    is_error,
+                                })
+                                .await;
+                            vec![ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content,
+                                is_error,
+                            }]
+                        } else {
+                            self.execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
+                                .await
+                        };
                         results_by_call.insert(id.clone(), blocks);
                     }
                 }
@@ -4488,13 +4596,13 @@ mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results, confirm_flags_handle,
         is_structural_schema_error, maybe_schema_correction_envelope, plan_tool_execution_groups,
-        serialize_tool_results_with_receipts, AgentLoop, LoopDetectorState, LoopLevel,
-        ToolExecutionGroup, CIRCUIT_BREAKER_THRESHOLD, CRITICAL_THRESHOLD,
+        resolve_tool_search, serialize_tool_results_with_receipts, AgentLoop, LoopDetectorState,
+        LoopLevel, ToolExecutionGroup, CIRCUIT_BREAKER_THRESHOLD, CRITICAL_THRESHOLD,
         CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
         DEFAULT_MAX_ITERATIONS, WARNING_THRESHOLD,
     };
     use crate::agent::tool::{
-        Tool, ToolContext, ToolExecutionMode, ToolMetadata, ToolRegistry, ToolSettings,
+        Tool, ToolContext, ToolExecutionMode, ToolExposure, ToolMetadata, ToolRegistry, ToolSettings,
     };
     use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
     use crate::policy::PolicyGate;
@@ -4502,12 +4610,17 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::{borrow::Cow, collections::HashMap, path::PathBuf, sync::Arc};
+    use std::{
+        borrow::Cow,
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+        sync::Arc,
+    };
 
     #[test]
     fn loop_guardrails_trigger_before_the_default_budget_is_exhausted() {
-        assert!(CIRCUIT_BREAKER_THRESHOLD < WARNING_THRESHOLD);
-        assert!(WARNING_THRESHOLD < DEFAULT_MAX_ITERATIONS);
+        assert!(WARNING_THRESHOLD < CIRCUIT_BREAKER_THRESHOLD);
+        assert!(CIRCUIT_BREAKER_THRESHOLD < DEFAULT_MAX_ITERATIONS);
         assert!(CRITICAL_THRESHOLD <= DEFAULT_MAX_ITERATIONS);
     }
 
@@ -4656,6 +4769,7 @@ mod tests {
     struct ScheduledTool {
         name: &'static str,
         execution: ToolExecutionMode,
+        exposure: ToolExposure,
     }
 
     #[async_trait]
@@ -4675,6 +4789,7 @@ mod tests {
         fn metadata(&self) -> ToolMetadata {
             ToolMetadata {
                 execution: self.execution,
+                exposure: self.exposure,
                 ..ToolMetadata::legacy(self.execution == ToolExecutionMode::Parallel)
             }
         }
@@ -4694,14 +4809,17 @@ mod tests {
         registry.register(Box::new(ScheduledTool {
             name: "read_a",
             execution: ToolExecutionMode::Parallel,
+            exposure: ToolExposure::Core,
         }));
         registry.register(Box::new(ScheduledTool {
             name: "read_b",
             execution: ToolExecutionMode::Parallel,
+            exposure: ToolExposure::Core,
         }));
         registry.register(Box::new(ScheduledTool {
             name: "write",
             execution: ToolExecutionMode::Exclusive,
+            exposure: ToolExposure::Core,
         }));
 
         let calls = vec![
@@ -4719,6 +4837,31 @@ mod tests {
                 ToolExecutionGroup::Parallel(vec![3]),
             ]
         );
+    }
+
+    #[test]
+    fn tool_search_loads_matching_deferred_schema_for_the_run() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(ScheduledTool {
+            name: "harvis_image_generate",
+            execution: ToolExecutionMode::Exclusive,
+            exposure: ToolExposure::Deferred,
+        }));
+        let mut loaded = HashSet::new();
+
+        let payload = resolve_tool_search(
+            &registry,
+            &json!({"query": "harvis image poster", "limit": 3}),
+            &mut loaded,
+        )
+        .unwrap();
+
+        assert_eq!(payload["loaded_count"], 1);
+        assert!(loaded.contains("harvis_image_generate"));
+        assert!(registry
+            .direct_tool_defs(crate::agent::tool::ToolDefMode::Minimal, &loaded)
+            .iter()
+            .any(|definition| definition.name == "harvis_image_generate"));
     }
 
     // ── Test data helpers ─────────────────────────────────────────────────────
