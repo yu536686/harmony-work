@@ -63,10 +63,28 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             windows_only: false,
         },
         BuiltinToolInfo {
-            name: "office".into(),
-            description: "操作 Office 文档（Word、Excel、PowerPoint）".into(),
-            icon: "📊".into(),
-            windows_only: true,
+            name: "document_artifact".into(),
+            description: "通过结构化内容创建并验证 DOCX 文档，不依赖 Microsoft Word".into(),
+            icon: "DOCX".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "presentation_artifact".into(),
+            description: "通过固定版式创建并验证 PPTX 演示文稿，不依赖 PowerPoint COM".into(),
+            icon: "PPTX".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "spreadsheet_artifact".into(),
+            description: "通过结构化工作表创建并验证 XLSX 文件，支持公式、筛选和冻结表头".into(),
+            icon: "XLSX".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "artifact_render".into(),
+            description: "使用 LibreOffice 将 Office 成果渲染为 PDF 或页面图片以便视觉检查".into(),
+            icon: "PDF".into(),
+            windows_only: false,
         },
         BuiltinToolInfo {
             name: "email".into(),
@@ -161,6 +179,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.iter().any(|name| name == "computer_use"));
+        for artifact_tool in [
+            "document_artifact",
+            "presentation_artifact",
+            "spreadsheet_artifact",
+            "artifact_render",
+        ] {
+            assert!(
+                names.iter().any(|name| name == artifact_tool),
+                "{artifact_tool} must appear in the user-facing tool catalog"
+            );
+        }
         for hidden in [
             "call_fish",
             "call_koi",
@@ -168,6 +197,9 @@ mod tests {
             "screen_capture",
             "desktop_automation",
             "com",
+            "office",
+            "presentation",
+            "com_invoke",
             "wmi",
         ] {
             assert!(

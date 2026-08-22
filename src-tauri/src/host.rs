@@ -658,6 +658,25 @@ impl HostTools for DesktopHostTools {
             ));
         }
 
+        if self.is_enabled("document_artifact") {
+            registry.register(Box::new(
+                crate::tools::office_artifacts::DocumentArtifactTool,
+            ));
+        }
+        if self.is_enabled("presentation_artifact") {
+            registry.register(Box::new(
+                crate::tools::office_artifacts::PresentationArtifactTool,
+            ));
+        }
+        if self.is_enabled("spreadsheet_artifact") {
+            registry.register(Box::new(
+                crate::tools::office_artifacts::SpreadsheetArtifactTool,
+            ));
+        }
+        if self.is_enabled("artifact_render") {
+            registry.register(Box::new(crate::tools::office_artifacts::ArtifactRenderTool));
+        }
+
         if self.is_enabled("presentation") {
             registry.register(Box::new(crate::tools::presentation::PresentationTool));
         }

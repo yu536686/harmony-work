@@ -135,7 +135,13 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
                 "read_lints",
             ],
             "web" => &["web_search", "web_fetch", "browser"],
-            "office" => &["presentation", "office", "com_invoke", "pdf"],
+            "office" => &[
+                "document_artifact",
+                "presentation_artifact",
+                "spreadsheet_artifact",
+                "artifact_render",
+                "pdf",
+            ],
             "media" => &[
                 "harmony_cut",
                 "harvis_creative",
@@ -3229,21 +3235,16 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 → Use `web_search` first to discover links, then `web_fetch` or `browser` to read them
 → Do NOT use shell+curl for web pages — use `web_fetch` or `browser` instead
 
-**Office automation (Excel, Word, PowerPoint, Outlook):**
-→ For creating new deliverables, prefer a deterministic file-generation workflow when available:
-  - Excel: generate `.xlsx` with Python/openpyxl or structured data tooling, then verify the file exists and is non-empty.
-  - PowerPoint: use `presentation` first for new `.pptx` files. Pass compact slide-spec JSON and verify slide count/file size.
-  - Word: generate `.docx` with Python/python-docx or a dedicated document skill, then verify the file exists and is non-empty.
-→ Use `office` mainly for reading/editing existing Office documents, batch cell writes, charts, COM-only compatibility, opening Office apps, and export/PDF operations on machines with Microsoft Office installed.
-→ `office` values are passed safely — no escaping needed for $, quotes, formulas.
-→ **Excel COM workflow**: create → write_cells (batch, formulas OK) → add_chart → auto_fit
-  `write_cells` takes a `cells` array of {{cell, value}} objects. Values starting with `=` are auto-treated as formulas.
-→ **Word COM workflow**: create → add_paragraph (with style: 'Heading 1'..'Heading 4', 'List Bullet', 'Normal') → add_table (2D array) → add_picture → set_header_footer
-  `find_replace` for template filling (replace placeholders like {{{{NAME}}}} with actual values).
-→ **PowerPoint COM workflow**: read_document/read_slides (extract slide text from .pptx) → create → add_slides (batch array of {{title, content, layout}}) → add_image → export_pdf
-  `read_document` returns JSON `[{{slide, text}}, ...]`. `add_slides` creates multiple slides in one call. layout=1 (title only), 2 (title+content), 11 (blank).
-→ If using `shell`/Python to create Office files, write scripts into the active workspace, run them once, and verify the final `.xlsx`/`.docx`/`.pptx` artifact before claiming completion.
-→ Use `computer_use` for UI-level interaction with Office apps
+**Office artifacts (Word, PowerPoint, Excel):**
+→ For every new Office deliverable, use exactly one structured Artifact tool first:
+  - Word/DOCX: `document_artifact`
+  - PowerPoint/PPTX: `presentation_artifact`
+  - Excel/XLSX: `spreadsheet_artifact`
+→ These tools generate and verify OOXML in one call. Do not generate a temporary Python/PowerShell/JavaScript script for a request they support.
+→ Use `artifact_render` only when PDF or page-image visual QA is required. Generation itself does not require LibreOffice.
+→ Legacy `office`, `presentation`, and `com_invoke` are compatibility tools, not defaults. Discover them only when the user explicitly needs macros, complex edits to an existing Office file, Outlook, native chart/pivot behavior, or exact Microsoft Office rendering.
+→ If an Artifact tool reports an unsupported feature, explain the limitation once and switch to the compatibility path. Do not repeat the same failed call.
+→ Use `computer_use` only for an explicit live Office UI task such as clicking a ribbon command or reviewing a document already open on screen.
 
 ## Coding Task Workflow
 
@@ -5319,7 +5320,23 @@ mod tests {
         let tools = route_tool_allowlist(&["files".to_string(), "office".to_string()])
             .expect("bounded tool set");
         assert!(tools.contains("file_write"));
-        assert!(tools.contains("office"));
+        for artifact_tool in [
+            "document_artifact",
+            "presentation_artifact",
+            "spreadsheet_artifact",
+            "artifact_render",
+        ] {
+            assert!(
+                tools.contains(artifact_tool),
+                "office route must expose {artifact_tool}"
+            );
+        }
+        for legacy_tool in ["office", "presentation", "com_invoke"] {
+            assert!(
+                !tools.contains(legacy_tool),
+                "office route must not expose legacy tool {legacy_tool} by default"
+            );
+        }
         assert!(tools.contains("app_control"));
         assert!(!tools.contains("web_search"));
     }

@@ -13,6 +13,7 @@ pub mod im_channel;
 pub mod im_send;
 #[cfg(target_os = "windows")]
 pub mod office;
+pub mod office_artifacts;
 #[cfg(target_os = "windows")]
 pub mod powershell;
 pub mod presentation;
