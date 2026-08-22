@@ -207,7 +207,7 @@ fn persist_document_state(state_path: &Path, input: &Value) -> Result<()> {
 fn write_embedded_runtime(workspace_root: &Path) -> Result<PathBuf> {
     let directory = workspace_root.join(".workbuddy").join("artifact-runtime");
     std::fs::create_dir_all(&directory)?;
-    let path = directory.join("artifact-runtime-0.9.4.cjs");
+    let path = directory.join("artifact-runtime-0.9.5.cjs");
     let needs_write = std::fs::metadata(&path)
         .map(|metadata| metadata.len() != EMBEDDED_RUNTIME.len() as u64)
         .unwrap_or(true);
@@ -397,11 +397,18 @@ async fn run_artifact_runtime(
 fn artifact_metadata() -> ToolMetadata {
     ToolMetadata {
         category: "office_artifact",
-        exposure: ToolExposure::Deferred,
+        exposure: ToolExposure::Core,
         execution: ToolExecutionMode::Exclusive,
         risk: ToolRisk::Write,
         timeout_secs: ARTIFACT_TIMEOUT_SECS,
         produces_artifacts: true,
+    }
+}
+
+fn artifact_render_metadata() -> ToolMetadata {
+    ToolMetadata {
+        exposure: ToolExposure::Deferred,
+        ..artifact_metadata()
     }
 }
 
@@ -693,7 +700,7 @@ impl Tool for ArtifactRenderTool {
         })
     }
     fn metadata(&self) -> ToolMetadata {
-        artifact_metadata()
+        artifact_render_metadata()
     }
     fn needs_confirmation(&self, _input: &Value) -> bool {
         true
@@ -876,6 +883,26 @@ mod tests {
         assert!(validate_artifact_path(ArtifactKind::Presentation, "deck.pptx").is_ok());
         assert!(validate_artifact_path(ArtifactKind::Spreadsheet, "data.xlsx").is_ok());
         assert!(validate_artifact_path(ArtifactKind::Document, "report.pptx").is_err());
+    }
+
+    #[test]
+    fn generation_artifacts_are_core_tools_but_visual_rendering_stays_deferred() {
+        assert_eq!(
+            DocumentArtifactTool.metadata().exposure,
+            ToolExposure::Core
+        );
+        assert_eq!(
+            PresentationArtifactTool.metadata().exposure,
+            ToolExposure::Core
+        );
+        assert_eq!(
+            SpreadsheetArtifactTool.metadata().exposure,
+            ToolExposure::Core
+        );
+        assert_eq!(
+            ArtifactRenderTool.metadata().exposure,
+            ToolExposure::Deferred
+        );
     }
 
     #[test]
