@@ -430,7 +430,7 @@ impl SkillLoader {
                 "system-admin",
                 "System Administration",
                 "Manage Windows system settings and processes",
-                vec!["powershell_query", "wmi", "shell"],
+                vec!["system_info", "powershell_query", "shell"],
                 vec![
                     "system",
                     "windows",
@@ -451,7 +451,7 @@ impl SkillLoader {
                     "Windows管理",
                     "系统优化",
                 ],
-                "Use `powershell_query` and `wmi` to manage the Windows system.\n\n\
+                "Use `system_info` and `powershell_query` to manage the Windows system.\n\n\
                  ## Capabilities\n\
                  - Query system information\n\
                  - Manage services and processes\n\
@@ -461,8 +461,8 @@ impl SkillLoader {
             (
                 "desktop-control",
                 "Desktop Control",
-                "Control Windows desktop applications via UI Automation",
-                vec!["uia", "screen_capture"],
+                "Control local desktop applications through unified computer use",
+                vec!["computer_use"],
                 vec![
                     "desktop",
                     "uia",
@@ -483,7 +483,7 @@ impl SkillLoader {
                     "桌面自动化",
                     "应用控制",
                 ],
-                "Use UIA and screen capture to control desktop applications.\n\n\
+                "Use `computer_use` to observe and control desktop applications.\n\n\
                  ## Capabilities\n\
                  - Find and interact with UI elements\n\
                  - Click buttons, type text, send hotkeys\n\
@@ -759,6 +759,7 @@ triggers:
                 | "wmi"
                 | "office"
                 | "browser"
+                | "computer_use"
                 | "uia"
                 | "screen_capture"
                 | "com"

@@ -67,22 +67,32 @@ impl ToolMetadata {
         let mut metadata = Self::legacy(read_only);
         if matches!(
             name,
+            "call_koi" | "uia" | "screen_capture" | "desktop_automation" | "com" | "wmi"
+        ) {
+            metadata.exposure = ToolExposure::Hidden;
+            return metadata;
+        }
+        if matches!(
+            name,
             "browser"
-                | "wmi"
                 | "office"
                 | "presentation"
                 | "pdf"
                 | "email"
                 | "vision_context"
                 | "harmony_cut"
-                | "uia"
-                | "screen_capture"
-                | "desktop_automation"
-                | "com"
                 | "com_invoke"
+                | "computer_use"
                 | "call_fish"
-                | "call_koi"
                 | "pool_org"
+                | "pool_chat"
+                | "powershell_query"
+                | "ssh"
+                | "app_control"
+                | "chat_ui"
+                | "chat_ui_patch"
+                | "chat_ui_listen"
+                | "plan_write"
                 | "im_channel_list"
                 | "im_channel_connect"
                 | "im_channel_binding_lookup"
@@ -232,10 +242,7 @@ impl ToolResult {
         self.image = Some(image);
         self
     }
-    pub fn with_artifacts(
-        mut self,
-        artifacts: Vec<crate::tools::output::ToolArtifact>,
-    ) -> Self {
+    pub fn with_artifacts(mut self, artifacts: Vec<crate::tools::output::ToolArtifact>) -> Self {
         self.meta.get_or_insert_with(Default::default).artifacts = artifacts;
         self
     }
@@ -776,6 +783,47 @@ mod tests {
     }
 
     #[test]
+    fn internal_and_replaced_tools_are_hidden_from_models() {
+        for name in [
+            "call_koi",
+            "uia",
+            "screen_capture",
+            "desktop_automation",
+            "com",
+            "wmi",
+        ] {
+            assert_eq!(
+                ToolMetadata::legacy_for(name, false).exposure,
+                ToolExposure::Hidden,
+                "{name} must remain an internal compatibility backend"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_high_cost_tools_are_discovered_on_demand() {
+        for name in [
+            "computer_use",
+            "call_fish",
+            "pool_org",
+            "pool_chat",
+            "powershell_query",
+            "ssh",
+            "app_control",
+            "chat_ui",
+            "chat_ui_patch",
+            "chat_ui_listen",
+            "plan_write",
+        ] {
+            assert_eq!(
+                ToolMetadata::legacy_for(name, false).exposure,
+                ToolExposure::Deferred,
+                "{name} should not inflate the default tool schema"
+            );
+        }
+    }
+
+    #[test]
     fn deferred_tools_are_searched_instead_of_directly_exposed() {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(FakeTool {
@@ -784,10 +832,13 @@ mod tests {
         }));
         registry.register(Box::new(DeferredFakeTool));
 
-        let direct = registry.direct_tool_defs(ToolDefMode::Minimal, &std::collections::HashSet::new());
+        let direct =
+            registry.direct_tool_defs(ToolDefMode::Minimal, &std::collections::HashSet::new());
         assert!(direct.iter().any(|tool| tool.name == "fake"));
         assert!(direct.iter().any(|tool| tool.name == "tool_search"));
-        assert!(!direct.iter().any(|tool| tool.name == "harvis_image_generate"));
+        assert!(!direct
+            .iter()
+            .any(|tool| tool.name == "harvis_image_generate"));
 
         let hits = registry.search_deferred("Harvis image poster", 5);
         assert_eq!(hits.len(), 1);

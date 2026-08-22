@@ -131,12 +131,11 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
                 "process_control",
                 "system_info",
                 "powershell_query",
-                "wmi",
                 "lsp",
                 "read_lints",
             ],
             "web" => &["web_search", "web_fetch", "browser"],
-            "office" => &["presentation", "office", "com", "com_invoke", "pdf"],
+            "office" => &["presentation", "office", "com_invoke", "pdf"],
             "media" => &[
                 "harmony_cut",
                 "harvis_creative",
@@ -150,13 +149,7 @@ fn route_tool_allowlist(groups: &[String]) -> Option<HashSet<&'static str>> {
                 "shell",
                 "app_control",
             ],
-            "desktop" => &[
-                "screen_capture",
-                "desktop_automation",
-                "uia",
-                "vision_context",
-                "browser",
-            ],
+            "desktop" => &["computer_use", "vision_context", "browser"],
             "skills" => &["skill_list", "skill_manage", "file_read"],
             "collaboration" => &["pool_org", "call_fish", "plan_todo", "app_control"],
             "memory" => &["memory_store", "recall_tool_result"],
@@ -1068,7 +1061,10 @@ pub(crate) async fn resolve_session_workspace_context(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let has_session_workspace = override_root.is_some();
-    Ok((override_root.unwrap_or(default_workspace_root), has_session_workspace))
+    Ok((
+        override_root.unwrap_or(default_workspace_root),
+        has_session_workspace,
+    ))
 }
 
 pub(crate) async fn resolve_session_workspace_root(
@@ -1213,13 +1209,8 @@ pub async fn chat_send(
     {
         if let Some(answer) = deterministic_identity_answer(&content) {
             if replace_task_contract {
-                archive_plan_before_clear(
-                    &state.db,
-                    &state.plan_state,
-                    &session_id,
-                    &content,
-                )
-                .await;
+                archive_plan_before_clear(&state.db, &state.plan_state, &session_id, &content)
+                    .await;
                 let mut plans = state.plan_state.lock().await;
                 plans.remove(&session_id);
                 drop(plans);
@@ -1234,7 +1225,11 @@ pub async fn chat_send(
                 db.update_session_status(&session_id, "idle")
                     .map_err(|error| error.to_string())?;
             }
-            emit_agent_event(&app, &session_id, &AgentEvent::TextSegmentStart { iteration: 1 });
+            emit_agent_event(
+                &app,
+                &session_id,
+                &AgentEvent::TextSegmentStart { iteration: 1 },
+            );
             emit_agent_event(
                 &app,
                 &session_id,
@@ -3136,7 +3131,7 @@ Every tangible output you produce in a session MUST be submitted as an artifact 
 
 ### When to submit (do it in the SAME turn as the work, not as a later afterthought)
 - Any file you create or materially modify via `file_write` / `file_edit` → call `app_control(action="artifact_submit", artifact_name=<filename>, path=<absolute path>, artifact_type="file", content_summary=<1-line description of what was produced or changed>).
-- Any screenshot captured (`screenshot`, `browser_screenshot`, `screen_capture`) → you MUST first persist the image to a real file using the tool's own save parameter (for `screen_capture`, pass `output_path="<absolute path>"`, e.g. `<project_dir>/.piscis/screenshots/shot_<timestamp>.png`). The tool writes the bytes to disk before returning. THEN immediately call `app_control(action="artifact_submit", artifact_name=<label>, path=<the same output_path>, artifact_type="image", content_summary=<1-line>). `screen_capture` returns only base64 when no `output_path` is given — that base64 is NOT a file on disk and `artifact_submit` cannot accept it. Never tell the user you have saved a screenshot unless you actually called `screen_capture` with `output_path` and received the "Saved to disk:" confirmation.
+- Any screenshot captured (`screenshot`, `browser_screenshot`, `computer_use`) → persist it to a real file using the tool's save parameter (`computer_use(action="observe", output_path="<absolute path>")`). THEN immediately call `app_control(action="artifact_submit", artifact_name=<label>, path=<the same output_path>, artifact_type="image", content_summary=<1-line>). An image returned without `output_path` is not a file on disk and cannot be submitted as an artifact.
 - Any web resource you retrieved or referenced as the primary deliverable (a fetched report, a published URL, a documentation link) → `artifact_type="link"`, `url=<URL>`.
 - Any analysis / report / plan you produce primarily as prose in chat → `artifact_type="report"`, `content_summary=<concise summary>`; if you also wrote it to a file, use the file path as above instead.
 - When a Koi working under your coordination completes a todo and reports file paths in `pool_chat`, submit each concrete file path as an artifact on the user-facing session so the deliverable surfaces to the Artifacts panel.
@@ -3203,8 +3198,7 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 **Launching an application and then automating it:**
 → Use `process_control` with `action: "start"`, `wait: false` to launch in background
 → Then `process_control` with `action: "wait_for_window"` to wait until the UI appears
-→ On Windows: use `uia` to interact with the application
-→ On Linux/macOS: use `desktop_automation` for coordinate-based clicks and typing
+→ Use `computer_use` to observe and interact with the application. It selects the best available accessibility, screenshot, and keyboard/mouse backend for the platform.
 
 **Checking if a process is running / killing a process:**
 → Use `process_control` with `action: "is_running"` or `action: "kill"`
@@ -3217,7 +3211,6 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 
 **Querying hardware info (CPU, RAM, GPU, BIOS, disks):**
 → Use `system_info` with `action="query"`, `category="all"` — cross-platform
-→ On Windows: `wmi` with a preset — alternative for Windows-specific hardware queries
 
 **Interacting with COM/ActiveX objects (legacy industrial/CAD software):**
 → Use `com_invoke` — supports any ProgID, 32-bit or 64-bit
@@ -3225,16 +3218,10 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 → To check if a ProgID exists: `com_invoke` with `action: "create"`, `arch: "x86"`
 
 **Automating desktop apps (clicking buttons, typing in forms):**
-→ On Windows: Use `uia` — works with any Windows app via UI Automation
-  Workflow: `uia(list_windows)` → `uia(find)` → `uia(click/type/get_value)`
-  `uia(get_value)` and `uia(get_text)` read actual control content (not just the label)
-→ Cross-platform (Windows/Linux/macOS): Use `screen_capture` + `desktop_automation`
-    Workflow: `screen_capture(action="capture", grid=true, grid_spacing=100)` → identify element coordinates from the 100x100 grid overlay and cursor crosshair → `desktop_automation(action="click", x=X, y=Y)`
-    In screenshots with `grid=true`, coordinate labels are edge-aligned absolute screen pixels. The mouse position is additionally marked by a crosshair at the cursor coordinates.
-    If a screenshot shows incomplete page content, progress bars, loading spinners, skeleton placeholders, blank regions, or other obvious loading signals, treat that as a wait state: recapture using real elapsed time with exponential backoff before acting.
-  For typing: `desktop_automation(action="type_text", text="...")`
-  For keyboard shortcuts: `desktop_automation(action="hotkey", keys=["ctrl","c"])`
-→ For window management: `desktop_automation(action="list_windows")`, `desktop_automation(action="activate_window", title="...")`
+→ Use `computer_use(action="observe")` first when the UI state or target is unknown.
+→ Prefer semantic selectors (`window_title`, `name`, `automation_id`, `control_type`) when available; use coordinates only when accessibility data is insufficient.
+→ Use `computer_use` for clicks, typing, key chords, scrolling, dragging, waiting for elements, window activation, and app launch.
+→ If the observed screenshot shows loading indicators or incomplete content, wait with real elapsed time and exponential backoff, then observe again before acting.
 
 **Web browsing / web scraping:**
 → For **static docs, changelogs, README, API reference** when you already have the URL: use `web_fetch` (lightweight HTTP, fast)
@@ -3256,7 +3243,7 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
 → **PowerPoint COM workflow**: read_document/read_slides (extract slide text from .pptx) → create → add_slides (batch array of {{title, content, layout}}) → add_image → export_pdf
   `read_document` returns JSON `[{{slide, text}}, ...]`. `add_slides` creates multiple slides in one call. layout=1 (title only), 2 (title+content), 11 (blank).
 → If using `shell`/Python to create Office files, write scripts into the active workspace, run them once, and verify the final `.xlsx`/`.docx`/`.pptx` artifact before claiming completion.
-→ Use `uia` for UI-level interaction with Office apps
+→ Use `computer_use` for UI-level interaction with Office apps
 
 ## Coding Task Workflow
 
@@ -3377,32 +3364,9 @@ For screenshots, scanned PDFs, UI captures, charts, or any image-heavy task, you
 3. Call `vision_context(select, ...)` to decide what to inspect next
 4. On the following round, reason over the selected visual inputs and decide whether to render/select a different region
 
-## Sub-Agent Delegation (call_fish)
+## Optional Isolated Delegation
 
-You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.
-
-**When to use call_fish:**
-- The task involves many intermediate steps whose details are NOT relevant to the final answer (e.g. scanning hundreds of files, batch processing, data collection)
-- The task is self-contained and can be described in a single instruction
-- You want to keep your own context clean — Fish results are summarized, so intermediate tool calls, retries, and exploration do NOT pollute your conversation history
-- Prefer Fish for simple result-first work such as web search, file search, broad repository scanning, inventorying, extraction, and aggregation
-
-**When NOT to use call_fish:**
-- The task requires back-and-forth with the user (Fish cannot interact with the user)
-- You need to build on intermediate results across multiple dependent steps that require your judgment
-- The task is simple enough that one or two tool calls will suffice
-- The user would benefit from seeing your own detailed reasoning or analytical process in the main conversation
-
-**Best practices:**
-1. First call `call_fish(action="list")` to see which Fish are available and what they specialize in
-2. Write a clear, complete task description — include all necessary context (paths, requirements, constraints) since the Fish has no access to your conversation history
-3. The Fish returns only its final result — all intermediate reasoning and tool calls are discarded, saving your context budget
-4. If no Fish is available for the task, handle it yourself as usual
-
-**Example delegation pattern:**
-- User asks: "帮我整理 C:\Projects 下所有 Python 项目的依赖清单"
-- Good: `call_fish(action="call", fish_id="file-management", task="扫描 C:\\Projects 下所有包含 requirements.txt 或 pyproject.toml 的目录，列出每个项目名称及其依赖列表")`
-- The Fish will do all the scanning, reading, and aggregation internally, and return only the final summary
+`call_fish` is an on-demand stateless worker, not a default step. Use it only when a large, self-contained scan or aggregation would materially reduce the main conversation context. Do not list Fish first, do not use it for tasks solvable in one or two direct tool calls, and do not use it when user interaction or dependent judgment is required.
 
 ## Multi-Agent Collaboration (pool_org)
 
@@ -5098,11 +5062,11 @@ pub async fn get_context_preview(
 mod tests {
     use super::{
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
-        derive_headless_session_source, extract_tool_minimals_from_history,
-        deterministic_identity_answer, minimal_tool_result_blocks, paths_match_for_pool_binding,
-        resolve_headless_memory_owner_id, resolve_headless_scene_kind,
-        resolve_pool_session_for_workspace, route_tool_allowlist, HeadlessRunOptions,
-        SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCIS_POOL,
+        derive_headless_session_source, deterministic_identity_answer,
+        extract_tool_minimals_from_history, minimal_tool_result_blocks,
+        paths_match_for_pool_binding, resolve_headless_memory_owner_id,
+        resolve_headless_scene_kind, resolve_pool_session_for_workspace, route_tool_allowlist,
+        HeadlessRunOptions, SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCIS_POOL,
     };
     use crate::commands::config::scene::SceneKind;
     use crate::pool::PoolSession;

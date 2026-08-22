@@ -136,6 +136,7 @@ function ConfigForm({ tool, onClose, onSaved }: ConfigFormProps) {
 
 const TOOL_DISPLAY_NAME: Record<string, string> = {
   powershell_query: "PowerShell Query",
+  computer_use: "Computer Use",
 };
 
 interface BuiltinToolCardProps {

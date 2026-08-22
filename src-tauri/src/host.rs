@@ -37,8 +37,9 @@ use crate::runtime::koi::DesktopInProcessSubagentRuntime;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
 use crate::tools::{
-    app_control, call_fish, call_koi, chat_ui, chat_ui_listen, chat_ui_patch, im_channel, im_send,
-    skill_list, skill_manage, system_info, BrowserTool, DesktopAutomationTool, ScreenTool,
+    app_control, call_fish, call_koi, chat_ui, chat_ui_listen, chat_ui_patch, computer_use,
+    im_channel, im_send, skill_list, skill_manage, system_info, BrowserTool, DesktopAutomationTool,
+    ScreenTool,
 };
 
 #[cfg(target_os = "windows")]
@@ -622,6 +623,11 @@ impl HostTools for DesktopHostTools {
             }
         }
 
+        if self.is_enabled("computer_use") {
+            registry.register(Box::new(computer_use::ComputerUseTool));
+        }
+        // Compatibility backends remain registered for old sessions and
+        // diagnostics, but their Hidden metadata keeps them out of model schemas.
         if self.is_enabled("screen_capture") {
             registry.register(Box::new(ScreenTool));
         }
@@ -646,9 +652,7 @@ impl HostTools for DesktopHostTools {
             registry.register(Box::new(
                 crate::tools::harvis_creative::HarvisMusicGenerateTool,
             ));
-            registry.register(Box::new(
-                crate::tools::harvis_creative::HarvisJobStatusTool,
-            ));
+            registry.register(Box::new(crate::tools::harvis_creative::HarvisJobStatusTool));
             registry.register(Box::new(
                 crate::tools::harvis_creative::HarvisSaveResultTool,
             ));

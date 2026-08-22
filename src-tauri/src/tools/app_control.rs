@@ -2329,18 +2329,6 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             windows_only: true,
         },
         BuiltinToolInfo {
-            name: "call_fish".into(),
-            description: "Delegate work to Fish sub-agents.".into(),
-            icon: "🐠".into(),
-            windows_only: false,
-        },
-        BuiltinToolInfo {
-            name: "call_koi".into(),
-            description: "Delegate work to persistent Koi agents.".into(),
-            icon: "🐟".into(),
-            windows_only: false,
-        },
-        BuiltinToolInfo {
             name: "pool_org".into(),
             description: "Create and manage project pools and organization specs.".into(),
             icon: "🏊".into(),
@@ -2405,21 +2393,9 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             windows_only: false,
         },
         BuiltinToolInfo {
-            name: "wmi".into(),
-            description: "Query Windows system information via WMI.".into(),
-            icon: "💻".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
-            name: "uia".into(),
-            description: "Control Windows UI Automation elements.".into(),
+            name: "computer_use".into(),
+            description: "Observe and control local desktop applications through one unified interface.".into(),
             icon: "🖱️".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
-            name: "screen_capture".into(),
-            description: "Capture the screen.".into(),
-            icon: "📸".into(),
             windows_only: false,
         },
         BuiltinToolInfo {
@@ -2428,20 +2404,6 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
                 "Query system information: CPU, memory, disk, network, processes, OS, GPU.".into(),
             icon: "💻".into(),
             windows_only: false,
-        },
-        BuiltinToolInfo {
-            name: "desktop_automation".into(),
-            description:
-                "Cross-platform desktop automation (click, type, hotkeys, window management)."
-                    .into(),
-            icon: "🖱️".into(),
-            windows_only: false,
-        },
-        BuiltinToolInfo {
-            name: "com".into(),
-            description: "Use COM/OLE automation.".into(),
-            icon: "🔌".into(),
-            windows_only: true,
         },
         BuiltinToolInfo {
             name: "com_invoke".into(),
@@ -2563,7 +2525,7 @@ impl AppControlTool {
         }
 
         Ok(ToolResult::ok(format!(
-            "Koi '{}' {} created successfully.\nID: {}\nRole: {}\nYou can now assign tasks to this Koi using call_koi or pool_org.",
+            "Koi '{}' {} created successfully.\nID: {}\nRole: {}\nAssign tasks to this Koi through pool_org.",
             koi.name, koi.icon, koi.id, koi.role
         )))
     }

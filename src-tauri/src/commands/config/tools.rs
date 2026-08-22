@@ -15,7 +15,11 @@ pub struct BuiltinToolInfo {
 pub async fn list_builtin_tools(
     _state: State<'_, AppState>,
 ) -> Result<Vec<BuiltinToolInfo>, String> {
-    let tools = vec![
+    Ok(builtin_tool_catalog())
+}
+
+fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
+    vec![
         BuiltinToolInfo {
             name: "file_read".into(),
             description: "读取本地文件内容，支持文本和二进制文件".into(),
@@ -59,12 +63,6 @@ pub async fn list_builtin_tools(
             windows_only: false,
         },
         BuiltinToolInfo {
-            name: "wmi".into(),
-            description: "通过 WMI 查询 Windows 系统信息（硬件、进程、服务等）".into(),
-            icon: "💻".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
             name: "office".into(),
             description: "操作 Office 文档（Word、Excel、PowerPoint）".into(),
             icon: "📊".into(),
@@ -101,33 +99,9 @@ pub async fn list_builtin_tools(
             windows_only: false,
         },
         BuiltinToolInfo {
-            name: "uia".into(),
-            description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
+            name: "computer_use".into(),
+            description: "统一感知和操作本地桌面应用，自动选择 UI Automation、截图和键鼠后端".into(),
             icon: "🖱️".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
-            name: "screen_capture".into(),
-            description: "截取屏幕画面，用于视觉感知和 UI 状态分析".into(),
-            icon: "📸".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
-            name: "com".into(),
-            description: "通过 COM/OLE 接口与 Windows 应用程序交互（如 Excel、IE 等）".into(),
-            icon: "🔌".into(),
-            windows_only: true,
-        },
-        BuiltinToolInfo {
-            name: "call_fish".into(),
-            description: "委托子任务给专属 Fish 子代理，让专家处理特定领域任务".into(),
-            icon: "🐠".into(),
-            windows_only: false,
-        },
-        BuiltinToolInfo {
-            name: "call_koi".into(),
-            description: "委托任务给持久化 Koi 代理，具备独立记忆与长期职责".into(),
-            icon: "🐟".into(),
             windows_only: false,
         },
         BuiltinToolInfo {
@@ -172,8 +146,36 @@ pub async fn list_builtin_tools(
             icon: "🧬".into(),
             windows_only: false,
         },
-    ];
-    Ok(tools)
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_exposes_unified_computer_use_only() {
+        let names = builtin_tool_catalog()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.iter().any(|name| name == "computer_use"));
+        for hidden in [
+            "call_fish",
+            "call_koi",
+            "uia",
+            "screen_capture",
+            "desktop_automation",
+            "com",
+            "wmi",
+        ] {
+            assert!(
+                !names.iter().any(|name| name == hidden),
+                "{hidden} must not appear in the user-facing tool catalog"
+            );
+        }
+    }
 }
 
 /// Manually trigger a heartbeat agent run.
