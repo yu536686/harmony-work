@@ -551,6 +551,9 @@ export const chatSlice = createSlice({
       if (!action.payload.running) {
         // Mark turn as done so next tool_start will clear these steps
         state.toolStepsTurnDone[action.payload.sessionId] = true;
+        // Runtime phases are live-only. Keeping the last "thinking" phase after
+        // done/cancel/error makes the activity panel look like it is still running.
+        delete state.runStatusBySession[action.payload.sessionId];
       }
     },
   },

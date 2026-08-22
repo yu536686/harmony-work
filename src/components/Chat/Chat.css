@@ -210,12 +210,14 @@
 }
 
 .chat-topbar-task-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
+  gap: 4px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -245,7 +247,17 @@
 }
 
 .chat-topbar-task-count {
-  font-size: 11px;
+  position: absolute;
+  top: -4px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 1px var(--border);
+  font-size: 9px;
+  line-height: 15px;
   color: var(--text-muted);
 }
 
@@ -945,10 +957,11 @@
 /* Input area */
 /* ── File-journal review bar (Undo All) ─────────────────────────────────── */
 .review-bar {
-  margin: 0 24px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-secondary);
+  margin: -10px -10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 20px 20px 0 0;
+  background: var(--bg-subtle, var(--bg-secondary));
   overflow: hidden;
   animation: review-in 0.16s ease-out;
 }

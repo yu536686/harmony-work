@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   creativeApi,
@@ -85,6 +85,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [jobDetailLoading, setJobDetailLoading] = useState(false);
   const [preview, setPreview] = useState<{ artifact: CreativeArtifact; dataUrl: string } | null>(null);
 
   const [musicMode, setMusicMode] = useState<"free" | "assistant">("free");
@@ -112,9 +113,26 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "processing");
 
+  const refreshJobDetail = useCallback(async (jobId: string) => {
+    setJobDetailLoading(true);
+    try {
+      const response = await creativeApi.getJob(jobId);
+      setJobs((previous) => previous.map((job) => job.id === response.job.id ? response.job : job));
+    } catch (error) {
+      setNotice(`任务详情加载失败：${String(error)}`);
+    } finally {
+      setJobDetailLoading(false);
+    }
+  }, []);
+
   const refreshJobs = async () => {
     const response = await creativeApi.listJobs();
-    setJobs(response.jobs);
+    setJobs((previous) => response.jobs.map((job) => {
+      const hydrated = previous.find((item) => item.id === job.id);
+      return hydrated && hydrated.artifacts.length > job.artifacts.length
+        ? { ...job, artifacts: hydrated.artifacts }
+        : job;
+    }));
     setSelectedJobId((current) => current ?? response.jobs[0]?.id ?? null);
   };
 
@@ -122,6 +140,11 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     if (!user) return;
     void refreshJobs().catch((error) => setNotice(String(error)));
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !selectedJobId) return;
+    void refreshJobDetail(selectedJobId);
+  }, [refreshJobDetail, selectedJobId, user?.id]);
 
   useEffect(() => {
     if (!activeJobs.length) return;
@@ -305,7 +328,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     <section className="creative-page">
       <header className="creative-header">
         <div><span className="eyebrow">Harvis Creative</span><h1>{isMusic ? "Harvis 音乐创作" : "Harvis 图片创作"}</h1></div>
-        <div className="creative-meta"><span>{activeJobs.length ? `${activeJobs.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => void refreshJobs()} disabled={busy}>刷新任务</button></div>
+        <div className="creative-meta"><span>{activeJobs.length ? `${activeJobs.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => { void refreshJobs(); if (selectedJobId) void refreshJobDetail(selectedJobId); }} disabled={busy || jobDetailLoading}>刷新任务</button></div>
       </header>
       {notice && <div className="creative-notice">{notice}</div>}
       <div className="creative-layout">
@@ -354,7 +377,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         </div>
         <aside className="creative-side">
           <section className="creative-panel"><div className="creative-panel-head"><strong>作品任务</strong><span>{jobs.length}</span></div><div className="creative-job-list">{jobs.map((job) => <button key={job.id} className={selectedJob?.id === job.id ? "creative-job active" : "creative-job"} onClick={() => setSelectedJobId(job.id)}><span>{job.kind === "music" ? "音乐" : "图片"}</span><strong>{job.promptSnapshot || "未命名创作"}</strong><small>{jobStatus(job.status)} {job.progress > 0 ? `${job.progress}%` : ""}</small></button>)}{!jobs.length && <div className="creative-empty">暂无创作任务</div>}</div></section>
-          <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
+          <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}{jobDetailLoading ? <div className="creative-empty creative-detail-state">正在同步成品信息…</div> : selectedJob.status === "succeeded" && selectedJob.artifacts.length === 0 ? <div className="creative-empty creative-detail-state">任务已完成，成品归档信息暂未返回。请点击“刷新任务”重试。</div> : null}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
         </aside>
       </div>
       {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.artifact.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => void downloadArtifact(preview.artifact)}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.artifact.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.artifact.fileName} />}</div></div>}

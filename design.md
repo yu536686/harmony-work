@@ -1,6 +1,6 @@
 # 小亨 WorkBuddy 设计规范
 
-> 版本：0.9.2 Harness v2 Tool Surface
+> 版本：0.9.3 Harness v2 Interaction Fixes
 > 状态：当前项目的唯一前端视觉基线
 
 ## 使用规则

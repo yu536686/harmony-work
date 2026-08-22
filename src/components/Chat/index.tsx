@@ -3,14 +3,18 @@ import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
+  Activity,
+  Archive,
   BrainCircuit,
   FolderOpen,
+  ListTodo,
   Paperclip,
   Search,
   SendHorizontal,
   Sparkles,
   Square,
   UserRound,
+  Wrench,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -2381,8 +2385,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                 disabled={!runStatus}
                 role="tab"
                 aria-selected={taskPanelTab === "activity"}
+                aria-label={t("chat.taskActivity")}
+                title={t("chat.taskActivity")}
               >
-                Activity
+                <Activity size={15} strokeWidth={1.8} aria-hidden="true" />
                 {runStatus && <span className="chat-topbar-task-count">{runStatus.iteration}</span>}
               </button>
               <button
@@ -2391,8 +2397,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                 disabled={activePlan.length === 0}
                 role="tab"
                 aria-selected={taskPanelTab === "todo"}
+                aria-label={t("chat.taskTodo")}
+                title={t("chat.taskTodo")}
               >
-                Todo
+                <ListTodo size={15} strokeWidth={1.8} aria-hidden="true" />
                 {activePlan.length > 0 && <span className="chat-topbar-task-count">{activePlan.length}</span>}
               </button>
               <button
@@ -2401,8 +2409,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                 disabled={steps.length === 0}
                 role="tab"
                 aria-selected={taskPanelTab === "tools"}
+                aria-label={t("chat.taskTools")}
+                title={t("chat.taskTools")}
               >
-                Tools
+                <Wrench size={15} strokeWidth={1.8} aria-hidden="true" />
                 {steps.length > 0 && <span className="chat-topbar-task-count">{steps.length}</span>}
               </button>
               <button
@@ -2411,8 +2421,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                 disabled={activeArtifacts.length === 0}
                 role="tab"
                 aria-selected={taskPanelTab === "artifacts"}
+                aria-label={t("chat.taskArtifacts")}
+                title={t("chat.taskArtifacts")}
               >
-                Artifacts
+                <Archive size={15} strokeWidth={1.8} aria-hidden="true" />
                 {activeArtifacts.length > 0 && <span className="chat-topbar-task-count">{activeArtifacts.length}</span>}
               </button>
             </div>
@@ -2625,41 +2637,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               </div>
             )}
 
-            {!isImSession && reviewChanges.length > 0 && (
-              <div className="review-bar">
-                <div className="review-head">
-                  <span className="review-title">
-                    {t("chat.reviewChanges", { count: reviewChanges.length })}
-                  </span>
-                  <div className="review-actions">
-                    <button
-                      className="review-btn danger"
-                      onClick={handleUndoReview}
-                      disabled={undoingReview}
-                    >
-                      {undoingReview ? t("chat.reviewUndoing") : `↩ ${t("chat.reviewUndoAll")}`}
-                    </button>
-                    <button
-                      className="review-btn"
-                      onClick={handleKeepReview}
-                      disabled={undoingReview}
-                    >
-                      ✓ {t("chat.reviewKeep")}
-                    </button>
-                  </div>
-                </div>
-                <ul className="review-files">
-                  {reviewChanges.map((c) => (
-                    <li key={c.id} className="review-file" title={c.rel_path}>
-                      <span className={`review-tag ${c.existed ? "edit" : "new"}`}>
-                        {c.existed ? t("chat.reviewEdit") : t("chat.reviewNew")}
-                      </span>
-                      <span className="review-path">{c.rel_path}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
               </>
             ) : (
               <div className="chat-draft-intro">
@@ -2678,6 +2655,41 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             {!isImSession && <div
               className={`input-area${isDragging ? " drag-over" : ""}`}
             >
+              {reviewChanges.length > 0 && (
+                <div className="review-bar">
+                  <div className="review-head">
+                    <span className="review-title">
+                      {t("chat.reviewChanges", { count: reviewChanges.length })}
+                    </span>
+                    <div className="review-actions">
+                      <button
+                        className="review-btn danger"
+                        onClick={handleUndoReview}
+                        disabled={undoingReview}
+                      >
+                        {undoingReview ? t("chat.reviewUndoing") : `↩ ${t("chat.reviewUndoAll")}`}
+                      </button>
+                      <button
+                        className="review-btn"
+                        onClick={handleKeepReview}
+                        disabled={undoingReview}
+                      >
+                        ✓ {t("chat.reviewKeep")}
+                      </button>
+                    </div>
+                  </div>
+                  <ul className="review-files">
+                    {reviewChanges.map((change) => (
+                      <li key={change.id} className="review-file" title={change.rel_path}>
+                        <span className={`review-tag ${change.existed ? "edit" : "new"}`}>
+                          {change.existed ? t("chat.reviewEdit") : t("chat.reviewNew")}
+                        </span>
+                        <span className="review-path">{change.rel_path}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {(selectedKoi || selectedSkills.length > 0 || pendingAttachments.length > 0) && (
                 <div className="pending-composer-strip">
                   {selectedKoi && (
