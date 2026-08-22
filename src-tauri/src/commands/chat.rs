@@ -3241,6 +3241,7 @@ Before your final user-facing reply, scan the turn for any file path you wrote, 
   - PowerPoint/PPTX: `presentation_artifact`
   - Excel/XLSX: `spreadsheet_artifact`
 → These tools generate and verify OOXML in one call. Do not generate a temporary Python/PowerShell/JavaScript script for a request they support.
+→ For a long Word report whose section payload may exceed one model tool call, create the first section batch with `document_artifact`, then append 2-4 smaller batches with the same path and `append=true`. Stay on `document_artifact`; do not fall back to a generated script.
 → Use `artifact_render` only when PDF or page-image visual QA is required. Generation itself does not require LibreOffice.
 → Legacy `office`, `presentation`, and `com_invoke` are compatibility tools, not defaults. Discover them only when the user explicitly needs macros, complex edits to an existing Office file, Outlook, native chart/pivot behavior, or exact Microsoft Office rendering.
 → If an Artifact tool reports an unsupported feature, explain the limitation once and switch to the compatibility path. Do not repeat the same failed call.

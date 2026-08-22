@@ -2197,6 +2197,12 @@ impl AgentLoop {
                 "presentation" => {
                     "Recover by sending a smaller slide spec, reducing long speaker notes/body text, or splitting the deck into fewer slides per call."
                 }
+                "document_artifact" => {
+                    "Retry document_artifact with a smaller first batch of sections. For the remaining chapters, call document_artifact again with the same path, append=true, and another small section batch. Do not generate a Python, PowerShell, or JavaScript fallback script."
+                }
+                "presentation_artifact" | "spreadsheet_artifact" => {
+                    "Retry the same Artifact tool with valid JSON and more concise structured content. Do not generate a temporary Python, PowerShell, or JavaScript fallback script."
+                }
                 _ => {
                     "Recover by retrying the same tool with valid JSON arguments and smaller string fields."
                 }

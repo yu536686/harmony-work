@@ -32,3 +32,11 @@ test("creates a verified PPTX with a cover and structured slides", async () => {
   expect(entries.filter((entry) => /^ppt\/slides\/slide\d+\.xml$/.test(entry))).toHaveLength(3);
 });
 
+test("rejects image formats outside the safe presentation allowlist", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbuddy-pptx-unsafe-"));
+  await expect(generatePresentation({
+    path: join(directory, "deck.pptx"),
+    title: "安全图片格式验证",
+    slides: [{ title: "不支持的图片", layout: "image", image_path: join(directory, "asset.icns") }],
+  })).rejects.toThrow("presentation images must be PNG, JPEG, GIF, or SVG");
+});

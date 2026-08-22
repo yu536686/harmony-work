@@ -7,7 +7,9 @@ use piscis_kernel::tools::output::ToolArtifact;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
@@ -141,6 +143,67 @@ fn normalize_embedded_asset_paths(
     }
 }
 
+fn document_state_path(workspace_root: &Path, output_path: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    normalized_path(&output_path.to_string_lossy()).hash(&mut hasher);
+    workspace_root
+        .join(".workbuddy")
+        .join("artifact-runtime")
+        .join("drafts")
+        .join(format!("document-{:016x}.json", hasher.finish()))
+}
+
+fn prepare_document_input(input: &mut Value, state_path: &Path) -> Result<()> {
+    let append = input
+        .get("append")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    input
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("document input must be an object"))?
+        .remove("append");
+
+    if append {
+        let raw = std::fs::read_to_string(state_path).with_context(|| {
+            format!(
+                "No document draft exists for append mode: {}. Create the first section batch without append=true.",
+                state_path.display()
+            )
+        })?;
+        let mut previous: Value =
+            serde_json::from_str(&raw).context("Document draft state is invalid")?;
+        let additions = input
+            .get("sections")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| anyhow!("sections must be an array"))?;
+        let sections = previous
+            .get_mut("sections")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| anyhow!("Persisted document sections are invalid"))?;
+        sections.extend(additions);
+        *input = previous;
+    }
+
+    let section_count = input
+        .get("sections")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| anyhow!("sections must be an array"))?;
+    if section_count > 80 {
+        return Err(anyhow!("document supports at most 80 sections"));
+    }
+    Ok(())
+}
+
+fn persist_document_state(state_path: &Path, input: &Value) -> Result<()> {
+    if let Some(parent) = state_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(state_path, serde_json::to_vec(input)?)?;
+    Ok(())
+}
+
 fn write_embedded_runtime(workspace_root: &Path) -> Result<PathBuf> {
     let directory = workspace_root.join(".workbuddy").join("artifact-runtime");
     std::fs::create_dir_all(&directory)?;
@@ -237,6 +300,13 @@ async fn run_artifact_runtime(
     let output_path_text = output_path.to_string_lossy().to_string();
     input["path"] = Value::String(output_path_text.clone());
     normalize_embedded_asset_paths(kind, &mut input, &ctx.workspace_root);
+    let document_state = if kind == ArtifactKind::Document {
+        let state = document_state_path(&ctx.workspace_root, &output_path);
+        prepare_document_input(&mut input, &state)?;
+        Some(state)
+    } else {
+        None
+    };
 
     let runtime = write_embedded_runtime(&ctx.workspace_root)?;
     let jobs = ctx
@@ -290,6 +360,9 @@ async fn run_artifact_runtime(
             )))
         }
     };
+    if let Some(state_path) = document_state.as_ref() {
+        persist_document_state(state_path, &input)?;
+    }
     let name = output_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -340,7 +413,7 @@ impl Tool for DocumentArtifactTool {
         "document_artifact"
     }
     fn description(&self) -> &str {
-        "Create a new verified DOCX from structured sections. Prefer this for new Word deliverables. Supports paragraphs, bullets, tables, local images, headers, footers, and page breaks without Microsoft Word or COM."
+        "Create a new verified DOCX from structured sections. Prefer this for new Word deliverables. Supports paragraphs, bullets, tables, local images, headers, footers, and page breaks without Microsoft Word or COM. For a long report, create the first section batch normally, then call the same tool with append=true and smaller section batches."
     }
     fn description_minimal(&self) -> Cow<'_, str> {
         Cow::Borrowed(
@@ -357,6 +430,7 @@ impl Tool for DocumentArtifactTool {
                 "author": { "type": "string" },
                 "header_text": { "type": "string" },
                 "footer_text": { "type": "string" },
+                "append": { "type": "boolean", "description": "Append these sections to this path's last successful document draft. Use smaller batches for long reports." },
                 "sections": {
                     "type": "array",
                     "maxItems": 80,
@@ -383,7 +457,7 @@ impl Tool for DocumentArtifactTool {
                     }
                 }
             },
-            "required": ["path", "title", "sections"]
+            "required": ["path", "sections"]
         })
     }
     fn metadata(&self) -> ToolMetadata {
@@ -845,5 +919,35 @@ mod tests {
             presentation["slides"][0]["image_path"],
             Value::String(absolute.to_string_lossy().to_string())
         );
+    }
+
+    #[test]
+    fn long_documents_can_append_sections_to_a_persisted_draft() {
+        let directory = std::env::temp_dir().join(format!(
+            "workbuddy-document-append-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&directory).expect("create tempdir");
+        let output = directory.join("report.docx");
+        let state = document_state_path(&directory, &output);
+        let mut initial = json!({
+            "path": output.to_string_lossy(),
+            "title": "商业推广报告",
+            "sections": [{ "heading": "第一章", "paragraphs": ["初始内容"] }]
+        });
+        prepare_document_input(&mut initial, &state).expect("initial document input");
+        persist_document_state(&state, &initial).expect("persist initial state");
+
+        let mut append = json!({
+            "path": output.to_string_lossy(),
+            "append": true,
+            "sections": [{ "heading": "第二章", "paragraphs": ["追加内容"] }]
+        });
+        prepare_document_input(&mut append, &state).expect("append document input");
+
+        assert_eq!(append["title"], "商业推广报告");
+        assert_eq!(append["sections"].as_array().map(Vec::len), Some(2));
+        assert!(append.get("append").is_none());
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

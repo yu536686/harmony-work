@@ -1,5 +1,5 @@
 import { mkdir, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, extname } from "node:path";
 import PptxGenJS from "pptxgenjs";
 import type {
   GenerationResult,
@@ -26,6 +26,15 @@ const THEMES: Record<PresentationThemeName, Theme> = {
 };
 
 const FONT = "Microsoft YaHei";
+const SAFE_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg"]);
+
+function validatePresentationImages(spec: PresentationSpec): void {
+  for (const slide of spec.slides) {
+    if (slide.image_path && !SAFE_IMAGE_EXTENSIONS.has(extname(slide.image_path).toLowerCase())) {
+      throw new Error(`presentation images must be PNG, JPEG, GIF, or SVG: ${slide.image_path}`);
+    }
+  }
+}
 
 function addPageChrome(slide: PptxGenJS.Slide, pptx: PptxGenJS, theme: Theme, index: number): void {
   slide.background = { color: theme.background };
@@ -95,6 +104,7 @@ export async function generatePresentation(spec: PresentationSpec): Promise<Gene
   if (!spec.title.trim()) throw new Error("presentation title is required");
   if (!spec.slides.length) throw new Error("presentation slides must not be empty");
   if (spec.slides.length > 40) throw new Error("presentation supports at most 40 content slides");
+  validatePresentationImages(spec);
 
   const pptx = new PptxGenJS();
   const theme = THEMES[spec.theme ?? "clean_light"];
