@@ -57,6 +57,7 @@ pub struct CodexProcess {
     child: Mutex<Child>,
     stderr_history: Arc<Mutex<VecDeque<String>>>,
     executable: PathBuf,
+    initialization: Value,
 }
 
 impl CodexProcess {
@@ -88,7 +89,7 @@ impl CodexProcess {
         let stderr_history = Arc::new(Mutex::new(VecDeque::new()));
         capture_stderr(stderr, Arc::clone(&stderr_history));
         let (client, events) = AppServerClient::new(stdout, stdin);
-        initialize_app_server(&client, &config.identity).await?;
+        let initialization = initialize_app_server(&client, &config.identity).await?;
 
         Ok(Self {
             client,
@@ -96,6 +97,7 @@ impl CodexProcess {
             child: Mutex::new(child),
             stderr_history,
             executable,
+            initialization,
         })
     }
 
@@ -113,6 +115,10 @@ impl CodexProcess {
 
     pub fn executable(&self) -> &Path {
         &self.executable
+    }
+
+    pub fn initialization(&self) -> &Value {
+        &self.initialization
     }
 
     pub async fn shutdown(&self) -> Result<(), CodexProcessError> {

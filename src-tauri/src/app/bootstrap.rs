@@ -307,6 +307,13 @@ fn run_impl() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
+            let app_data_dir = app_handle
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+            let codex_runtime = crate::codex_runtime::service::CodexRuntimeState::new(&app_data_dir)?;
+            app.manage(codex_runtime);
+
             let state = tauri::async_runtime::block_on(async {
                 let scheduler = scheduler::cron::CronScheduler::new().await?;
                 scheduler.start().await?;
@@ -320,10 +327,6 @@ fn run_impl() {
             // already benefits from any saved manual calibration. The fit/apply/
             // store logic now lives in the standalone `robotz-automation` crate.
             {
-                let app_data_dir = app_handle
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
                 robotz_automation::calibration::refresh_cache(&app_data_dir);
             }
 
@@ -1240,6 +1243,7 @@ fn run_impl() {
         })
         .invoke_handler(tauri::generate_handler![
             open_path,
+            crate::codex_runtime::service::codex_runtime_diagnostic,
             // config/
             commands::config::settings::get_settings,
             commands::config::settings::get_default_workspace,
