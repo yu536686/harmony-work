@@ -97,7 +97,9 @@ where
             return Err(error);
         }
 
-        receiver.await.unwrap_or(Err(AppServerError::TransportClosed))
+        receiver
+            .await
+            .unwrap_or(Err(AppServerError::TransportClosed))
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), AppServerError> {
@@ -212,14 +214,12 @@ mod tests {
         });
 
         let mut lines = BufReader::new(server_reader).lines();
-        let first_line: serde_json::Value = serde_json::from_str(
-            &lines.next_line().await.expect("read").expect("first line"),
-        )
-        .expect("request json");
-        let second_line: serde_json::Value = serde_json::from_str(
-            &lines.next_line().await.expect("read").expect("second line"),
-        )
-        .expect("request json");
+        let first_line: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.expect("read").expect("first line"))
+                .expect("request json");
+        let second_line: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.expect("read").expect("second line"))
+                .expect("request json");
 
         let (first_id, second_id) = if first_line["params"]["cwd"] == "/tmp/a" {
             (first_line["id"].clone(), second_line["id"].clone())
@@ -238,8 +238,14 @@ mod tests {
             .await
             .expect("write responses");
 
-        assert_eq!(first.await.expect("join").expect("response"), json!({"name": "first"}));
-        assert_eq!(second.await.expect("join").expect("response"), json!({"name": "second"}));
+        assert_eq!(
+            first.await.expect("join").expect("response"),
+            json!({"name": "first"})
+        );
+        assert_eq!(
+            second.await.expect("join").expect("response"),
+            json!({"name": "second"})
+        );
     }
 
     #[tokio::test]

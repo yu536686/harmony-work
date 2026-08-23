@@ -312,13 +312,17 @@ fn run_impl() {
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
             let codex_runtime = crate::codex_runtime::service::CodexRuntimeState::new(&app_data_dir)?;
-            app.manage(codex_runtime);
 
             let state = tauri::async_runtime::block_on(async {
                 let scheduler = scheduler::cron::CronScheduler::new().await?;
                 scheduler.start().await?;
                 store::AppState::new_sync(&app_handle, scheduler)
             })?;
+            tauri::async_runtime::block_on(async {
+                let settings = state.settings.lock().await;
+                codex_runtime.configure_credentials(&settings).await;
+            });
+            app.manage(codex_runtime);
             let managed = state.clone();
             app.manage(managed);
 
@@ -1244,6 +1248,8 @@ fn run_impl() {
         .invoke_handler(tauri::generate_handler![
             open_path,
             crate::codex_runtime::service::codex_runtime_diagnostic,
+            crate::codex_runtime::service::codex_chat_send,
+            crate::codex_runtime::service::codex_chat_cancel,
             // config/
             commands::config::settings::get_settings,
             commands::config::settings::get_default_workspace,

@@ -2,6 +2,7 @@ use crate::codex_runtime::client::{
     AppServerClient, AppServerError, AppServerEvent, AppServerEventReceiver,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,6 +34,7 @@ pub struct CodexLaunchConfig {
     pub executable_override: Option<PathBuf>,
     pub codex_home: PathBuf,
     pub identity: AppServerIdentity,
+    pub environment: HashMap<String, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +70,7 @@ impl CodexProcess {
         command
             .args(app_server_args())
             .env("CODEX_HOME", &config.codex_home)
+            .envs(&config.environment)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -119,6 +122,15 @@ impl CodexProcess {
 
     pub fn initialization(&self) -> &Value {
         &self.initialization
+    }
+
+    pub async fn is_running(&self) -> Result<bool, CodexProcessError> {
+        self.child
+            .lock()
+            .await
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(CodexProcessError::Stop)
     }
 
     pub async fn shutdown(&self) -> Result<(), CodexProcessError> {
@@ -191,7 +203,10 @@ fn bundled_codex_candidates() -> Vec<PathBuf> {
         return Vec::new();
     };
     let binary = codex_binary_name();
-    let mut candidates = vec![directory.join(binary), directory.join("resources").join(binary)];
+    let mut candidates = vec![
+        directory.join(binary),
+        directory.join("resources").join(binary),
+    ];
     if let Some(contents) = directory.parent() {
         candidates.push(contents.join("Resources").join(binary));
     }
@@ -214,10 +229,7 @@ const fn codex_binary_name() -> &'static str {
     }
 }
 
-fn capture_stderr(
-    stderr: tokio::process::ChildStderr,
-    history: Arc<Mutex<VecDeque<String>>>,
-) {
+fn capture_stderr(stderr: tokio::process::ChildStderr, history: Arc<Mutex<VecDeque<String>>>) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -244,24 +256,28 @@ mod tests {
         let (client, _events) = AppServerClient::new(client_reader, client_writer);
         let server = tokio::spawn(async move {
             let mut lines = BufReader::new(server_reader).lines();
-            let request: serde_json::Value = serde_json::from_str(
-                &lines.next_line().await.expect("read").expect("initialize"),
-            )
-            .expect("json");
+            let request: serde_json::Value =
+                serde_json::from_str(&lines.next_line().await.expect("read").expect("initialize"))
+                    .expect("json");
             assert_eq!(request["method"], "initialize");
-            assert_eq!(request["params"]["clientInfo"]["name"], "xiaoheng-workbuddy");
+            assert_eq!(
+                request["params"]["clientInfo"]["name"],
+                "xiaoheng-workbuddy"
+            );
             server_writer
                 .write_all(
-                    format!("{}\n", json!({"id": request["id"], "result": {"userAgent": "codex-test"}}))
-                        .as_bytes(),
+                    format!(
+                        "{}\n",
+                        json!({"id": request["id"], "result": {"userAgent": "codex-test"}})
+                    )
+                    .as_bytes(),
                 )
                 .await
                 .expect("respond");
 
-            let notification: serde_json::Value = serde_json::from_str(
-                &lines.next_line().await.expect("read").expect("initialized"),
-            )
-            .expect("json");
+            let notification: serde_json::Value =
+                serde_json::from_str(&lines.next_line().await.expect("read").expect("initialized"))
+                    .expect("json");
             assert_eq!(notification["method"], "initialized");
         });
 

@@ -48,19 +48,15 @@ pub fn parse_incoming(line: &str) -> Result<IncomingMessage, ProtocolError> {
         (Some(id), None, result, error) if result.is_some() || error.is_some() => {
             Ok(IncomingMessage::Response(RpcResponse { id, result, error }))
         }
-        (Some(id), Some(method), None, None) => {
-            Ok(IncomingMessage::ServerRequest(RpcRequest {
-                id,
-                method: method.to_string(),
-                params: object.get("params").cloned().unwrap_or(Value::Null),
-            }))
-        }
-        (None, Some(method), None, None) => {
-            Ok(IncomingMessage::Notification(RpcNotification {
-                method: method.to_string(),
-                params: object.get("params").cloned().unwrap_or(Value::Null),
-            }))
-        }
+        (Some(id), Some(method), None, None) => Ok(IncomingMessage::ServerRequest(RpcRequest {
+            id,
+            method: method.to_string(),
+            params: object.get("params").cloned().unwrap_or(Value::Null),
+        })),
+        (None, Some(method), None, None) => Ok(IncomingMessage::Notification(RpcNotification {
+            method: method.to_string(),
+            params: object.get("params").cloned().unwrap_or(Value::Null),
+        })),
         _ => Err(ProtocolError::InvalidShape),
     }
 }
@@ -104,10 +100,9 @@ mod tests {
 
     #[test]
     fn classifies_notification() {
-        let message = parse_incoming(
-            r#"{"method":"item/agentMessage/delta","params":{"delta":"hello"}}"#,
-        )
-        .expect("valid notification");
+        let message =
+            parse_incoming(r#"{"method":"item/agentMessage/delta","params":{"delta":"hello"}}"#)
+                .expect("valid notification");
 
         assert_eq!(
             message,

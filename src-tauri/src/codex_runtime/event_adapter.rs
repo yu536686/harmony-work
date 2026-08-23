@@ -84,7 +84,11 @@ impl CodexEventAdapter {
                 .params
                 .get("delta")
                 .and_then(Value::as_str)
-                .map(|delta| vec![WorkBuddyEvent::TextDelta { delta: delta.into() }])
+                .map(|delta| {
+                    vec![WorkBuddyEvent::TextDelta {
+                        delta: delta.into(),
+                    }]
+                })
                 .unwrap_or_default(),
             "item/started" => self.item_started(&notification.params),
             "item/completed" => self.item_completed(&notification.params),
@@ -184,7 +188,11 @@ impl CodexEventAdapter {
             .enumerate()
             .filter_map(|(index, step)| {
                 let content = step.get("step")?.as_str()?.to_string();
-                let status = match step.get("status").and_then(Value::as_str).unwrap_or("pending") {
+                let status = match step
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending")
+                {
                     "inProgress" => "in_progress",
                     "completed" => "completed",
                     _ => "pending",
@@ -225,7 +233,11 @@ impl CodexEventAdapter {
         let thread_id = string_field(params, "threadId").unwrap_or("unknown");
         let iteration = self.iterations.get(thread_id).copied().unwrap_or(1);
         let turn = params.get("turn").unwrap_or(&Value::Null);
-        match turn.get("status").and_then(Value::as_str).unwrap_or("failed") {
+        match turn
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("failed")
+        {
             "completed" => {
                 let usage = self.usage.get(thread_id).copied().unwrap_or_default();
                 vec![
@@ -269,7 +281,10 @@ fn tool_identity(item: &Value) -> Option<(String, String)> {
 }
 
 fn value_id(value: &Value) -> String {
-    value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string())
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -298,7 +313,12 @@ mod tests {
             params: json!({"threadId":"th1","turnId":"tu1","itemId":"i1","delta":"你好"}),
         });
 
-        assert_eq!(events, vec![WorkBuddyEvent::TextDelta { delta: "你好".into() }]);
+        assert_eq!(
+            events,
+            vec![WorkBuddyEvent::TextDelta {
+                delta: "你好".into()
+            }]
+        );
     }
 
     #[test]
@@ -348,8 +368,16 @@ mod tests {
             events,
             vec![WorkBuddyEvent::PlanUpdate {
                 items: vec![
-                    WorkBuddyPlanItem { id: "step-1".into(), content: "读取 CSV".into(), status: "in_progress".into() },
-                    WorkBuddyPlanItem { id: "step-2".into(), content: "生成 PPT".into(), status: "pending".into() },
+                    WorkBuddyPlanItem {
+                        id: "step-1".into(),
+                        content: "读取 CSV".into(),
+                        status: "in_progress".into()
+                    },
+                    WorkBuddyPlanItem {
+                        id: "step-2".into(),
+                        content: "生成 PPT".into(),
+                        status: "pending".into()
+                    },
                 ]
             }]
         );
@@ -377,8 +405,15 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                WorkBuddyEvent::RunStatus { iteration: 1, phase: "closing".into(), detail: "任务已完成".into() },
-                WorkBuddyEvent::Done { total_input_tokens: 500, total_output_tokens: 80 }
+                WorkBuddyEvent::RunStatus {
+                    iteration: 1,
+                    phase: "closing".into(),
+                    detail: "任务已完成".into()
+                },
+                WorkBuddyEvent::Done {
+                    total_input_tokens: 500,
+                    total_output_tokens: 80
+                }
             ]
         );
     }

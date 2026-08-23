@@ -115,7 +115,9 @@ impl CodexSessionMapStore {
 
     pub fn count(&self) -> Result<u64, CodexSessionMapError> {
         self.connection()?
-            .query_row("SELECT COUNT(*) FROM codex_session_bindings", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM codex_session_bindings", [], |row| {
+                row.get(0)
+            })
             .map_err(CodexSessionMapError::from)
     }
 

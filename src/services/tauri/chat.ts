@@ -172,6 +172,30 @@ export interface ChatSendOptions {
   clearPlan?: boolean;
 }
 
+export interface CodexRuntimeDiagnostic {
+  running: boolean;
+  displayVersion: string;
+  packageVersion: string;
+  targetCodexVersion: string;
+  executable?: string | null;
+  userAgent?: string | null;
+  codexHome: string;
+  versionMatchesTarget?: boolean | null;
+  mappedSessions: number;
+  stderrTail: string[];
+}
+
+export interface CodexTurnStarted {
+  threadId: string;
+  turnId: string;
+}
+
+export interface CodexChatAttachment {
+  path: string;
+  name: string;
+  mediaType: string;
+}
+
 export const chatApi = {
   send: (sessionId: string, content: string, options?: ChatSendOptions) => {
     const attachments =
@@ -193,6 +217,23 @@ export const chatApi = {
     invoke<void>("chat_cancel", { sessionId }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
     listen<AgentEventType>(`agent_event_${sessionId}`, (e) => handler(e.payload)),
+};
+
+/** b1 Codex harness channel. Kept separate until all legacy business tools are exposed by MCP. */
+export const codexChatApi = {
+  diagnostic: (start = false) =>
+    invoke<CodexRuntimeDiagnostic>("codex_runtime_diagnostic", { start }),
+  send: (params: {
+    sessionId: string;
+    content: string;
+    workspaceRoot: string;
+    provider: string;
+    model: string;
+    permissionMode?: "restricted" | "approval" | "full";
+    attachments?: CodexChatAttachment[];
+  }) => invoke<CodexTurnStarted>("codex_chat_send", params),
+  cancel: (threadId: string, turnId: string) =>
+    invoke<void>("codex_chat_cancel", { threadId, turnId }),
 };
 
 // ---------------------------------------------------------------------------
