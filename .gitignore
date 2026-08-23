@@ -12,3 +12,4 @@ backups/
 *.msi
 *.zip
 *.7z
+src-tauri/resources/codex/

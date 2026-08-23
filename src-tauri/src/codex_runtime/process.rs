@@ -1,6 +1,7 @@
 use crate::codex_runtime::client::{
     AppServerClient, AppServerError, AppServerEvent, AppServerEventReceiver,
 };
+use crate::codex_runtime::config::PINNED_CODEX_VERSION;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -43,6 +44,10 @@ pub enum CodexProcessError {
     ExecutableNotFound,
     #[error("failed to start Codex app-server: {0}")]
     Start(#[source] std::io::Error),
+    #[error("failed to inspect Codex version: {0}")]
+    VersionCheck(#[source] std::io::Error),
+    #[error("Codex version mismatch: expected {expected}, found {actual}")]
+    VersionMismatch { expected: String, actual: String },
     #[error("Codex app-server did not expose {0}")]
     MissingPipe(&'static str),
     #[error("Codex app-server initialization failed: {0}")]
@@ -66,6 +71,7 @@ impl CodexProcess {
     pub async fn launch(config: CodexLaunchConfig) -> Result<Self, CodexProcessError> {
         std::fs::create_dir_all(&config.codex_home).map_err(CodexProcessError::PrepareHome)?;
         let executable = resolve_codex_executable(config.executable_override)?;
+        verify_codex_version(&executable).await?;
         let mut command = Command::new(&executable);
         command
             .args(app_server_args())
@@ -205,6 +211,10 @@ fn bundled_codex_candidates() -> Vec<PathBuf> {
     let Ok(current_exe) = std::env::current_exe() else {
         return Vec::new();
     };
+    bundled_codex_candidates_from(&current_exe)
+}
+
+fn bundled_codex_candidates_from(current_exe: &Path) -> Vec<PathBuf> {
     let Some(directory) = current_exe.parent() else {
         return Vec::new();
     };
@@ -212,11 +222,51 @@ fn bundled_codex_candidates() -> Vec<PathBuf> {
     let mut candidates = vec![
         directory.join(binary),
         directory.join("resources").join(binary),
+        directory.join("resources").join("codex").join(binary),
     ];
     if let Some(contents) = directory.parent() {
         candidates.push(contents.join("Resources").join(binary));
+        candidates.push(
+            contents
+                .join("Resources")
+                .join("resources")
+                .join("codex")
+                .join(binary),
+        );
     }
     candidates
+}
+
+async fn verify_codex_version(executable: &Path) -> Result<(), CodexProcessError> {
+    let output = Command::new(executable)
+        .arg("--version")
+        .output()
+        .await
+        .map_err(CodexProcessError::VersionCheck)?;
+    let actual = parse_codex_version(&String::from_utf8_lossy(&output.stdout))
+        .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_string());
+    if !output.status.success() || actual != PINNED_CODEX_VERSION {
+        return Err(CodexProcessError::VersionMismatch {
+            expected: PINNED_CODEX_VERSION.to_string(),
+            actual: if actual.is_empty() {
+                "unknown".to_string()
+            } else {
+                actual
+            },
+        });
+    }
+    Ok(())
+}
+
+fn parse_codex_version(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|value| value.is_ascii_digit())
+        })
+        .map(|part| part.trim().to_string())
 }
 
 fn npm_codex_candidate() -> Option<PathBuf> {
@@ -335,5 +385,24 @@ mod tests {
         assert_eq!(resolved, path);
 
         std::fs::remove_file(resolved).expect("remove fixture");
+    }
+
+    #[test]
+    fn bundled_candidates_include_tauri_resource_layout() {
+        let executable = Path::new("/Applications/WorkBuddy.app/Contents/MacOS/workbuddy");
+        let candidates = bundled_codex_candidates_from(executable);
+        assert!(candidates.iter().any(|path| {
+            path.to_string_lossy()
+                .contains("Contents/Resources/resources/codex/codex")
+        }));
+    }
+
+    #[test]
+    fn parses_pinned_codex_cli_version() {
+        assert_eq!(
+            parse_codex_version("codex-cli 0.149.0\n").as_deref(),
+            Some("0.149.0")
+        );
+        assert_eq!(parse_codex_version("unexpected output"), None);
     }
 }
