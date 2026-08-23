@@ -45,7 +45,7 @@
 2026-08-23 在 macOS arm64 工作树执行：
 
 - Codex Runtime Rust 测试：30/30 通过。
-- Rust 全量 lib 测试：124 通过，1 个真实网络测试忽略，0 失败。
+- Rust 全量 lib 测试：126 通过，1 个真实网络测试忽略，0 失败。
 - 前端测试：39/39 通过。
 - Artifact Runtime：5/5 通过。
 - Codex SDK runner：4/4 通过。
