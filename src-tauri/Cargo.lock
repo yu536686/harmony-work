@@ -9128,7 +9128,7 @@ dependencies = [
 
 [[package]]
 name = "xiaoheng-workbuddy"
-version = "0.9.5"
+version = "1.0.0-beta.1"
 dependencies = [
  "aes",
  "anyhow",

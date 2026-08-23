@@ -207,7 +207,7 @@ fn persist_document_state(state_path: &Path, input: &Value) -> Result<()> {
 fn write_embedded_runtime(workspace_root: &Path) -> Result<PathBuf> {
     let directory = workspace_root.join(".workbuddy").join("artifact-runtime");
     std::fs::create_dir_all(&directory)?;
-    let path = directory.join("artifact-runtime-0.9.5.cjs");
+    let path = directory.join("artifact-runtime-1.0.0-beta.1.cjs");
     let needs_write = std::fs::metadata(&path)
         .map(|metadata| metadata.len() != EMBEDDED_RUNTIME.len() as u64)
         .unwrap_or(true);
