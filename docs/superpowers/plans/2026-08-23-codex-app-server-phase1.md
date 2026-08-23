@@ -8,6 +8,10 @@
 
 **技术栈：** Rust、Tokio、Serde、Tauri 2、Codex app-server 0.149.0、SQLite、Vitest。
 
+**执行状态（2026-08-23）：** Phase 1 基础运行时、并行真实 thread/turn 通道、
+`codex exec`、Codex SDK runner 和固定 sidecar 已完成。验证证据见
+`docs/CODEX_PHASE1_VERIFICATION.md`。默认 `chat_send` 切换和 Piscis 删除属于后续阶段。
+
 ---
 
 ## 文件结构
@@ -97,4 +101,3 @@
 - DeepSeek Responses smoke test 能完成一次 function call 回环。
 - 审批、取消和崩溃恢复均有自动化测试。
 - 默认 0.9.5 路径回归测试无变化。
-
