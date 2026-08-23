@@ -192,6 +192,12 @@ pub fn resolve_codex_executable(
         }
     }
 
+    if let Some(path) = npm_codex_candidate() {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
     find_in_path().ok_or(CodexProcessError::ExecutableNotFound)
 }
 
@@ -211,6 +217,33 @@ fn bundled_codex_candidates() -> Vec<PathBuf> {
         candidates.push(contents.join("Resources").join(binary));
     }
     candidates
+}
+
+fn npm_codex_candidate() -> Option<PathBuf> {
+    let (package_suffix, target_triple) = npm_codex_target()?;
+    let current_dir = std::env::current_dir().ok()?;
+    Some(
+        current_dir
+            .join("node_modules")
+            .join("@openai")
+            .join(format!("codex-{package_suffix}"))
+            .join("vendor")
+            .join(target_triple)
+            .join("bin")
+            .join(codex_binary_name()),
+    )
+}
+
+fn npm_codex_target() -> Option<(&'static str, &'static str)> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some(("darwin-arm64", "aarch64-apple-darwin")),
+        ("macos", "x86_64") => Some(("darwin-x64", "x86_64-apple-darwin")),
+        ("windows", "x86_64") => Some(("win32-x64", "x86_64-pc-windows-msvc")),
+        ("windows", "aarch64") => Some(("win32-arm64", "aarch64-pc-windows-msvc")),
+        ("linux", "x86_64") => Some(("linux-x64", "x86_64-unknown-linux-musl")),
+        ("linux", "aarch64") => Some(("linux-arm64", "aarch64-unknown-linux-musl")),
+        _ => None,
+    }
 }
 
 fn find_in_path() -> Option<PathBuf> {

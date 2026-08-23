@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
+    "test:codex-sdk": "node --test scripts/codex-sdk-runner.test.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:artifact-runtime": "vitest run --config artifact-runtime/vitest.config.ts",
@@ -19,6 +20,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@openai/codex-sdk": "0.149.0",
     "@reduxjs/toolkit": "^2.3.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",

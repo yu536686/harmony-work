@@ -1,6 +1,7 @@
 pub mod client;
 pub mod config;
 pub mod event_adapter;
+pub mod headless;
 pub mod process;
 pub mod protocol;
 pub mod runner;
