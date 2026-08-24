@@ -391,10 +391,11 @@ mod tests {
     fn bundled_candidates_include_tauri_resource_layout() {
         let executable = Path::new("/Applications/WorkBuddy.app/Contents/MacOS/workbuddy");
         let candidates = bundled_codex_candidates_from(executable);
-        assert!(candidates.iter().any(|path| {
-            path.to_string_lossy()
-                .contains("Contents/Resources/resources/codex/codex")
-        }));
+        let expected = Path::new("/Applications/WorkBuddy.app/Contents/Resources")
+            .join("resources")
+            .join("codex")
+            .join(codex_binary_name());
+        assert!(candidates.contains(&expected));
     }
 
     #[test]
