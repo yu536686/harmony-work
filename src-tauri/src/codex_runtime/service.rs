@@ -499,6 +499,7 @@ mod tests {
         assert_eq!(diagnostic.target_codex_version, "0.149.0");
         assert_eq!(diagnostic.mapped_sessions, 0);
 
+        drop(state);
         std::fs::remove_dir_all(directory).expect("remove state dir");
     }
 }
