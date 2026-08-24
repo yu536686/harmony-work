@@ -17,8 +17,10 @@ test("maps supported platforms to Codex native package layouts", () => {
 
 test("stages the sidecar under the Tauri resource tree", () => {
   const paths = codexSidecarPaths("linux", "x64");
-  assert.match(paths.source, /@openai\/codex-linux-x64\/vendor\/x86_64-unknown-linux-musl/);
-  assert.match(paths.destination, /src-tauri\/resources\/codex\/codex$/);
+  const source = paths.source.replaceAll("\\", "/");
+  const destination = paths.destination.replaceAll("\\", "/");
+  assert.match(source, /@openai\/codex-linux-x64\/vendor\/x86_64-unknown-linux-musl/);
+  assert.match(destination, /src-tauri\/resources\/codex\/codex$/);
 });
 
 test("rejects an unsupported target", () => {
