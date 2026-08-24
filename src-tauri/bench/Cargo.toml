@@ -1,0 +1,26 @@
+# Bench-only compression CLI. It links `piscis_desktop_lib`, so it must live in
+# this workspace rather than the extracted piscis-engine — but it is its OWN
+# crate (not a target of `piscis-desktop`) so Tauri's bundler never tries to
+# ship it in the desktop installers. Build explicitly with:
+#   cargo build -p piscis-bench --release   (binary: target/release/piscis_compact_one)
+[package]
+name = "piscis-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Bench-only one-shot compression CLI for OpenPiscis (not shipped)."
+
+[[bin]]
+name = "piscis_compact_one"
+path = "src/main.rs"
+
+[dependencies]
+# Alias the dep key to the lib's crate name so `xiaoheng_workbuddy_lib::…` resolves.
+xiaoheng_workbuddy_lib = { path = "..", package = "xiaoheng-workbuddy" }
+piscis-kernel = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

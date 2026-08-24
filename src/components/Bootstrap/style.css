@@ -1,0 +1,217 @@
+.bootstrap-screen {
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 48px 48px 72px;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 15% 5%, rgba(212, 173, 91, 0.18), transparent 34%),
+    linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.bootstrap-shell {
+  width: min(960px, 100%);
+  margin: 0 auto;
+}
+
+.bootstrap-hero {
+  margin: 0 0 28px;
+}
+
+.bootstrap-hero h1 {
+  margin: 10px 0;
+  font-size: 42px;
+  letter-spacing: 0;
+}
+
+.bootstrap-hero p {
+  max-width: 760px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.bootstrap-actions,
+.bootstrap-panel-head,
+.bootstrap-login {
+  display: flex;
+  gap: 12px;
+}
+
+.bootstrap-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.bootstrap-steps span {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.bootstrap-steps span.active {
+  border-color: rgba(212, 173, 91, 0.7);
+  color: var(--text-primary);
+  background: rgba(212, 173, 91, 0.14);
+}
+
+.bootstrap-actions {
+  flex-wrap: wrap;
+  margin-top: 24px;
+  margin-bottom: 4px;
+  justify-content: flex-end;
+}
+
+.bootstrap-panel {
+  padding: 22px;
+  border-radius: 12px;
+}
+
+.bootstrap-login-panel {
+  max-width: 560px;
+}
+
+.bootstrap-panel-head {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.bootstrap-panel-head h2 {
+  margin: 4px 0 0;
+}
+
+.bootstrap-runtime-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bootstrap-runtime {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(96px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.bootstrap-runtime strong,
+.bootstrap-runtime small {
+  display: block;
+}
+
+.bootstrap-runtime-main {
+  min-width: 0;
+}
+
+.bootstrap-runtime small,
+.bootstrap-note,
+.bootstrap-paths p {
+  color: var(--text-muted);
+}
+
+.bootstrap-runtime-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.bootstrap-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #d86b5f;
+}
+
+.bootstrap-dot.ready {
+  background: #4fb477;
+}
+
+.bootstrap-paths {
+  margin-top: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.bootstrap-paths code {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.bootstrap-login {
+  flex-direction: column;
+}
+
+.bootstrap-login label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.bootstrap-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(212, 173, 91, 0.14);
+  color: var(--text-primary);
+  margin-top: 14px;
+}
+
+.bootstrap-message.error {
+  background: rgba(216, 107, 95, 0.14);
+  color: #d86b5f;
+}
+
+.bootstrap-login-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bootstrap-note {
+  margin-top: 14px;
+  line-height: 1.6;
+}
+
+.bootstrap-log {
+  margin: 18px auto 0;
+  padding: 18px;
+}
+
+.bootstrap-log pre {
+  margin: 10px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .bootstrap-screen {
+    padding: 28px 28px 72px;
+  }
+
+  .bootstrap-runtime {
+    grid-template-columns: 14px minmax(0, 1fr);
+  }
+
+  .bootstrap-runtime-btn {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .bootstrap-login-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Harmony Cut</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>Harmony Cut</h1>
+        <p>商摄素材快速看片、AI 初剪、人工标注与剪映草稿交付</p>
+      </div>
+      <div class="project-actions">
+        <button id="newProjectBtn" class="primary">新建项目</button>
+        <button id="loadLatestBtn">载入最近</button>
+        <button id="scanBtn">扫描并初剪</button>
+        <button id="saveBtn">保存并回到 AI</button>
+        <button id="previewBtn">渲染预览</button>
+        <button id="draftBtn" class="accent">Agent 生成草稿</button>
+      </div>
+    </header>
+
+    <section class="setup">
+      <label>
+        项目 ID
+        <input id="projectIdInput" readonly value="" />
+      </label>
+      <label>
+        项目名称
+        <input id="titleInput" value="HarmonyCut_Demo" />
+      </label>
+      <label class="wide">
+        素材文件夹
+        <div class="path-row">
+          <input id="mediaDirInput" value="D:\亨吉利时间\260708 7月第二次拍摄\12" />
+          <button id="browseBtn" title="浏览文件夹">浏览</button>
+        </div>
+      </label>
+      <label class="wide">
+        剪辑要求
+        <input id="requirementInput" value="腕表商摄 12 镜头结构，优先稳定清晰片段，误判横屏素材顺时针旋转为竖屏。" />
+      </label>
+      <label class="check">
+        <input id="autoRotateInput" type="checkbox" checked />
+        横屏素材自动顺时针旋转
+      </label>
+    </section>
+
+    <section id="browserPanel" class="browser-panel hidden">
+      <div class="browser-header">
+        <strong id="browserPath">磁盘</strong>
+        <div>
+          <button id="browserUpBtn">上一级</button>
+          <button id="browserUseBtn" class="primary">使用此文件夹</button>
+          <button id="browserCloseBtn">关闭</button>
+        </div>
+      </div>
+      <div id="browserList" class="browser-list"></div>
+    </section>
+
+    <main class="workspace">
+      <aside class="assets-pane">
+        <div class="pane-title">
+          <strong>素材</strong>
+          <span id="assetCount">0</span>
+        </div>
+        <div id="assetList" class="asset-list"></div>
+      </aside>
+
+      <section class="review-pane">
+        <div class="video-shell">
+          <video id="video" controls playsinline></video>
+        </div>
+        <div class="big-controls">
+          <button id="markInBtn">标入点</button>
+          <button id="markOutBtn">标出点</button>
+          <button id="useBestBtn">采用 AI 窗口</button>
+          <button id="assignBtn" class="primary">放入当前镜头</button>
+          <button id="rejectBtn" class="danger">废片</button>
+          <button id="prevBtn">上一条</button>
+          <button id="nextBtn" class="primary">下一条</button>
+        </div>
+        <div class="fields">
+          <label>入点 <input id="inInput" type="number" step="0.001" /></label>
+          <label>出点 <input id="outInput" type="number" step="0.001" /></label>
+          <label>速度 <input id="speedInput" type="number" step="0.05" value="1" /></label>
+          <label>镜头类型
+            <select id="roleInput">
+              <option value="opening">开箱</option>
+              <option value="opening_detail">开箱特写</option>
+              <option value="hero">英雄旋转</option>
+              <option value="hero_detail">英雄特写</option>
+              <option value="handheld">手拿展示</option>
+              <option value="handheld_detail">手拿特写</option>
+              <option value="alternate_handheld">另一种手拿</option>
+              <option value="alternate_detail">另一种特写</option>
+              <option value="wrist_full">上手全景</option>
+              <option value="wrist_detail">上手特写</option>
+              <option value="wrist_full_2">上手全景 2</option>
+              <option value="wrist_detail_2">上手特写 2</option>
+              <option value="broll">补充镜头</option>
+              <option value="reject">废片</option>
+            </select>
+          </label>
+          <label>旋转
+            <select id="rotationInput">
+              <option value="0">不旋转</option>
+              <option value="90">顺时针 90 度</option>
+              <option value="-90">逆时针 90 度</option>
+            </select>
+          </label>
+          <label>起始缩放 <input id="scaleStartInput" type="number" step="0.01" value="1" /></label>
+          <label>结束缩放 <input id="scaleEndInput" type="number" step="0.01" value="1.04" /></label>
+        </div>
+        <div class="ai-panel">
+          <strong>AI 推荐片段</strong>
+          <div id="bestWindows" class="best-windows"></div>
+        </div>
+        <div class="caption-panel">
+          <div class="pane-title inline-title">
+            <strong>文稿字幕</strong>
+            <button id="captionBtn">匹配到镜头</button>
+          </div>
+          <textarea id="captionText" placeholder="粘贴口播文案或字幕文案，会自动拆句并匹配到时间线镜头。"></textarea>
+          <div id="captionList" class="caption-list"></div>
+        </div>
+        <div id="previewPanel" class="preview-panel hidden">
+          <div class="pane-title inline-title">
+            <strong>预览 MP4</strong>
+            <a id="previewLink" target="_blank">打开文件</a>
+          </div>
+          <video id="previewVideo" controls playsinline></video>
+        </div>
+      </section>
+
+      <aside class="timeline-pane">
+        <div class="pane-title">
+          <strong>12 镜头时间线</strong>
+          <span id="clipCount">0</span>
+        </div>
+        <div id="clipList" class="clip-list"></div>
+      </aside>
+    </main>
+
+    <footer id="status" class="status">准备就绪</footer>
+  </div>
+  <script src="/static/app.js?v=workflow-20260710-1"></script>
+</body>
+</html>

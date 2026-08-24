@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src-tauri/target/
+target/
+.cargo-home/
+.rustup-home/
+.DS_Store
+*.log
+alpha-builds/
+backups/
+*.exe
+*.msi
+*.zip
+*.7z
+src-tauri/resources/codex/

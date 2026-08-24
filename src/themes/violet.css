@@ -1,0 +1,73 @@
+/* Default light workspace theme. Kept under the historical "violet" id so
+   existing user preferences and native title-bar settings stay compatible. */
+
+:root[data-theme="violet"] {
+  --bg-primary: #f7f7f8;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f7f7f8;
+  --bg-hover: #ececef;
+  --border: #e4e4e8;
+  --accent: #4285f4;
+  --accent-hover: #2469d8;
+  --accent-dim: #e8f0fe;
+  --accent-muted: #e8f0fe;
+  --accent-glow: 0 6px 18px rgba(66, 133, 244, 0.18);
+  --text-primary: #242426;
+  --text-secondary: #727278;
+  --text-muted: #a5a5ac;
+  --success: #16836d;
+  --warning: #ad721a;
+  --error: #c54747;
+  --msg-user-bg: #f1f1fa;
+  --msg-user-border: #dfdfee;
+  --msg-ai-bg: #ffffff;
+  --msg-ai-border: #e4e4e8;
+  --sidebar-bg: #f1f1f3;
+  --sidebar-border: #e4e4e8;
+  --topbar-bg: #ffffff;
+  --panel-sidebar-bg: #f1f1f3;
+  --scrollbar-thumb: #c7c7cf;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 18px 48px rgba(24, 24, 27, 0.10);
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+
+:root[data-color-mode="dark"][data-theme="violet"] {
+  --bg-primary:    #0f1020;
+  --bg-secondary:  rgba(28, 30, 46, 0.92);
+  --bg-tertiary:   #25283b;
+  --bg-hover:      #30344d;
+
+  --border:        rgba(178, 186, 224, 0.16);
+  --border-color:  var(--border);
+
+  --accent:        #8b7cff;
+  --accent-hover:  #a59aff;
+  --accent-dim:    rgba(139, 124, 255, 0.18);
+  --accent-muted:  rgba(139, 124, 255, 0.12);
+  --accent-glow:   0 18px 44px rgba(139, 124, 255, 0.24);
+  --accent-color:  var(--accent);
+
+  --text-primary:   #f3f5ff;
+  --text-secondary: #c2c8dc;
+  --text-muted:     #8790ae;
+
+  --success: #5fe08a;
+  --warning: #ffd166;
+  --error:   #ff7b7b;
+
+  --msg-user-bg:      rgba(139, 124, 255, 0.20);
+  --msg-user-border:  rgba(139, 124, 255, 0.36);
+  --msg-ai-bg:        rgba(27, 29, 43, 0.96);
+  --msg-ai-border:    rgba(178, 186, 224, 0.16);
+
+  --sidebar-bg:     rgba(17, 18, 31, 0.88);
+  --sidebar-border: rgba(178, 186, 224, 0.14);
+  --topbar-bg:      rgba(17, 18, 31, 0.82);
+  --panel-sidebar-bg: rgba(17, 18, 31, 0.78);
+
+  --scrollbar-thumb: rgba(151, 160, 204, 0.36);
+  --shadow:    0 14px 34px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 28px 70px rgba(0, 0, 0, 0.42);
+}

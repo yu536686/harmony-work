@@ -1,0 +1,215 @@
+# The agent runtime crates (piscis-core / piscis-kernel / piscis-cli) were
+# extracted into the standalone `piscis-engine` repo so that both `openpiscis`
+# (this desktop host) and `codez` can share one kernel. They are consumed as
+# a git dependency (see `[workspace.dependencies]` below). For local engine
+# hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
+# section pointing the crates at a local `../../piscis-engine` checkout.
+[workspace]
+members = ["bench"]
+resolver = "2"
+
+# Workspace-wide lint policy. `cargo clippy --workspace` will treat all of
+# the rust warnings and the selected clippy lints below as hard errors, so
+# dead code / unused imports / obvious bugs can never sneak back in without
+# an explicit `#[allow(...)]` annotation at the call site.
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Correctness / bug-catching lints we want hard-enforced. Each entry is a
+# common foot-gun that's easy to accidentally commit during debugging.
+# `println!` / `eprintln!` remain allowed because CLI binaries and the
+# compaction evaluation harness legitimately write to stdout.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Allow-list for patterns we intentionally keep; the default clippy profile
+# already warns on most of these, so listing them here documents intent.
+needless_return = "allow"
+module_inception = "allow"
+too_many_arguments = "allow"
+
+[workspace.dependencies]
+# Shared across workspace members
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Shared agent runtime 鈥?pin rev across openpiscis, AgentZ, agent-workbench (v0.8.58).
+piscis-core = { path = "../third_party/piscis-engine/piscis-core" }
+piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }
+piscis-ide-tools = { path = "../third_party/piscis-engine/piscis-ide-tools" }
+
+[package]
+name = "xiaoheng-workbuddy"
+version = "1.0.0-beta.1"
+autobins = false
+default-run = "xiaoheng-workbuddy"
+description = "Harmony Xiaoheng AI desktop workbench"
+authors = ["Harmony"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "xiaoheng_workbuddy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "xiaoheng-workbuddy"
+path = "src/main.rs"
+
+# NOTE: the bench-only `piscis_compact_one` CLI used to live here as a target of
+# this crate, which made Tauri's bundler try to ship it. It now lives in the
+# `bench/` workspace member (crate `piscis-bench`) so it is never bundled.
+# Build it with: cargo build -p piscis-bench --release
+
+[features]
+default = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Pure collaboration/core logic
+piscis-core = { workspace = true }
+piscis-kernel = { workspace = true }
+piscis-ide-tools = { workspace = true }
+
+# Desktop-automation + browser capabilities, extracted into the standalone
+# RobotZ toolkit. The `piscis-kernel` feature makes the RobotZ tools implement
+# `piscis_kernel::Tool`, so the desktop host registers them like any other tool.
+robotz-automation = { path = "../third_party/RobotZ/crates/robotz-automation", features = ["piscis-kernel"] }
+robotz-browser = { path = "../third_party/RobotZ/crates/robotz-browser", features = ["piscis-kernel"] }
+
+# Tauri
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full"] }
+futures = "0.3"
+
+# HTTP client (LLM API calls) - use rustls to avoid openssl dependency
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart", "gzip", "deflate", "brotli"], default-features = false }
+
+# WebSocket client & server (Feishu long connection + LSP bridge)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots", "connect"], default-features = false }
+tungstenite = "0.24"
+
+# LSP protocol types (Language Server Protocol)
+lsp-types = "0.97"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+toml = "0.8"
+
+# SQLite (bundled - no external dll needed)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Cron scheduling
+tokio-cron-scheduler = "0.13"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { workspace = true }
+anyhow = "1"
+thiserror = "1"
+base64 = "0.22"
+regex = "1"
+once_cell = "1"
+getrandom = "0.2"
+chacha20poly1305 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+async-trait = "0.1"
+dirs = "5"
+urlencoding = "2"
+qrcode = "0.14"
+# ZIP extraction for skill / user-tool bundle installs
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Tarball extraction for Claude official plugin git-subdir installs
+tar = "0.4"
+flate2 = "1"
+
+# SSH client - use ring backend to avoid NASM dependency on Windows
+russh = { version = "0.57", default-features = false, features = ["ring"] }
+
+# PDF read/write
+lopdf = { version = "0.34", features = ["nom_parser"] }
+pdf-extract = "0.7"
+tauri-plugin-single-instance = "2.4.0"
+encoding_rs = "0.8.35"
+aes = "0.8.4"
+ecb = "0.1.2"
+md5 = "0.8.0"
+
+# File system watcher (for IDE file change bridge)
+notify = "7"
+
+# PTY for embedded IDE terminal
+portable-pty = "0.8"
+
+# Linux-specific (conditional)
+# (no additional crates needed; mouse movement uses C helper binary)
+
+# Windows-specific (conditional)
+[target.'cfg(target_os = "windows")'.dependencies]
+# Win32 API for clipboard, shell, window management
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+# Monorepo sibling checkout 鈥?uncomment to override git RobotZ with local crates:
+# [patch."https://github.com/njbinbin-piscis/RobotZ.git"]
+# robotz-automation = { path = "../../RobotZ/crates/robotz-automation" }
+# robotz-browser = { path = "../../RobotZ/crates/robotz-browser" }
+
+# Local path override for engine hacking:
+# [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
+# piscis-core = { path = "../../piscis-engine/piscis-core" }
+# piscis-kernel = { path = "../../piscis-engine/piscis-kernel" }
+
+[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
+piscis-core = { path = "../third_party/piscis-engine/piscis-core" }
+piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }
