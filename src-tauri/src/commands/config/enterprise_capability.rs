@@ -11,6 +11,7 @@ use crate::store::{AppState, Settings};
 use crate::tools::mcp::{McpServerConfig, McpToolInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::State;
 use tokio::time::{timeout, Duration};
@@ -128,16 +129,37 @@ pub async fn test_enterprise_capability(
         EnterprisePlatform::WeCom => {
             drop(settings);
             let cli = test_wecom_cli().await;
-            let success = cli.is_ok();
-            let error = cli.err();
+            let success = cli.is_initialized();
+            let error = if success {
+                None
+            } else {
+                Some(cli.error.clone().unwrap_or_else(|| match cli.auth_state {
+                    WeComCliAuthState::Unauthorized => {
+                        "WeCom CLI is installed but has not completed authorization.".into()
+                    }
+                    WeComCliAuthState::Unknown => {
+                        "Could not determine WeCom CLI authorization status.".into()
+                    }
+                    WeComCliAuthState::Authorized | WeComCliAuthState::LegacyInitialized => {
+                        "WeCom CLI test failed unexpectedly.".into()
+                    }
+                }))
+            };
+            let diagnostics = build_wecom_cli_diagnostics(&cli);
             let settings = state.settings.lock().await;
-            let status = build_status(&settings, &platform)?;
+            let mut status = build_status(&settings, &platform)?;
+            status.enabled = success;
+            status.message = if success {
+                "WeCom CLI is available and its local authorization is initialized.".into()
+            } else {
+                "WeCom IM credentials are configured, but the CLI availability or local authorization check did not pass.".into()
+            };
             Ok(EnterpriseCapabilityTestResult {
                 status,
                 success,
                 tools: Vec::new(),
                 error,
-                diagnostics: build_wecom_cli_diagnostics(success),
+                diagnostics,
             })
         }
         EnterprisePlatform::Feishu | EnterprisePlatform::DingTalk => {
@@ -219,7 +241,7 @@ fn wecom_template() -> EnterpriseCapabilityTemplate {
     EnterpriseCapabilityTemplate {
         platform: WECOM_PLATFORM.into(),
         title: "WeCom Enterprise Capability".into(),
-        description: "Official @wecom/cli integration using the WeCom smart robot credentials already configured for the IM channel.".into(),
+        description: "Official @wecom/cli integration. IM channel credentials and the CLI's local authorization are checked separately.".into(),
         supported: true,
         mcp_server_name: WECOM_ENTERPRISE_SERVER.into(),
     }
@@ -292,7 +314,7 @@ fn build_wecom_status(settings: &Settings) -> Result<EnterpriseCapabilityStatus,
     }
     let configured = missing.is_empty();
     let message = if configured {
-        "WeCom credentials are configured. Official enterprise capabilities are provided by @wecom/cli; click Test to verify Node/npx and CLI availability. @wecom/cli init remains an official local credential flow and cannot be replaced safely by writing Bot ID / Secret into an unknown private config file.".into()
+        "WeCom IM credentials are configured. Click Test to verify both @wecom/cli availability and its independent local authorization state.".into()
     } else {
         format!("Missing credentials: {}", missing.join(", "))
     };
@@ -393,40 +415,201 @@ fn upsert_mcp_server(servers: &mut Vec<McpServerConfig>, server: McpServerConfig
     }
 }
 
-async fn test_wecom_cli() -> Result<(), String> {
-    let mut command = tokio_command(if cfg!(windows) { "npx.cmd" } else { "npx" });
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WeComCliAuthState {
+    Authorized,
+    Unauthorized,
+    LegacyInitialized,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct WeComCliProbe {
+    version: Option<String>,
+    auth_state: WeComCliAuthState,
+    source: String,
+    error: Option<String>,
+}
+
+impl WeComCliProbe {
+    fn is_initialized(&self) -> bool {
+        matches!(
+            self.auth_state,
+            WeComCliAuthState::Authorized | WeComCliAuthState::LegacyInitialized
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WeComCliCommand {
+    program: String,
+    prefix_args: Vec<String>,
+    source: String,
+}
+
+async fn run_wecom_cli_command(
+    cli: &WeComCliCommand,
+    args: &[&str],
+    duration: Duration,
+) -> Result<std::process::Output, String> {
+    let mut command = tokio_command(&cli.program);
     command
-        .args(["-y", "@wecom/cli", "--help"])
+        .args(&cli.prefix_args)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let output = timeout(Duration::from_secs(60), command.output())
+    timeout(duration, command.output())
         .await
-        .map_err(|_| "Timed out while starting @wecom/cli via npx.".to_string())?
-        .map_err(|e| format!("Failed to spawn npx for @wecom/cli: {e}"))?;
+        .map_err(|_| format!("Timed out while running {}.", cli.source))?
+        .map_err(|error| format!("Failed to start {}: {error}", cli.source))
+}
 
-    if output.status.success() {
-        Ok(())
+fn wecom_cli_candidates() -> Vec<WeComCliCommand> {
+    let direct_program = if cfg!(windows) {
+        "wecom-cli.cmd"
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Err(if stderr.is_empty() { stdout } else { stderr })
+        "wecom-cli"
+    };
+    let npx_program = if cfg!(windows) { "npx.cmd" } else { "npx" };
+    vec![
+        WeComCliCommand {
+            program: direct_program.into(),
+            prefix_args: Vec::new(),
+            source: "installed wecom-cli".into(),
+        },
+        WeComCliCommand {
+            program: npx_program.into(),
+            prefix_args: vec!["-y".into(), "@wecom/cli".into()],
+            source: "@wecom/cli via npx".into(),
+        },
+    ]
+}
+
+fn command_text(output: &std::process::Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    )
+}
+
+fn parse_wecom_auth_status(stdout: &str, stderr: &str) -> Option<WeComCliAuthState> {
+    let text = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    if text.lines().any(|line| line.trim() == "authorized") {
+        Some(WeComCliAuthState::Authorized)
+    } else if text.lines().any(|line| line.trim() == "unauthorized") {
+        Some(WeComCliAuthState::Unauthorized)
+    } else {
+        None
     }
 }
 
-fn build_wecom_cli_diagnostics(success: bool) -> Vec<String> {
-    if success {
-        vec![
-            "企业微信官方 CLI 可启动，并提供 contact/doc/meeting/msg/schedule/todo/cache 等子命令。".into(),
-            "这不是 MCP tools/list 结果；官方 @wecom/cli 当前仍需要按 wecom-cli init 流程完成本机凭据初始化。".into(),
-            "Bot ID / Secret 已保存在小亨设置中，可供 IM 通道和后续 WorkBuddy 版 CLI 桥复用；不会直接写入官方 CLI 私有配置文件。".into(),
-        ]
+fn wecom_cli_config_dir() -> PathBuf {
+    std::env::var_os("WECOM_CLI_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config")
+                .join("wecom")
+        })
+}
+
+fn legacy_wecom_config_initialized(config_dir: &Path) -> bool {
+    ["credentials.enc", "bot.enc"].iter().any(|name| {
+        std::fs::metadata(config_dir.join(name))
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
+async fn detect_wecom_auth_state(cli: &WeComCliCommand) -> WeComCliAuthState {
+    for args in [
+        ["auth", "show", "--status"],
+        ["auth", "show", "--auth-status"],
+    ] {
+        if let Ok(output) = run_wecom_cli_command(cli, &args, Duration::from_secs(20)).await {
+            let (stdout, stderr) = command_text(&output);
+            if let Some(state) = parse_wecom_auth_status(&stdout, &stderr) {
+                return state;
+            }
+        }
+    }
+
+    if legacy_wecom_config_initialized(&wecom_cli_config_dir()) {
+        WeComCliAuthState::LegacyInitialized
     } else {
-        vec![
-            "无法启动企业微信官方 CLI。请确认本机已安装 Node.js，并且 npm/npx 在 PATH 中。".into(),
-            "如果 CLI 已安装但未初始化，请在终端运行 wecom-cli init，按官方流程绑定 Bot ID / Secret。".into(),
-        ]
+        WeComCliAuthState::Unauthorized
+    }
+}
+
+async fn test_wecom_cli() -> WeComCliProbe {
+    let mut errors = Vec::new();
+    for cli in wecom_cli_candidates() {
+        match run_wecom_cli_command(&cli, &["--version"], Duration::from_secs(60)).await {
+            Ok(output) if output.status.success() => {
+                let (stdout, stderr) = command_text(&output);
+                let version = if stdout.is_empty() { stderr } else { stdout };
+                let auth_state = detect_wecom_auth_state(&cli).await;
+                return WeComCliProbe {
+                    version: (!version.is_empty()).then_some(version),
+                    auth_state,
+                    source: cli.source,
+                    error: None,
+                };
+            }
+            Ok(output) => {
+                let (stdout, stderr) = command_text(&output);
+                errors.push(if stderr.is_empty() { stdout } else { stderr });
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    WeComCliProbe {
+        version: None,
+        auth_state: WeComCliAuthState::Unknown,
+        source: "wecom-cli".into(),
+        error: Some(
+            errors
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+    }
+}
+
+fn build_wecom_cli_diagnostics(probe: &WeComCliProbe) -> Vec<String> {
+    let version = probe.version.as_deref().unwrap_or("版本未知");
+    match probe.auth_state {
+        WeComCliAuthState::Authorized => vec![
+            format!("企业微信官方 CLI 可用（{version}，来源：{}）。", probe.source),
+            "已通过官方 auth show 状态检查，确认本机凭据已完成初始化。".into(),
+            "Agent 可以通过 CLI 桥调用已授权的通讯录、文档、会议、消息、日程和待办能力。".into(),
+        ],
+        WeComCliAuthState::LegacyInitialized => vec![
+            format!("企业微信官方 CLI 可用（{version}，来源：{}）。", probe.source),
+            format!(
+                "检测到旧版 CLI 的本机加密凭据，已完成初始化（配置目录：{}）。",
+                wecom_cli_config_dir().display()
+            ),
+            "旧版 CLI 没有 auth show 状态接口；这里只确认本机凭据存在，具体业务权限会在首次调用对应能力时校验。".into(),
+        ],
+        WeComCliAuthState::Unauthorized => vec![
+            format!("企业微信官方 CLI 可用（{version}，来源：{}），但未检测到有效的本机初始化状态。", probe.source),
+            "新版 CLI 请运行 wecom-cli auth init；旧版 CLI 请运行 wecom-cli init。完成后重新点击“测试连接”。".into(),
+            "小亨中的 IM Bot ID / Secret 与官方 CLI 本机授权是两套独立状态，不会互相覆盖。".into(),
+        ],
+        WeComCliAuthState::Unknown => vec![
+            "无法启动企业微信官方 CLI。请确认本机已安装 Node.js，并且 wecom-cli 或 npm/npx 在 PATH 中。".into(),
+            probe
+                .error
+                .clone()
+                .unwrap_or_else(|| "CLI 未返回可识别的诊断信息。".into()),
+        ],
     }
 }
 
@@ -517,7 +700,9 @@ fn build_test_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_feishu_mcp_server, build_status, upsert_mcp_server, FEISHU_ENTERPRISE_SERVER,
+        build_feishu_mcp_server, build_status, build_wecom_cli_diagnostics,
+        legacy_wecom_config_initialized, parse_wecom_auth_status, upsert_mcp_server,
+        WeComCliAuthState, WeComCliProbe, FEISHU_ENTERPRISE_SERVER,
     };
     use crate::commands::config::mcp::{
         resolve_settings_placeholders_in_mcp_config, test_mcp_server_config,
@@ -567,6 +752,63 @@ mod tests {
             status.missing_credentials,
             vec!["feishu_app_id".to_string(), "feishu_app_secret".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_wecom_cli_authorization_status() {
+        assert_eq!(
+            parse_wecom_auth_status("authorized\n", ""),
+            Some(WeComCliAuthState::Authorized)
+        );
+        assert_eq!(
+            parse_wecom_auth_status("unauthorized\n", ""),
+            Some(WeComCliAuthState::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn recognizes_legacy_wecom_cli_credentials() {
+        let dir =
+            std::env::temp_dir().join(format!("workbuddy-wecom-cli-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp config dir");
+
+        assert!(!legacy_wecom_config_initialized(&dir));
+        std::fs::write(dir.join("bot.enc"), b"encrypted").expect("write legacy credential");
+        assert!(legacy_wecom_config_initialized(&dir));
+
+        std::fs::remove_file(dir.join("bot.enc")).expect("remove legacy credential");
+        std::fs::write(dir.join("credentials.enc"), b"encrypted")
+            .expect("write current credential");
+        assert!(legacy_wecom_config_initialized(&dir));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn authorized_wecom_cli_diagnostics_do_not_request_init() {
+        let diagnostics = build_wecom_cli_diagnostics(&WeComCliProbe {
+            version: Some("wecom-cli 1.1.0".into()),
+            auth_state: WeComCliAuthState::Authorized,
+            source: "wecom-cli".into(),
+            error: None,
+        });
+        let joined = diagnostics.join(" ");
+
+        assert!(joined.contains("已完成初始化"));
+        assert!(!joined.contains("需要按 wecom-cli init"));
+        assert!(!joined.contains("请运行 wecom-cli init"));
+    }
+
+    #[test]
+    fn unauthorized_wecom_cli_diagnostics_request_initialization() {
+        let diagnostics = build_wecom_cli_diagnostics(&WeComCliProbe {
+            version: Some("wecom-cli 1.1.0".into()),
+            auth_state: WeComCliAuthState::Unauthorized,
+            source: "wecom-cli".into(),
+            error: None,
+        });
+
+        assert!(diagnostics.join(" ").contains("auth init"));
     }
 
     #[tokio::test]

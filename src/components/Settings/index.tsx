@@ -25,6 +25,7 @@ import {
 import { setLanguage } from "../../i18n";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
+import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
@@ -629,7 +630,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         ? t("settings.dingtalkMcpUrlMissing")
         : t("settings.enterpriseCapabilityStatusNeedsConfig");
     }
-    if (platform === "wecom") return t("settings.wecomEnterpriseStatusReady");
+    if (platform === "wecom") {
+      return status.enabled
+        ? t("settings.enterpriseCapabilityStatusActive")
+        : t("settings.wecomEnterpriseStatusReady");
+    }
     if (!status.mcp_configured) return t("settings.enterpriseCapabilityStatusReadyToEnable");
     if (!status.mcp_enabled) return t("settings.enterpriseCapabilityStatusDisabled");
     return t("settings.enterpriseCapabilityStatusActive");
@@ -637,14 +642,16 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
 
   const capabilityDiagnostics = (platform: EnterprisePlatformId, test?: EnterpriseCapabilityTestResult | null) => {
     if (!test) return [];
+    let fallback: string;
     if (test.success) {
-      if (platform === "wecom") return [t("settings.wecomEnterpriseTestSuccessHint")];
-      if (platform === "dingtalk") return [t("settings.dingtalkEnterpriseTestSuccessHint")];
-      return [t("settings.feishuEnterpriseTestSuccessHint")];
-    }
-    if (platform === "wecom") return [t("settings.wecomEnterpriseTestFailedHint")];
-    if (platform === "dingtalk") return [t("settings.dingtalkEnterpriseTestFailedHint")];
-    return [t("settings.feishuEnterpriseTestFailedHint")];
+      if (platform === "wecom") fallback = t("settings.wecomEnterpriseTestSuccessHint");
+      else if (platform === "dingtalk") fallback = t("settings.dingtalkEnterpriseTestSuccessHint");
+      else fallback = t("settings.feishuEnterpriseTestSuccessHint");
+    } else if (platform === "wecom") fallback = t("settings.wecomEnterpriseTestFailedHint");
+    else if (platform === "dingtalk") fallback = t("settings.dingtalkEnterpriseTestFailedHint");
+    else fallback = t("settings.feishuEnterpriseTestFailedHint");
+
+    return preferEnterpriseCapabilityDiagnostics(test.diagnostics, fallback);
   };
 
   const capabilityMissingCredentialsMessage = (platform: EnterprisePlatformId, status: EnterpriseCapabilityStatus) => {
