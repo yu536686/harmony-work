@@ -12,8 +12,6 @@ mod harmony_cut;
 pub mod headless_cli;
 pub mod host;
 
-#[cfg(test)]
-mod live_smoke;
 pub mod lsp;
 pub mod notify;
 mod piscis;

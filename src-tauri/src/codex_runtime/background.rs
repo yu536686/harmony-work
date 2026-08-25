@@ -24,6 +24,8 @@ pub struct CodexBackgroundOptions {
 pub struct CodexBackgroundOutput {
     pub final_message: String,
     pub thread_id: Option<String>,
+    pub usage: crate::codex_runtime::headless::CodexExecUsage,
+    pub events: Vec<Value>,
 }
 
 pub async fn run_codex_background(
@@ -172,6 +174,8 @@ async fn finalize_success(
     Ok(CodexBackgroundOutput {
         final_message,
         thread_id: result.thread_id,
+        usage: result.usage,
+        events: result.events,
     })
 }
 

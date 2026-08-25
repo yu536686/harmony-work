@@ -30,7 +30,7 @@ pub fn log_dir() -> std::path::PathBuf {
 /// Initialise structured logging:
 /// - STDERR: human-readable, filtered by RUST_LOG / default "info"
 /// - Rolling file: JSON, one file per day, kept up to 7 days (via tracing-appender)
-/// - Fixed file: human-readable `piscis.latest.log` for easy user bug reports
+/// - Fixed file: human-readable `workbuddy.latest.log` for easy user bug reports
 ///
 /// Returns the `_guard` that must stay alive for the lifetime of the process
 /// to ensure the non-blocking writer flushes on drop.
@@ -38,10 +38,10 @@ pub fn init_logging() -> LoggingGuard {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
 
-    let json_file_appender = tracing_appender::rolling::daily(&dir, "piscis.log");
+    let json_file_appender = tracing_appender::rolling::daily(&dir, "workbuddy.log");
     let (json_non_blocking, json_guard) = tracing_appender::non_blocking(json_file_appender);
 
-    let text_file_appender = tracing_appender::rolling::never(&dir, "piscis.latest.log");
+    let text_file_appender = tracing_appender::rolling::never(&dir, "workbuddy.latest.log");
     let (text_non_blocking, text_guard) = tracing_appender::non_blocking(text_file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -77,7 +77,7 @@ pub fn init_logging() -> LoggingGuard {
 
     tracing::info!(
         log_dir = %dir.display(),
-        text_log = %dir.join("piscis.latest.log").display(),
+        text_log = %dir.join("workbuddy.latest.log").display(),
         "logging initialised"
     );
 
