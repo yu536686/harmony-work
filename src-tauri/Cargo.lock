@@ -9166,7 +9166,6 @@ dependencies = [
  "notify",
  "once_cell",
  "pdf-extract",
- "piscis-core",
  "piscis-ide-tools",
  "piscis-kernel",
  "portable-pty",

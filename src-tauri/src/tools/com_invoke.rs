@@ -8,7 +8,7 @@ use async_trait::async_trait;
 /// - 32-bit COM objects (WOW6432Node) require a 32-bit host process — we use SysWOW64\powershell.exe.
 /// - This mirrors exactly what a human would do to automate legacy Windows software.
 use piscis_kernel::agent::tool::{Tool, ToolContext, ToolResult};
-use piscis_kernel::proc::tokio_command;
+use crate::process::tokio_command;
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

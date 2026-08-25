@@ -4,6 +4,7 @@
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
 pub mod app;
+pub mod agent_core;
 pub mod codex_runtime;
 mod commands;
 mod fish;
@@ -14,6 +15,7 @@ pub mod lsp;
 pub mod notify;
 mod piscis;
 pub mod pool;
+pub mod process;
 pub mod runtime;
 pub mod scheduler;
 mod skills;

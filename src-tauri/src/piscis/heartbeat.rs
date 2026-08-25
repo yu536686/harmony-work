@@ -5,13 +5,13 @@ use crate::notify::{
 use crate::pool::bridge;
 use crate::pool::KoiTodo;
 use crate::store::AppState;
-pub use piscis_core::heartbeat::{
+pub use crate::agent_core::heartbeat::{
     assessment_requires_coordination, build_forced_mention_attention,
     build_heartbeat_coordination_gap_notice, build_pool_heartbeat_message, collect_pool_attention,
     is_heartbeat_ack_only, PoolAttention,
 };
-use piscis_core::project_state::contains_delegated_piscis_mention;
-use piscis_core::project_state::ProjectDecision;
+use crate::agent_core::project_state::contains_delegated_piscis_mention;
+use crate::agent_core::project_state::ProjectDecision;
 use tracing::warn;
 
 const HEARTBEAT_SOURCE: &str = "codex_heartbeat_global";
@@ -256,7 +256,7 @@ async fn piscis_pool_activity_since(state: &AppState, pool_id: &str, since_id: i
 async fn dispatch_single_pool_attention(
     state: &AppState,
     base_prompt: &str,
-    attention: &piscis_core::heartbeat::PoolAttention,
+    attention: &crate::agent_core::heartbeat::PoolAttention,
     channel: &str,
 ) -> Result<(), String> {
     ensure_heartbeat_session(

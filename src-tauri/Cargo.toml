@@ -1,9 +1,5 @@
-# The agent runtime crates (piscis-core / piscis-kernel / piscis-cli) were
-# extracted into the standalone `piscis-engine` repo so that both `openpiscis`
-# (this desktop host) and `codez` can share one kernel. They are consumed as
-# a git dependency (see `[workspace.dependencies]` below). For local engine
-# hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
-# section pointing the crates at a local `../../piscis-engine` checkout.
+# WorkBuddy is migrating its runtime contracts into this workspace while the
+# remaining legacy kernel and IDE dependencies are removed incrementally.
 [workspace]
 members = ["bench", "workbuddy-mcp-host"]
 resolver = "2"
@@ -40,7 +36,6 @@ thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Shared agent runtime 鈥?pin rev across openpiscis, AgentZ, agent-workbench (v0.8.58).
-piscis-core = { path = "../third_party/piscis-engine/piscis-core" }
 piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }
 piscis-ide-tools = { path = "../third_party/piscis-engine/piscis-ide-tools" }
 
@@ -74,8 +69,6 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Pure collaboration/core logic
-piscis-core = { workspace = true }
 piscis-kernel = { workspace = true }
 piscis-ide-tools = { workspace = true }
 
@@ -207,9 +200,7 @@ strip = true
 
 # Local path override for engine hacking:
 # [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
-# piscis-core = { path = "../../piscis-engine/piscis-core" }
 # piscis-kernel = { path = "../../piscis-engine/piscis-kernel" }
 
 [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
-piscis-core = { path = "../third_party/piscis-engine/piscis-core" }
 piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }

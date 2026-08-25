@@ -14,7 +14,7 @@ use crate::pool::bridge;
 use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::{PoolMessage, PoolSession};
 use crate::store::AppState;
-use piscis_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
+use crate::agent_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::State;

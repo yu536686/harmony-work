@@ -9,7 +9,7 @@ use async_trait::async_trait;
 /// - A single PowerShell process handles the full operation (open → modify → save → quit).
 /// - Batch write operations accept JSON arrays for efficient multi-cell/multi-slide writes.
 use piscis_kernel::agent::tool::{Tool, ToolContext, ToolResult};
-use piscis_kernel::proc::tokio_command;
+use crate::process::tokio_command;
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

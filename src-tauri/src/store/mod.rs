@@ -88,7 +88,7 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     /// Current visible execution plan per session
     pub plan_state: Arc<
-        Mutex<std::collections::HashMap<String, Vec<piscis_kernel::agent::plan::PlanTodoItem>>>,
+        Mutex<std::collections::HashMap<String, Vec<crate::agent_core::plan::PlanTodoItem>>>,
     >,
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags:
@@ -119,7 +119,7 @@ pub struct AppState {
     /// LSP (Language Server Protocol) session manager
     pub lsp_manager: Arc<LspManager>,
     /// Live shell/file-write confirmation prefs — agent loops read on each tool call.
-    pub confirm_flags: piscis_kernel::agent::loop_::ConfirmFlagsHandle,
+    pub confirm_flags: crate::agent_core::approval::ConfirmFlagsHandle,
 }
 
 impl AppState {
@@ -157,7 +157,7 @@ impl AppState {
             ..Default::default()
         };
 
-        let confirm_flags = piscis_kernel::agent::loop_::confirm_flags_handle(
+        let confirm_flags = crate::agent_core::approval::confirm_flags_handle(
             settings.confirm_shell_commands,
             settings.confirm_file_writes,
         );

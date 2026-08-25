@@ -186,7 +186,7 @@ fn output_text(output: &std::process::Output) -> String {
 }
 
 fn check_python_dependencies() -> Result<(), String> {
-    let output = piscis_kernel::proc::std_command("python")
+    let output = crate::process::std_command("python")
         .arg("-c")
         .arg("import starlette, uvicorn, pydantic, cv2, numpy, imageio_ffmpeg")
         .output()
@@ -210,7 +210,7 @@ async fn ensure_python_dependencies(root: PathBuf) -> Result<(), String> {
         ));
     }
     tokio::task::spawn_blocking(move || {
-        let output = piscis_kernel::proc::std_command("python")
+        let output = crate::process::std_command("python")
             .arg("-m")
             .arg("pip")
             .arg("install")
@@ -309,7 +309,7 @@ pub async fn start_service(app: Option<&tauri::AppHandle>) -> Result<HarmonyCutH
     }
     ensure_python_dependencies(root.clone()).await?;
 
-    let mut cmd = piscis_kernel::proc::std_command("python");
+    let mut cmd = crate::process::std_command("python");
     cmd.arg(&server_py).current_dir(&root);
     cmd.spawn()
         .map_err(|e| format!("Failed to start Harmony Cut service with python: {e}"))?;

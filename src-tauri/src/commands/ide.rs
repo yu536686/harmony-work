@@ -3,7 +3,7 @@
 //!
 //! All commands are registered as Tauri commands by `app::bootstrap`.
 
-use piscis_kernel::proc::tokio_command;
+use crate::process::tokio_command;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1293,7 +1293,7 @@ pub async fn ide_stop_watcher(
 
 /// Build a `git` command that never opens a console window on Windows.
 ///
-/// Thin wrapper over [`piscis_kernel::proc::tokio_command`] kept as a named
+/// Thin wrapper over [`crate::process::tokio_command`] kept as a named
 /// helper so all git invocations remain grep-able.
 fn new_git_cmd() -> Command {
     tokio_command("git")

@@ -1,9 +1,9 @@
-pub use piscis_core::scene::{MemorySliceMode, SceneKind, ScenePolicy};
+pub use crate::agent_core::scene::{MemorySliceMode, SceneKind, ScenePolicy};
 
 #[cfg(test)]
 mod tests {
     use super::{SceneKind, ScenePolicy};
-    use piscis_core::scene::{CollaborationContextMode, EventDigestMode};
+    use crate::agent_core::scene::{CollaborationContextMode, EventDigestMode};
 
     #[test]
     fn heartbeat_scene_policy_is_lightweight_and_disables_proactive_compaction() {

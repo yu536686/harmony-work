@@ -3250,7 +3250,7 @@ impl Database {
         llm_provider_id: Option<&str>,
         max_iterations: u32,
         task_timeout_secs: u32,
-    ) -> Result<piscis_core::models::KoiDefinition> {
+    ) -> Result<crate::agent_core::models::KoiDefinition> {
         let name = normalize_koi_name(name)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -3260,7 +3260,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8, ?9, ?10, ?11)",
             params![id, name, role, icon, color, system_prompt, description, now_str, llm_provider_id, max_iterations, task_timeout_secs],
         )?;
-        Ok(piscis_core::models::KoiDefinition {
+        Ok(crate::agent_core::models::KoiDefinition {
             id,
             name,
             role: role.to_string(),
@@ -3295,13 +3295,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn ensure_starter_kois(&self) -> Result<Vec<piscis_core::models::KoiDefinition>> {
+    pub fn ensure_starter_kois(&self) -> Result<Vec<crate::agent_core::models::KoiDefinition>> {
         if !self.list_kois()?.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut created = Vec::new();
-        for spec in piscis_core::models::STARTER_KOI_SPECS {
+        for spec in crate::agent_core::models::STARTER_KOI_SPECS {
             created.push(self.create_koi(
                 spec.name,
                 spec.role,
@@ -3317,13 +3317,13 @@ impl Database {
         Ok(created)
     }
 
-    pub fn list_kois(&self) -> Result<Vec<piscis_core::models::KoiDefinition>> {
+    pub fn list_kois(&self) -> Result<Vec<crate::agent_core::models::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
              FROM kois ORDER BY created_at ASC"
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(piscis_core::models::KoiDefinition {
+            Ok(crate::agent_core::models::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 role: r.get::<_, String>(2).unwrap_or_default(),
@@ -3349,9 +3349,9 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub fn get_koi(&self, id: &str) -> Result<Option<piscis_core::models::KoiDefinition>> {
-        let koi_row = |r: &rusqlite::Row| -> rusqlite::Result<piscis_core::models::KoiDefinition> {
-            Ok(piscis_core::models::KoiDefinition {
+    pub fn get_koi(&self, id: &str) -> Result<Option<crate::agent_core::models::KoiDefinition>> {
+        let koi_row = |r: &rusqlite::Row| -> rusqlite::Result<crate::agent_core::models::KoiDefinition> {
+            Ok(crate::agent_core::models::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 role: r.get::<_, String>(2).unwrap_or_default(),
@@ -3391,7 +3391,7 @@ impl Database {
                 "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
                  FROM kois WHERE id LIKE ?1"
             )?;
-            let matches: Vec<piscis_core::models::KoiDefinition> = stmt2
+            let matches: Vec<crate::agent_core::models::KoiDefinition> = stmt2
                 .query_map(params![pattern], koi_row)?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -3496,13 +3496,13 @@ impl Database {
     pub fn find_koi_by_name(
         &self,
         name: &str,
-    ) -> Result<Option<piscis_core::models::KoiDefinition>> {
+    ) -> Result<Option<crate::agent_core::models::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
              FROM kois WHERE name = ?1 ORDER BY created_at ASC LIMIT 1"
         )?;
         let mut rows = stmt.query_map(params![name], |r| {
-            Ok(piscis_core::models::KoiDefinition {
+            Ok(crate::agent_core::models::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 role: r.get::<_, String>(2).unwrap_or_default(),
@@ -3530,7 +3530,7 @@ impl Database {
     pub fn resolve_koi_identifier(
         &self,
         value: &str,
-    ) -> Result<Option<piscis_core::models::KoiDefinition>> {
+    ) -> Result<Option<crate::agent_core::models::KoiDefinition>> {
         let value = value.trim();
         if value.is_empty() {
             return Ok(None);
@@ -3538,7 +3538,7 @@ impl Database {
         if let Some(koi) = self.get_koi(value)? {
             return Ok(Some(koi));
         }
-        let matches: Vec<piscis_core::models::KoiDefinition> = self
+        let matches: Vec<crate::agent_core::models::KoiDefinition> = self
             .list_kois()?
             .into_iter()
             .filter(|k| k.name == value)
@@ -3603,7 +3603,7 @@ impl Database {
         source_type: &str,
         depends_on: Option<&str>,
         task_timeout_secs: u32,
-    ) -> Result<piscis_core::models::KoiTodo> {
+    ) -> Result<crate::agent_core::models::KoiTodo> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -3612,7 +3612,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![id, owner_id, title, description, priority, assigned_by, pool_session_id, source_type, depends_on, task_timeout_secs, now_str],
         )?;
-        Ok(piscis_core::models::KoiTodo {
+        Ok(crate::agent_core::models::KoiTodo {
             id,
             owner_id: owner_id.to_string(),
             title: title.to_string(),
@@ -3642,7 +3642,7 @@ impl Database {
     pub fn list_koi_todos(
         &self,
         owner_id: Option<&str>,
-    ) -> Result<Vec<piscis_core::models::KoiTodo>> {
+    ) -> Result<Vec<crate::agent_core::models::KoiTodo>> {
         let sql = if owner_id.is_some() {
             format!(
                 "SELECT {} FROM koi_todos WHERE owner_id = ?1 ORDER BY created_at DESC",
@@ -3664,7 +3664,7 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub fn get_koi_todo(&self, id: &str) -> Result<Option<piscis_core::models::KoiTodo>> {
+    pub fn get_koi_todo(&self, id: &str) -> Result<Option<crate::agent_core::models::KoiTodo>> {
         let sql = format!(
             "SELECT {} FROM koi_todos WHERE id = ?1",
             Self::KOI_TODO_COLS
@@ -3674,8 +3674,8 @@ impl Database {
         Ok(rows.next().transpose()?)
     }
 
-    fn map_koi_todo(r: &rusqlite::Row) -> rusqlite::Result<piscis_core::models::KoiTodo> {
-        Ok(piscis_core::models::KoiTodo {
+    fn map_koi_todo(r: &rusqlite::Row) -> rusqlite::Result<crate::agent_core::models::KoiTodo> {
+        Ok(crate::agent_core::models::KoiTodo {
             id: r.get(0)?,
             owner_id: r.get(1)?,
             title: r.get(2)?,
@@ -3866,7 +3866,7 @@ impl Database {
     #[allow(clippy::too_many_arguments)]
     pub fn replace_koi_todo(
         &self,
-        original: &piscis_core::models::KoiTodo,
+        original: &crate::agent_core::models::KoiTodo,
         new_owner_id: &str,
         title: &str,
         description: &str,
@@ -3874,7 +3874,7 @@ impl Database {
         source_type: &str,
         reason: &str,
         task_timeout_secs: Option<u32>,
-    ) -> Result<piscis_core::models::KoiTodo> {
+    ) -> Result<crate::agent_core::models::KoiTodo> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -3910,7 +3910,7 @@ impl Database {
         match result {
             Ok(()) => {
                 self.conn.execute_batch("COMMIT")?;
-                Ok(piscis_core::models::KoiTodo {
+                Ok(crate::agent_core::models::KoiTodo {
                     id,
                     owner_id: new_owner_id.to_string(),
                     title: title.to_string(),
@@ -3973,7 +3973,7 @@ impl Database {
         &self,
         name: &str,
         task_timeout_secs: u32,
-    ) -> Result<piscis_core::models::PoolSession> {
+    ) -> Result<crate::agent_core::models::PoolSession> {
         self.create_pool_session_with_dir(name, None, task_timeout_secs)
     }
 
@@ -3982,7 +3982,7 @@ impl Database {
         name: &str,
         project_dir: Option<&str>,
         task_timeout_secs: u32,
-    ) -> Result<piscis_core::models::PoolSession> {
+    ) -> Result<crate::agent_core::models::PoolSession> {
         self.create_pool_session_with_meta(name, project_dir, task_timeout_secs, None, None)
     }
 
@@ -3993,7 +3993,7 @@ impl Database {
         task_timeout_secs: u32,
         team_id: Option<&str>,
         workflow_run_id: Option<&str>,
-    ) -> Result<piscis_core::models::PoolSession> {
+    ) -> Result<crate::agent_core::models::PoolSession> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -4010,7 +4010,7 @@ impl Database {
                 workflow_run_id.filter(|s| !s.trim().is_empty()),
             ],
         )?;
-        Ok(piscis_core::models::PoolSession {
+        Ok(crate::agent_core::models::PoolSession {
             id,
             name: name.to_string(),
             org_spec: String::new(),
@@ -4029,8 +4029,8 @@ impl Database {
         })
     }
 
-    fn map_pool_session(r: &rusqlite::Row) -> rusqlite::Result<piscis_core::models::PoolSession> {
-        Ok(piscis_core::models::PoolSession {
+    fn map_pool_session(r: &rusqlite::Row) -> rusqlite::Result<crate::agent_core::models::PoolSession> {
+        Ok(crate::agent_core::models::PoolSession {
             id: r.get(0)?,
             name: r.get(1)?,
             org_spec: r.get::<_, String>(2).unwrap_or_default(),
@@ -4061,13 +4061,13 @@ impl Database {
     /// Fill in `member_koi_ids` for a freshly-mapped pool session.
     fn hydrate_members(
         &self,
-        mut session: piscis_core::models::PoolSession,
-    ) -> Result<piscis_core::models::PoolSession> {
+        mut session: crate::agent_core::models::PoolSession,
+    ) -> Result<crate::agent_core::models::PoolSession> {
         session.member_koi_ids = self.list_pool_member_ids(&session.id)?;
         Ok(session)
     }
 
-    pub fn list_pool_sessions(&self) -> Result<Vec<piscis_core::models::PoolSession>> {
+    pub fn list_pool_sessions(&self) -> Result<Vec<crate::agent_core::models::PoolSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at, team_id, workflow_run_id \
              FROM pool_sessions ORDER BY updated_at DESC"
@@ -4080,7 +4080,7 @@ impl Database {
             .collect()
     }
 
-    pub fn get_pool_session(&self, id: &str) -> Result<Option<piscis_core::models::PoolSession>> {
+    pub fn get_pool_session(&self, id: &str) -> Result<Option<crate::agent_core::models::PoolSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at, team_id, workflow_run_id \
              FROM pool_sessions WHERE id = ?1"
@@ -4095,7 +4095,7 @@ impl Database {
     pub fn get_pool_session_by_prefix(
         &self,
         prefix: &str,
-    ) -> Result<Option<piscis_core::models::PoolSession>> {
+    ) -> Result<Option<crate::agent_core::models::PoolSession>> {
         if prefix.trim().is_empty() {
             return Ok(None);
         }
@@ -4121,7 +4121,7 @@ impl Database {
     pub fn resolve_pool_session_identifier(
         &self,
         value: &str,
-    ) -> Result<Option<piscis_core::models::PoolSession>> {
+    ) -> Result<Option<crate::agent_core::models::PoolSession>> {
         let value = value.trim();
         if value.is_empty() {
             return Ok(None);
@@ -4129,7 +4129,7 @@ impl Database {
         if let Some(session) = self.get_pool_session_by_prefix(value)? {
             return Ok(Some(session));
         }
-        let matches: Vec<piscis_core::models::PoolSession> = self
+        let matches: Vec<crate::agent_core::models::PoolSession> = self
             .list_pool_sessions()?
             .into_iter()
             .filter(|session| session.name == value)
@@ -4149,7 +4149,7 @@ impl Database {
         project_dir: &str,
         team_id: &str,
         team_name: &str,
-    ) -> Result<Option<piscis_core::models::PoolSession>> {
+    ) -> Result<Option<crate::agent_core::models::PoolSession>> {
         let dir = project_dir.trim();
         let tid = team_id.trim();
         let name = team_name.trim();
@@ -4315,7 +4315,7 @@ impl Database {
     pub fn list_active_todos_by_pool(
         &self,
         pool_session_id: &str,
-    ) -> Result<Vec<piscis_core::models::KoiTodo>> {
+    ) -> Result<Vec<crate::agent_core::models::KoiTodo>> {
         let sql = format!(
             "SELECT {} FROM koi_todos WHERE pool_session_id = ?1 AND status IN ('todo','in_progress','blocked') ORDER BY created_at DESC",
             Self::KOI_TODO_COLS
@@ -4347,14 +4347,14 @@ impl Database {
     pub fn find_related_pool_sessions(
         &self,
         keywords: &str,
-    ) -> Result<Vec<piscis_core::models::PoolSession>> {
+    ) -> Result<Vec<crate::agent_core::models::PoolSession>> {
         let kw_lower = keywords.to_lowercase();
         let terms: Vec<&str> = kw_lower.split_whitespace().collect();
         if terms.is_empty() {
             return self.list_pool_sessions();
         }
         let all = self.list_pool_sessions()?;
-        let mut results: Vec<(usize, piscis_core::models::PoolSession)> = Vec::new();
+        let mut results: Vec<(usize, crate::agent_core::models::PoolSession)> = Vec::new();
         for session in all {
             let haystack = format!(
                 "{} {} {}",
@@ -4485,7 +4485,7 @@ impl Database {
     pub fn list_pool_members(
         &self,
         pool_id: &str,
-    ) -> Result<Vec<piscis_core::models::KoiDefinition>> {
+    ) -> Result<Vec<crate::agent_core::models::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
             "SELECT k.id, k.name, k.role, k.icon, k.color, k.system_prompt, k.description, k.status, \
                     k.created_at, k.updated_at, k.llm_provider_id, k.max_iterations, k.task_timeout_secs \
@@ -4493,7 +4493,7 @@ impl Database {
              WHERE m.pool_session_id = ?1 ORDER BY m.joined_at ASC",
         )?;
         let rows = stmt.query_map(params![pool_id], |r| {
-            Ok(piscis_core::models::KoiDefinition {
+            Ok(crate::agent_core::models::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 role: r.get::<_, String>(2).unwrap_or_default(),
@@ -4677,7 +4677,7 @@ impl Database {
         content: &str,
         msg_type: &str,
         metadata: &str,
-    ) -> Result<piscis_core::models::PoolMessage> {
+    ) -> Result<crate::agent_core::models::PoolMessage> {
         self.insert_pool_message_ext(
             pool_session_id,
             sender_id,
@@ -4701,7 +4701,7 @@ impl Database {
         todo_id: Option<&str>,
         reply_to_message_id: Option<i64>,
         event_type: Option<&str>,
-    ) -> Result<piscis_core::models::PoolMessage> {
+    ) -> Result<crate::agent_core::models::PoolMessage> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
@@ -4714,7 +4714,7 @@ impl Database {
             "UPDATE pool_sessions SET updated_at = ?1, last_active_at = ?1 WHERE id = ?2",
             params![now_str, pool_session_id],
         )?;
-        Ok(piscis_core::models::PoolMessage {
+        Ok(crate::agent_core::models::PoolMessage {
             id,
             pool_session_id: pool_session_id.to_string(),
             sender_id: sender_id.to_string(),
@@ -4733,7 +4733,7 @@ impl Database {
         pool_session_id: &str,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<piscis_core::models::PoolMessage>> {
+    ) -> Result<Vec<crate::agent_core::models::PoolMessage>> {
         // Fetch the newest `limit` rows starting at `offset` from the end,
         // then re-sort ascending so callers always receive chronological order.
         let mut stmt = self.conn.prepare(
@@ -4803,7 +4803,7 @@ impl Database {
     pub fn get_pool_message_by_id(
         &self,
         id: i64,
-    ) -> Result<Option<piscis_core::models::PoolMessage>> {
+    ) -> Result<Option<crate::agent_core::models::PoolMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
              todo_id, reply_to_message_id, event_type, created_at \
@@ -4817,7 +4817,7 @@ impl Database {
     pub fn get_pool_messages_for_todo(
         &self,
         todo_id: &str,
-    ) -> Result<Vec<piscis_core::models::PoolMessage>> {
+    ) -> Result<Vec<crate::agent_core::models::PoolMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
              todo_id, reply_to_message_id, event_type, created_at \
@@ -4829,8 +4829,8 @@ impl Database {
             .map_err(Into::into)
     }
 
-    fn map_pool_message(r: &rusqlite::Row) -> rusqlite::Result<piscis_core::models::PoolMessage> {
-        Ok(piscis_core::models::PoolMessage {
+    fn map_pool_message(r: &rusqlite::Row) -> rusqlite::Result<crate::agent_core::models::PoolMessage> {
+        Ok(crate::agent_core::models::PoolMessage {
             id: r.get(0)?,
             pool_session_id: r.get(1)?,
             sender_id: r.get(2)?,

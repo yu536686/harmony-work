@@ -99,7 +99,7 @@ pub struct AppControlTool {
     /// without coupling the tool to Tauri-specific state plumbing.
     pub gateway: Option<Arc<GatewayManager>>,
     /// Live confirmation prefs — kept in sync when settings_set changes them.
-    pub confirm_flags: Option<piscis_kernel::agent::loop_::ConfirmFlagsHandle>,
+    pub confirm_flags: Option<crate::agent_core::approval::ConfirmFlagsHandle>,
 }
 
 impl AppControlTool {
@@ -1015,7 +1015,7 @@ impl AppControlTool {
         match s.save() {
             Ok(_) => {
                 if let Some(handle) = &self.confirm_flags {
-                    piscis_kernel::agent::loop_::sync_confirm_flags(
+                    crate::agent_core::approval::sync_confirm_flags(
                         handle,
                         s.confirm_shell_commands,
                         s.confirm_file_writes,
@@ -2696,7 +2696,7 @@ fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {
 }
 
 fn probe_command(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut command = piscis_kernel::proc::std_command(cmd);
+    let mut command = crate::process::std_command(cmd);
     command.args(args);
     let output = command.output().ok()?;
     if output.status.success() {

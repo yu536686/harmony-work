@@ -341,43 +341,18 @@ async fn install_skill_from_content_sourced(
     let skill_file = skill_dir.join("SKILL.md");
     info!("Installed skill '{}' to {:?}", skill.name, skill_dir);
 
-    // Spawn background task: enrich triggers with LLM (bilingual, non-blocking)
+    // Enrich triggers through the same Codex runtime used by the main session.
     {
-        let settings = state.settings.lock().await;
-        let provider = settings.provider.clone();
-        let api_key = match settings.provider.as_str() {
-            "openai" | "custom" => settings.openai_api_key.clone(),
-            "deepseek" => settings.deepseek_api_key.clone(),
-            "qwen" | "tongyi" => settings.qwen_api_key.clone(),
-            "minimax" => settings.minimax_api_key.clone(),
-            "zhipu" => settings.zhipu_api_key.clone(),
-            "kimi" | "moonshot" => settings.kimi_api_key.clone(),
-            _ => settings.anthropic_api_key.clone(),
-        };
-        let base_url = settings.custom_base_url.clone();
-        let model = settings.model.clone();
-        drop(settings);
-
-        if !api_key.is_empty() {
-            let enrich_skill = skill.clone();
-            let enrich_file = skill_file.clone();
-            tokio::spawn(async move {
-                let client = piscis_kernel::llm::build_client(
-                    &provider,
-                    &api_key,
-                    if base_url.is_empty() {
-                        None
-                    } else {
-                        Some(&base_url)
-                    },
-                );
-                if let Err(e) =
-                    enrich_triggers_with_llm(&*client, &model, &enrich_skill, &enrich_file).await
-                {
-                    warn!("Trigger enrichment failed (non-fatal): {}", e);
-                }
-            });
-        }
+        let enrich_state = state.inner().clone();
+        let enrich_skill = skill.clone();
+        let enrich_file = skill_file.clone();
+        tokio::spawn(async move {
+            if let Err(error) =
+                enrich_triggers_with_codex(&enrich_state, &enrich_skill, &enrich_file).await
+            {
+                warn!("Trigger enrichment failed (non-fatal): {}", error);
+            }
+        });
     }
 
     notify_skills_changed(state);
@@ -1347,17 +1322,15 @@ fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {
     anyhow::bail!("SKILL.md not found in zip archive")
 }
 
-/// Call the LLM to generate bilingual (Chinese + English) trigger keywords for a skill,
+/// Call Codex to generate bilingual (Chinese + English) trigger keywords for a skill,
 /// then merge them into the SKILL.md frontmatter and write the file back.
 ///
 /// This runs as a background task after installation — failures are non-fatal.
-async fn enrich_triggers_with_llm(
-    client: &dyn piscis_kernel::llm::LlmClient,
-    model: &str,
+async fn enrich_triggers_with_codex(
+    state: &AppState,
     skill: &crate::skills::loader::SkillDefinition,
     skill_file: &std::path::Path,
 ) -> anyhow::Result<()> {
-    use piscis_kernel::llm::{LlmMessage, LlmRequest, MessageContent};
     use tokio::time::{timeout, Duration};
 
     let existing_triggers = if skill.triggers.is_empty() {
@@ -1379,25 +1352,19 @@ async fn enrich_triggers_with_llm(
         existing = existing_triggers,
     );
 
-    let req = LlmRequest {
-        messages: vec![LlmMessage {
-            role: "user".into(),
-            content: MessageContent::Text(prompt),
-        }],
-        system: None,
-        tools: vec![],
-        model: model.to_string(),
-        max_tokens: 512,
-        stream: false,
-        vision_override: None,
-    };
-
-    let response = timeout(Duration::from_secs(20), client.complete(req))
+    let response = timeout(
+        Duration::from_secs(20),
+        crate::codex_runtime::background::run_codex_transient(
+            state,
+            &prompt,
+            Some("Return only the requested JSON array. Do not call tools."),
+        ),
+    )
         .await
-        .map_err(|_| anyhow::anyhow!("LLM trigger enrichment timed out"))?
-        .map_err(|e| anyhow::anyhow!("LLM error: {}", e))?;
+        .map_err(|_| anyhow::anyhow!("Codex trigger enrichment timed out"))?
+        .map_err(|error| anyhow::anyhow!("Codex error: {}", error))?;
 
-    let text = response.content;
+    let text = response.final_message;
 
     // Extract JSON array from response (may be wrapped in prose)
     let json_start = text

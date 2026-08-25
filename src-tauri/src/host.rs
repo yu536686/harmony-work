@@ -13,8 +13,8 @@
 //! Creating a host is cheap (just clones `Arc`s). The resulting `DesktopHost`
 //! can be handed to kernel entry points as `Arc<dyn HostRuntime>`.
 
-use piscis_core::host::SubagentRuntime;
-use piscis_core::host::{
+use crate::agent_core::host::SubagentRuntime;
+use crate::agent_core::host::{
     ConfirmRequest, EventSink, HostRuntime, HostTools, InteractiveRequest, Notifier, PoolEvent,
     PoolEventSink, SecretsStore, ToolRegistryHandle,
 };
@@ -392,7 +392,7 @@ pub struct DesktopHostTools {
     /// LSP (Language Server Protocol) session manager for agent tools
     pub lsp_manager: Option<Arc<LspManager>>,
     /// Live confirmation prefs — synced when settings change.
-    pub confirm_flags: Option<piscis_kernel::agent::loop_::ConfirmFlagsHandle>,
+    pub confirm_flags: Option<crate::agent_core::approval::ConfirmFlagsHandle>,
 }
 
 fn resolve_desktop_coordinator_config(app: Option<&AppHandle>) -> CoordinatorConfig {

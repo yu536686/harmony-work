@@ -45,7 +45,7 @@ fn emit_koi_status(app: &AppHandle, pool_id: Option<&str>, koi_id: &str, status:
     emit(app, "host://pool_event", payload);
 }
 
-fn emit_pool_message(app: &AppHandle, message: &piscis_core::models::PoolMessage) {
+fn emit_pool_message(app: &AppHandle, message: &crate::agent_core::models::PoolMessage) {
     let payload = serde_json::to_value(message).unwrap_or_default();
     emit(
         app,

@@ -6,7 +6,7 @@
 //! while still reusing the shared headless/Koi scene path.
 
 use async_trait::async_trait;
-use piscis_core::host::{
+use crate::agent_core::host::{
     KoiTurnExit, KoiTurnHandle, KoiTurnOutcome, KoiTurnRequest, SubagentRuntime,
 };
 use std::collections::HashMap;

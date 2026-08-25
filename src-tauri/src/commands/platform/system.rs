@@ -1,5 +1,5 @@
 use crate::store::{AppState, Settings};
-use piscis_kernel::proc::std_command;
+use crate::process::std_command;
 use robotz_browser::download;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

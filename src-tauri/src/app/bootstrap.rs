@@ -238,12 +238,12 @@ fn open_path(path: String) -> Result<(), String> {
     {
         let p = std::path::Path::new(&path);
         if p.is_dir() {
-            piscis_kernel::proc::std_command("explorer")
+            crate::process::std_command("explorer")
                 .arg(&path)
                 .spawn()
                 .map_err(|e| format!("Failed to open directory in Explorer: {e}"))?;
         } else {
-            piscis_kernel::proc::std_command("cmd")
+            crate::process::std_command("cmd")
                 .args(["/c", "start", "", &path])
                 .spawn()
                 .map_err(|e| format!("Failed to open file: {e}"))?;
@@ -257,7 +257,7 @@ fn open_path(path: String) -> Result<(), String> {
         } else {
             "xdg-open"
         };
-        piscis_kernel::proc::std_command(cmd)
+        crate::process::std_command(cmd)
             .arg(&path)
             .spawn()
             .map_err(|e| format!("Failed to open path: {e}"))?;

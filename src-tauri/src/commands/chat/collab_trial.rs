@@ -8,7 +8,7 @@
 /// The user can observe the full collaboration in the Pond UI.
 use crate::pool::bridge;
 use crate::store::AppState;
-use piscis_core::project_state::{
+use crate::agent_core::project_state::{
     assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
 };
 use serde::{Deserialize, Serialize};
@@ -158,7 +158,7 @@ fn default_trial_scenario() -> TrialScenario {
     }
 }
 
-pub use piscis_core::trial::effective_trial_koi_status;
+pub use crate::agent_core::trial::effective_trial_koi_status;
 
 fn load_trial_scenario() -> Result<TrialScenario, String> {
     match std::env::var("PISCIS_COLLAB_TRIAL_SPEC_JSON") {

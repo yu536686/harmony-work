@@ -19,7 +19,7 @@ pub mod bridge;
 pub mod events;
 pub mod notice;
 
-pub use piscis_core::models::{
+pub use crate::agent_core::models::{
     KoiDefinition, KoiTodo, PoolMessage, PoolSession, StarterKoiSpec, KOI_COLORS, KOI_ICONS,
     STARTER_KOI_SPECS,
 };

@@ -8,7 +8,7 @@ use crate::commands::config::mcp::{
 };
 use crate::store::{AppState, Settings};
 use crate::tools::mcp::{McpServerConfig, McpToolInfo};
-use piscis_kernel::proc::tokio_command;
+use crate::process::tokio_command;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;

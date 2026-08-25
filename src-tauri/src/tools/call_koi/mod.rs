@@ -121,7 +121,7 @@ fn persist_koi_continuity_state(
     }
 }
 
-// The Koi system prompt is assembled by `piscis_core::koi_prompt` as a fixed
+// The Koi system prompt is assembled by `crate::agent_core::koi_prompt` as a fixed
 // 6-layer structure (Identity → Run Shape → Coordination → Context & Tools →
 // Capabilities → Stop Gate). The contract lives in piscis-core because it is
 // pure coordination logic and is unit-tested there. Desktop only supplies the
