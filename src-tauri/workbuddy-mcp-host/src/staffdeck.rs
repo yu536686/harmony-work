@@ -246,6 +246,7 @@ mod tests {
         assert_eq!(task["ownerId"], "pm");
         let tasks = list_tasks(&database, &json!({"staff_id":"pm"})).unwrap();
         assert_eq!(tasks.as_array().unwrap().len(), 1);
+        drop(database);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

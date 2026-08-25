@@ -734,6 +734,7 @@ mod tests {
             )
             .expect("dual write count");
         assert_eq!(count, 1);
+        drop(legacy);
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 }
