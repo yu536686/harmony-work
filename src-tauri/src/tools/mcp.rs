@@ -12,6 +12,7 @@
 //! Each MCP server exposes a list of tools; each tool is registered as a
 //! separate `McpProxyTool` in the tool registry.
 
+use crate::process::tokio_command;
 pub use crate::store::settings::McpServerConfig;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -65,12 +66,7 @@ struct StdioTransport {
 
 impl StdioTransport {
     async fn spawn(config: &McpServerConfig) -> Result<Self> {
-        let mut cmd = tokio::process::Command::new(&config.command);
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.as_std_mut().creation_flags(0x08000000);
-        }
+        let mut cmd = tokio_command(&config.command);
         cmd.args(&config.args)
             .envs(&config.env)
             .stdin(std::process::Stdio::piped())

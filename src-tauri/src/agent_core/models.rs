@@ -143,7 +143,7 @@ impl KoiDefinition {
         push_capability(&mut capabilities, &self.role);
         for part in self
             .description
-            .split(|c| matches!(c, ',' | ';' | '\n' | '\r' | '，' | '、' | '；' | '|' | '/'))
+            .split([',', ';', '\n', '\r', '，', '、', '；', '|', '/'])
         {
             push_capability(&mut capabilities, part);
         }

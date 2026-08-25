@@ -1539,7 +1539,7 @@ impl Database {
         allow_outside_workspace: Option<bool>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let value: Option<i64> = allow_outside_workspace.map(|allowed| i64::from(allowed));
+        let value: Option<i64> = allow_outside_workspace.map(i64::from);
         self.conn.execute(
             "UPDATE sessions SET allow_outside_workspace = ?1, updated_at = ?2 WHERE id = ?3",
             params![value, now, id],

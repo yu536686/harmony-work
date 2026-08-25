@@ -36,9 +36,9 @@ struct ActiveCodexTurn {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ModelOverride {
-    CurrentProvider { model: String },
-    ExplicitProvider { provider: String, model: String },
-    NamedProvider { provider_id: String, model: String },
+    Current { model: String },
+    Explicit { provider: String, model: String },
+    Named { provider_id: String, model: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -866,26 +866,26 @@ fn parse_model_override(
     value: Option<&str>,
 ) -> ModelOverride {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return ModelOverride::CurrentProvider {
+        return ModelOverride::Current {
             model: current_model.to_string(),
         };
     };
     let Some((provider, model)) = value.split_once("::") else {
-        return ModelOverride::CurrentProvider {
+        return ModelOverride::Current {
             model: value.to_string(),
         };
     };
     let provider = provider.trim();
     let model = model.trim().to_string();
     if provider == "current" || provider == current_provider {
-        ModelOverride::CurrentProvider { model }
+        ModelOverride::Current { model }
     } else if let Some(provider_id) = provider.strip_prefix("named:") {
-        ModelOverride::NamedProvider {
+        ModelOverride::Named {
             provider_id: provider_id.trim().to_string(),
             model,
         }
     } else {
-        ModelOverride::ExplicitProvider {
+        ModelOverride::Explicit {
             provider: provider.to_string(),
             model,
         }
@@ -906,9 +906,9 @@ pub(crate) fn resolve_model_selection(
         .unwrap_or_else(|| settings.model.clone());
     let selection = parse_model_override(&current_provider, &current_model, model_override);
     let (provider, model) = match selection {
-        ModelOverride::CurrentProvider { model } => (current_provider, model),
-        ModelOverride::ExplicitProvider { provider, model } => (provider, model),
-        ModelOverride::NamedProvider { provider_id, model } => {
+        ModelOverride::Current { model } => (current_provider, model),
+        ModelOverride::Explicit { provider, model } => (provider, model),
+        ModelOverride::Named { provider_id, model } => {
             let named = settings
                 .find_llm_provider(&provider_id)
                 .ok_or_else(|| format!("找不到已启用的模型提供商配置：{provider_id}"))?;
@@ -929,7 +929,7 @@ fn safe_attachment_name(filename: Option<&str>, media_type: &str) -> String {
         .and_then(|value| value.to_str())
         .filter(|value| !value.trim().is_empty());
     supplied
-        .unwrap_or_else(|| match media_type {
+        .unwrap_or(match media_type {
             "image/png" => "attachment.png",
             "image/jpeg" => "attachment.jpg",
             "application/pdf" => "attachment.pdf",
@@ -1320,13 +1320,13 @@ mod tests {
     fn legacy_model_override_keeps_or_replaces_provider_explicitly() {
         assert_eq!(
             parse_model_override("deepseek", "deepseek-v4-pro", Some("deepseek-chat")),
-            ModelOverride::CurrentProvider {
+            ModelOverride::Current {
                 model: "deepseek-chat".to_string(),
             }
         );
         assert_eq!(
             parse_model_override("deepseek", "deepseek-v4-pro", Some("openai::gpt-5.4")),
-            ModelOverride::ExplicitProvider {
+            ModelOverride::Explicit {
                 provider: "openai".to_string(),
                 model: "gpt-5.4".to_string(),
             }
@@ -1337,7 +1337,7 @@ mod tests {
                 "deepseek-v4-pro",
                 Some("named:team-provider::deepseek-reasoner"),
             ),
-            ModelOverride::NamedProvider {
+            ModelOverride::Named {
                 provider_id: "team-provider".to_string(),
                 model: "deepseek-reasoner".to_string(),
             }

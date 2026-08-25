@@ -99,24 +99,6 @@ pub fn contains_delegated_coordinator_mention(content: &str) -> bool {
     })
 }
 
-#[cfg(test)]
-mod coordinator_contract_tests {
-    use super::contains_delegated_coordinator_mention;
-
-    #[test]
-    fn recognizes_current_workbuddy_coordinator_mentions() {
-        assert!(contains_delegated_coordinator_mention("@!小亨 请复核"));
-        assert!(contains_delegated_coordinator_mention("@!xiaoheng: review"));
-    }
-
-    #[test]
-    fn reads_legacy_mentions_for_stored_project_history() {
-        assert!(contains_delegated_coordinator_mention(
-            "@!piscis legacy handoff"
-        ));
-    }
-}
-
 /// True when content mentions Xiaoheng, including legacy persisted `@piscis` records.
 pub fn contains_coordinator_mention(content: &str) -> bool {
     if contains_delegated_coordinator_mention(content) {
@@ -660,5 +642,23 @@ pub fn assess_project_state(
         summary:
             "Project state shows no unfinished todos, but there is still no explicit ready-for-review handoff to @xiaoheng. Xiaoheng must inspect the project and decide what happens next."
                 .into(),
+    }
+}
+
+#[cfg(test)]
+mod coordinator_contract_tests {
+    use super::contains_delegated_coordinator_mention;
+
+    #[test]
+    fn recognizes_current_workbuddy_coordinator_mentions() {
+        assert!(contains_delegated_coordinator_mention("@!小亨 请复核"));
+        assert!(contains_delegated_coordinator_mention("@!xiaoheng: review"));
+    }
+
+    #[test]
+    fn reads_legacy_mentions_for_stored_project_history() {
+        assert!(contains_delegated_coordinator_mention(
+            "@!piscis legacy handoff"
+        ));
     }
 }

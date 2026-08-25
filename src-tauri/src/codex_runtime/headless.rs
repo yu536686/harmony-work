@@ -1,4 +1,5 @@
 use crate::codex_runtime::runner::{CodexAttachment, CodexPermissionMode};
+use crate::process::tokio_command;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -8,7 +9,6 @@ use std::sync::{
     Arc,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct CodexExecOptions {
@@ -134,7 +134,7 @@ pub async fn run_codex_exec(
     environment: &HashMap<String, String>,
     cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<CodexExecResult, CodexExecError> {
-    let mut child = Command::new(&command.executable)
+    let mut child = tokio_command(&command.executable)
         .args(&command.args)
         .env("CODEX_HOME", codex_home)
         .envs(environment)

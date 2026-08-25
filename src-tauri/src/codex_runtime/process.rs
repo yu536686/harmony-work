@@ -2,13 +2,14 @@ use crate::codex_runtime::client::{
     AppServerClient, AppServerError, AppServerEvent, AppServerEventReceiver,
 };
 use crate::codex_runtime::config::PINNED_CODEX_VERSION;
+use crate::process::tokio_command;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex;
 
 const STDERR_HISTORY_LIMIT: usize = 200;
@@ -72,7 +73,7 @@ impl CodexProcess {
         std::fs::create_dir_all(&config.codex_home).map_err(CodexProcessError::PrepareHome)?;
         let executable = resolve_codex_executable(config.executable_override)?;
         verify_codex_version(&executable).await?;
-        let mut command = Command::new(&executable);
+        let mut command = tokio_command(&executable);
         command
             .args(app_server_args())
             .env("CODEX_HOME", &config.codex_home)
@@ -238,7 +239,7 @@ fn bundled_codex_candidates_from(current_exe: &Path) -> Vec<PathBuf> {
 }
 
 async fn verify_codex_version(executable: &Path) -> Result<(), CodexProcessError> {
-    let output = Command::new(executable)
+    let output = tokio_command(executable)
         .arg("--version")
         .output()
         .await
