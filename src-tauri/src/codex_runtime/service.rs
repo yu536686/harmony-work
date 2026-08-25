@@ -1,8 +1,9 @@
 use crate::codex_runtime::client::{AppServerError, AppServerEvent};
-use crate::codex_runtime::config::{CodexRuntimeConfig, DeepSeekProfile, PINNED_CODEX_VERSION};
-use crate::codex_runtime::event_adapter::{
-    CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem,
+use crate::codex_runtime::config::{
+    merge_managed_mcp_config, CodexRuntimeConfig, DeepSeekProfile, WorkBuddyMcpProfile,
+    PINNED_CODEX_VERSION,
 };
+use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
 use crate::codex_runtime::process::{
     AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
 };
@@ -192,8 +193,22 @@ impl CodexRuntimeState {
         let codex_home = app_data_dir.join("codex-home");
         std::fs::create_dir_all(&codex_home).map_err(CodexRuntimeStateError::PrepareConfig)?;
         let config_path = codex_home.join("config.toml");
-        if !config_path.exists() {
-            std::fs::write(&config_path, DeepSeekProfile::default().render_toml())
+        let existing_config = if config_path.exists() {
+            std::fs::read_to_string(&config_path).map_err(CodexRuntimeStateError::PrepareConfig)?
+        } else {
+            DeepSeekProfile::default().render_toml()
+        };
+        let mcp_host = resolve_workbuddy_mcp_host();
+        let skill_root = app_data_dir.join("skills");
+        let installed_skill_root = app_data_dir.join("installed-skills");
+        let mcp_profile = WorkBuddyMcpProfile::new(
+            &mcp_host,
+            app_data_dir,
+            &[skill_root.as_path(), installed_skill_root.as_path()],
+        );
+        let merged_config = merge_managed_mcp_config(&existing_config, &mcp_profile.render_toml());
+        if merged_config != existing_config {
+            std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
         }
         Ok(Self {
@@ -562,6 +577,69 @@ fn rpc_id_key(value: &Value) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
+fn resolve_workbuddy_mcp_host() -> PathBuf {
+    if let Some(path) = std::env::var_os("XIAOHENG_WORKBUDDY_MCP_HOST").map(PathBuf::from) {
+        return path;
+    }
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let candidates = workbuddy_mcp_host_candidates_from(&current_exe);
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+        .unwrap_or_else(|| PathBuf::from(workbuddy_mcp_host_binary_name(false)))
+}
+
+fn workbuddy_mcp_host_binary_name(windows: bool) -> &'static str {
+    if windows {
+        "workbuddy-mcp-host.exe"
+    } else {
+        "workbuddy-mcp-host"
+    }
+}
+
+fn workbuddy_mcp_host_candidates_from(current_exe: &Path) -> Vec<PathBuf> {
+    let windows = current_exe
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("exe"));
+    let binary = workbuddy_mcp_host_binary_name(windows);
+    let directory = current_exe.parent().unwrap_or_else(|| Path::new("."));
+    let mut candidates = vec![
+        directory.join(binary),
+        directory.join("workbuddy-mcp-host").join(binary),
+        directory
+            .join("resources")
+            .join("workbuddy-mcp-host")
+            .join(binary),
+    ];
+    if directory.file_name().and_then(|value| value.to_str()) == Some("deps") {
+        if let Some(target_directory) = directory.parent() {
+            candidates.push(target_directory.join(binary));
+        }
+    }
+    if let Some(contents) = directory
+        .parent()
+        .filter(|path| path.file_name().and_then(|value| value.to_str()) == Some("Contents"))
+    {
+        candidates.push(
+            contents
+                .join("Resources")
+                .join("resources")
+                .join("workbuddy-mcp-host")
+                .join(binary),
+        );
+        candidates.push(
+            contents
+                .join("Resources")
+                .join("workbuddy-mcp-host")
+                .join(binary),
+        );
+    }
+    candidates
+}
+
 fn is_terminal_event(event: &WorkBuddyEvent) -> bool {
     matches!(
         event,
@@ -637,9 +715,9 @@ fn resolve_model_selection(
         ModelOverride::CurrentProvider { model } => (current_provider, model),
         ModelOverride::ExplicitProvider { provider, model } => (provider, model),
         ModelOverride::NamedProvider { provider_id, model } => {
-            let named = settings.find_llm_provider(&provider_id).ok_or_else(|| {
-                format!("找不到已启用的模型提供商配置：{provider_id}")
-            })?;
+            let named = settings
+                .find_llm_provider(&provider_id)
+                .ok_or_else(|| format!("找不到已启用的模型提供商配置：{provider_id}"))?;
             (named.provider.clone(), model)
         }
     };
@@ -656,13 +734,14 @@ fn safe_attachment_name(filename: Option<&str>, media_type: &str) -> String {
         .and_then(|value| Path::new(value).file_name())
         .and_then(|value| value.to_str())
         .filter(|value| !value.trim().is_empty());
-    supplied.unwrap_or_else(|| match media_type {
-        "image/png" => "attachment.png",
-        "image/jpeg" => "attachment.jpg",
-        "application/pdf" => "attachment.pdf",
-        _ => "attachment.bin",
-    })
-    .to_string()
+    supplied
+        .unwrap_or_else(|| match media_type {
+            "image/png" => "attachment.png",
+            "image/jpeg" => "attachment.jpg",
+            "application/pdf" => "attachment.pdf",
+            _ => "attachment.bin",
+        })
+        .to_string()
 }
 
 fn decode_attachment_data(value: &str) -> Result<Vec<u8>, String> {
@@ -721,7 +800,9 @@ fn compose_turn_content(
 ) -> String {
     let mut sections = Vec::new();
     if let Some(context) = user_context.filter(|value| !value.trim().is_empty()) {
-        sections.push(format!("<workbuddy_user_context>\n{context}\n</workbuddy_user_context>"));
+        sections.push(format!(
+            "<workbuddy_user_context>\n{context}\n</workbuddy_user_context>"
+        ));
     }
     if let Some(skills) = explicit_skills.filter(|items| !items.is_empty()) {
         sections.push(format!(
@@ -775,12 +856,8 @@ pub async fn codex_chat_send(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| session_workspace.filter(|value| !value.trim().is_empty()))
         .unwrap_or_else(|| settings.workspace_root.clone());
-    let (provider, model) = resolve_model_selection(
-        &settings,
-        provider,
-        model,
-        model_override.as_deref(),
-    )?;
+    let (provider, model) =
+        resolve_model_selection(&settings, provider, model, model_override.as_deref())?;
     let permission_mode = permission_mode
         .as_deref()
         .map(parse_permission_mode)
@@ -790,12 +867,7 @@ pub async fn codex_chat_send(
                 settings.confirm_file_writes,
             )
         });
-    let attachments = materialize_chat_attachments(
-        &app,
-        &session_id,
-        attachment,
-        attachments,
-    )?;
+    let attachments = materialize_chat_attachments(&app, &session_id, attachment, attachments)?;
     let content = compose_turn_content(content, explicit_skills, user_context);
     let mut developer_instructions =
         "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。使用 Codex 原生工具和 WorkBuddy MCP 能力；不要声称自己是 Piscis，也不要回退到旧 Agent Loop。"
@@ -822,10 +894,7 @@ pub async fn codex_chat_send(
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
     }
-    let execution = match codex_state
-        .start_turn(&session_id, options)
-        .await
-    {
+    let execution = match codex_state.start_turn(&session_id, options).await {
         Ok(execution) => execution,
         Err(error) => {
             let db = app_state.db.lock().await;
@@ -989,6 +1058,23 @@ mod tests {
             permission_mode_from_settings(false, false),
             CodexPermissionMode::FullAccess
         );
+    }
+
+    #[test]
+    fn bundled_mcp_host_candidates_cover_build_and_installer_layouts() {
+        let candidates = workbuddy_mcp_host_candidates_from(Path::new(
+            "C:/Program Files/Xiaoheng/xiaoheng-workbuddy.exe",
+        ));
+        assert!(candidates.iter().any(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("resources/workbuddy-mcp-host/workbuddy-mcp-host.exe")
+        }));
+        assert!(candidates.iter().any(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("Xiaoheng/workbuddy-mcp-host.exe")
+        }));
     }
 
     #[tokio::test]

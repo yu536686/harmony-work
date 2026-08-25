@@ -5,7 +5,7 @@
 # hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
 # section pointing the crates at a local `../../piscis-engine` checkout.
 [workspace]
-members = ["bench"]
+members = ["bench", "workbuddy-mcp-host"]
 resolver = "2"
 
 # Workspace-wide lint policy. `cargo clippy --workspace` will treat all of

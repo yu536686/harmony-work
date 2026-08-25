@@ -69,6 +69,7 @@
             "resources/offline-installers",
             "resources/harmony-cut",
             "resources/codex",
+            "resources/workbuddy-mcp-host",
             "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
         ],
         "category": "Productivity",

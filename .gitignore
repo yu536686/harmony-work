@@ -13,3 +13,4 @@ backups/
 *.zip
 *.7z
 src-tauri/resources/codex/
+src-tauri/resources/workbuddy-mcp-host/

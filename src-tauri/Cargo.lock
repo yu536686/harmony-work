@@ -9004,6 +9004,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "workbuddy-mcp-host"
+version = "1.0.0-beta.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "uuid",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
