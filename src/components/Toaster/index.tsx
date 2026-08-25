@@ -1,7 +1,7 @@
 /**
  * Toaster — Main-window toast host.
  *
- * Listens for backend `piscis_toast` events (emitted by `app_control.notify_user`
+ * Listens for backend `workbuddy_toast` events emitted by the WorkBuddy host
  * and by heartbeat safety nets for `EscalateToHuman` states) and stacks them in
  * the top-right of the main window.
  *
@@ -70,7 +70,7 @@ export default function Toaster() {
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen<ToastPayload>("piscis_toast", (event) => {
+    listen<ToastPayload>("workbuddy_toast", (event) => {
       const p = event.payload;
       if (!p || !p.message) return;
       const level = normalizeLevel(p.level);

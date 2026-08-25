@@ -292,7 +292,6 @@ impl FishRegistry {
     pub fn list(&self) -> &[FishDefinition] {
         &self.fish
     }
-
 }
 
 /// Scan a directory for FISH.toml files and parse them.

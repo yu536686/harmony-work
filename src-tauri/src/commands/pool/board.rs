@@ -63,7 +63,10 @@ pub async fn create_koi_todo(
     // A Koi can only receive todos in projects it has joined. System /
     // user-owned todos (no real Koi owner) are unaffected.
     if let Some(pool_id) = input.pool_session_id.as_deref().filter(|s| !s.is_empty()) {
-        let owner_is_koi = !matches!(input.owner_id.as_str(), "piscis" | "user" | "system");
+        let owner_is_koi = !matches!(
+            input.owner_id.as_str(),
+            "xiaoheng" | "piscis" | "user" | "system"
+        );
         if owner_is_koi
             && !db
                 .is_pool_member(pool_id, &input.owner_id)

@@ -142,7 +142,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   summary_model: "",
   project_instruction_budget_chars: 8000,
   enable_project_instructions: true,
-  piscis_personal_prompt: "",
+  xiaoheng_personal_prompt: "",
   llm_read_timeout_secs: 120,
   koi_timeout_secs: 600,
   heartbeat_enabled: true,
@@ -1518,9 +1518,9 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             <textarea
               className="input"
               rows={6}
-              value={form.piscis_personal_prompt ?? ""}
+              value={form.xiaoheng_personal_prompt ?? ""}
               placeholder={t("settings.piscisPersonalPromptPlaceholder")}
-              onChange={(e) => update("piscis_personal_prompt", e.target.value)}
+              onChange={(e) => update("xiaoheng_personal_prompt", e.target.value)}
               style={{ resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
             />
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
@@ -1725,48 +1725,6 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             </div>
           )}
 
-          {/* Feishu */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.feishu_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.feishu")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.feishuDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.feishu_enabled} onChange={(e) => update("feishu_enabled", e.target.checked)} />
-            </div>
-            {form.feishu_enabled && (
-              <>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4, marginBottom: 6 }}>
-                  {t("settings.imCredsLabel")}
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.feishuAppId")}</label>
-                  <input className="input" value={form.feishu_app_id} onChange={(e) => update("feishu_app_id", e.target.value)} placeholder="cli_xxxxxxxxxxxxxxxx" />
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.feishuAppSecret")}</label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.feishu_app_secret} onChange={(e) => update("feishu_app_secret", e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-                </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 6 }}>
-                  {t("settings.imChannelLabel")}
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.feishuDomain")}</label>
-                  <select className="input" value={form.feishu_domain} onChange={(e) => update("feishu_domain", e.target.value)}>
-                    <option value="feishu">{t("settings.feishuDomainCN")}</option>
-                    <option value="lark">{t("settings.feishuDomainIntl")}</option>
-                  </select>
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.feishuHelp")}</p>
-                {renderEnterpriseCapabilityPanel(
-                  "feishu",
-                  t("settings.feishuEnterpriseTitle"),
-                  t("settings.feishuEnterpriseDesc"),
-                  { showOpenTools: true }
-                )}
-              </>
-            )}
-          </div>
 
           {/* WeChat (OpenClaw-compat) */}
           <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
@@ -1870,197 +1828,6 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             )}
           </div>
 
-          {/* DingTalk */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.dingtalk_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.dingtalk")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.dingtalkDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.dingtalk_enabled} onChange={(e) => update("dingtalk_enabled", e.target.checked)} />
-            </div>
-            {form.dingtalk_enabled && (
-              <>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4, marginBottom: 6 }}>
-                  {t("settings.imCredsLabel")}
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.dingtalkAppKey")}</label>
-                  <input className="input" value={form.dingtalk_app_key} onChange={(e) => update("dingtalk_app_key", e.target.value)} placeholder="dingxxxxxxxxxxxxxxxx" />
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.dingtalkAppSecret")}</label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.dingtalk_app_secret} onChange={(e) => update("dingtalk_app_secret", e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div className="form-group">
-                    <label className="label">{t("settings.dingtalkCorpId")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
-                    <input className="input" value={form.dingtalk_corp_id ?? ""} onChange={(e) => update("dingtalk_corp_id", e.target.value)} placeholder="dingxxxxxxxxxxxx" />
-                  </div>
-                  <div className="form-group">
-                    <label className="label">{t("settings.dingtalkAgentId")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
-                    <input className="input" value={form.dingtalk_agent_id ?? ""} onChange={(e) => update("dingtalk_agent_id", e.target.value)} placeholder="123456789" />
-                  </div>
-                </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 6 }}>
-                  {t("settings.imChannelLabel")}
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.dingtalkRobotCode")}</label>
-                  <input className="input" value={form.dingtalk_robot_code ?? ""} onChange={(e) => update("dingtalk_robot_code", e.target.value)} placeholder="dingxxxxxxxxxxxxxxxx" />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0", whiteSpace: "pre-line" }}>{t("settings.dingtalkHelp")}</p>
-                <div className="form-group" style={{ marginTop: 12 }}>
-                  <label className="label">{t("settings.dingtalkMcpUrl")}</label>
-                  <input className="input" value={form.dingtalk_mcp_url ?? ""} onChange={(e) => update("dingtalk_mcp_url", e.target.value)} placeholder="https://mcp-gw.dingtalk.com/..." />
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 0", lineHeight: 1.6 }}>
-                    {t("settings.dingtalkMcpUrlHelp")}
-                  </p>
-                  <button className="btn btn-secondary" type="button" style={{ marginTop: 8, fontSize: 12 }} onClick={() => openUrl("https://mcp.dingtalk.com/")}>
-                    {t("settings.dingtalkOpenMcpMarketplace")}
-                  </button>
-                </div>
-                {renderEnterpriseCapabilityPanel(
-                  "dingtalk",
-                  t("settings.dingtalkEnterpriseTitle"),
-                  t("settings.dingtalkEnterpriseDesc"),
-                  { showOpenTools: true }
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Telegram */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.telegram_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.telegram")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.telegramDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.telegram_enabled} onChange={(e) => update("telegram_enabled", e.target.checked)} />
-            </div>
-            {form.telegram_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.telegramToken")}</label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.telegram_bot_token} onChange={(e) => update("telegram_bot_token", e.target.value)} placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ" />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.telegramHelp")}</p>
-              </>
-            )}
-          </div>
-
-          {/* Slack */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.slack_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.slack")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.slackDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.slack_enabled ?? false} onChange={(e) => update("slack_enabled", e.target.checked)} />
-            </div>
-            {form.slack_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.slackWebhookUrl")}</label>
-                  <input className="input" value={form.slack_webhook_url ?? ""} onChange={(e) => update("slack_webhook_url", e.target.value)} placeholder="https://hooks.slack.com/services/T.../B.../..." />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.slackHelp")}</p>
-              </>
-            )}
-          </div>
-
-          {/* Discord */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.discord_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.discord")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.discordDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.discord_enabled ?? false} onChange={(e) => update("discord_enabled", e.target.checked)} />
-            </div>
-            {form.discord_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.discordWebhookUrl")}</label>
-                  <input className="input" value={form.discord_webhook_url ?? ""} onChange={(e) => update("discord_webhook_url", e.target.value)} placeholder="https://discord.com/api/webhooks/..." />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.discordHelp")}</p>
-              </>
-            )}
-          </div>
-
-          {/* Microsoft Teams */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.teams_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.teams")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.teamsDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.teams_enabled ?? false} onChange={(e) => update("teams_enabled", e.target.checked)} />
-            </div>
-            {form.teams_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.teamsWebhookUrl")}</label>
-                  <input className="input" value={form.teams_webhook_url ?? ""} onChange={(e) => update("teams_webhook_url", e.target.value)} placeholder="https://yourorg.webhook.office.com/webhookb2/..." />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.teamsHelp")}</p>
-              </>
-            )}
-          </div>
-
-          {/* Matrix */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.matrix_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.matrix")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.matrixDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.matrix_enabled ?? false} onChange={(e) => update("matrix_enabled", e.target.checked)} />
-            </div>
-            {form.matrix_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.matrixHomeserver")}</label>
-                  <input className="input" value={form.matrix_homeserver ?? ""} onChange={(e) => update("matrix_homeserver", e.target.value)} placeholder="https://matrix.org" />
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.matrixAccessToken")}</label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.matrix_access_token ?? ""} onChange={(e) => update("matrix_access_token", e.target.value)} placeholder="syt_..." />
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.matrixRoomId")}</label>
-                  <input className="input" value={form.matrix_room_id ?? ""} onChange={(e) => update("matrix_room_id", e.target.value)} placeholder="!roomid:matrix.org" />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.matrixHelp")}</p>
-              </>
-            )}
-          </div>
-
-          {/* Generic Webhook */}
-          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.webhook_enabled ? 12 : 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.webhook")}</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.webhookDesc")}</span>
-              </div>
-              <input type="checkbox" checked={form.webhook_enabled ?? false} onChange={(e) => update("webhook_enabled", e.target.checked)} />
-            </div>
-            {form.webhook_enabled && (
-              <>
-                <div className="form-group">
-                  <label className="label">{t("settings.webhookOutboundUrl")}</label>
-                  <input className="input" value={form.webhook_outbound_url ?? ""} onChange={(e) => update("webhook_outbound_url", e.target.value)} placeholder="https://your-service.example.com/webhook" />
-                </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.webhookAuthToken")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.webhook_auth_token ?? ""} onChange={(e) => update("webhook_auth_token", e.target.value)} placeholder="Bearer token or API key" />
-                </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.webhookHelp")}</p>
-              </>
-            )}
-          </div>
 
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-primary" onClick={handleGatewayConnect} disabled={gatewayConnecting || gatewayDisconnecting}>

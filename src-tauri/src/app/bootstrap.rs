@@ -45,10 +45,8 @@ fn build_new_im_session_id(msg: &gateway::InboundMessage) -> String {
     format!("im_{}_{}", msg.channel, Uuid::new_v4())
 }
 
-fn runtime_env(primary: &str, legacy: &str) -> Option<String> {
-    std::env::var(primary)
-        .ok()
-        .or_else(|| std::env::var(legacy).ok())
+fn runtime_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 async fn interrupt_codex_background(app: &tauri::AppHandle, session_id: &str) -> bool {
@@ -273,11 +271,11 @@ pub fn run() {
 fn run_impl() {
     let _log_guard = init_logging();
     install_crash_reporter();
-    let updater_enabled = std::env::var("PISCIS_ENABLE_UPDATER").ok().as_deref() == Some("1");
+    let updater_enabled = std::env::var("WORKBUDDY_ENABLE_UPDATER").ok().as_deref() == Some("1");
 
     if !updater_enabled {
         tracing::info!(
-            "Updater plugin disabled at startup. Set PISCIS_ENABLE_UPDATER=1 only after updater pubkey/endpoints are fully configured."
+            "Updater plugin disabled at startup. Set WORKBUDDY_ENABLE_UPDATER=1 only after updater pubkey/endpoints are fully configured."
         );
     }
 
@@ -318,7 +316,7 @@ fn run_impl() {
             let app_data_dir = app_handle
                 .path()
                 .app_data_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+                .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
             let codex_runtime = crate::codex_runtime::service::CodexRuntimeState::new(&app_data_dir)?;
 
             let state = tauri::async_runtime::block_on(async {
@@ -375,7 +373,7 @@ fn run_impl() {
                 let interactive_resp = state.interactive_responses.clone();
                 let app_h = app_handle.clone();
                 let sched = state.scheduler.clone();
-                let piscis_heartbeat_cursor = state.piscis_heartbeat_cursor.clone();
+                let coordination_heartbeat_cursor = state.coordination_heartbeat_cursor.clone();
                 let terminals = state.terminals.clone();
                 let file_watchers = state.file_watchers.clone();
                 let lsp_manager = state.lsp_manager.clone();
@@ -428,7 +426,7 @@ fn run_impl() {
                                         scheduler: sched.clone(),
                                         scheduled_job_ids: scheduled_job_ids.clone(),
                                         gateway: gateway.clone(),
-                                        piscis_heartbeat_cursor: piscis_heartbeat_cursor.clone(),
+                                        coordination_heartbeat_cursor: coordination_heartbeat_cursor.clone(),
                                         terminals: terminals.clone(),
                                         file_watchers: file_watchers.clone(),
                                         lsp_manager: lsp_manager.clone(),
@@ -595,7 +593,7 @@ fn run_impl() {
                                     scheduler: sched.clone(),
                                     scheduled_job_ids: scheduled_job_ids.clone(),
                                     gateway: gateway.clone(),
-                                    piscis_heartbeat_cursor: piscis_heartbeat_cursor.clone(),
+                                    coordination_heartbeat_cursor: coordination_heartbeat_cursor.clone(),
                                     terminals: terminals.clone(),
                                     file_watchers: file_watchers.clone(),
                                     lsp_manager: lsp_manager.clone(),
@@ -672,7 +670,7 @@ fn run_impl() {
                                     scheduler: sched.clone(),
                                     scheduled_job_ids: scheduled_job_ids.clone(),
                                     gateway: gateway.clone(),
-                                    piscis_heartbeat_cursor: piscis_heartbeat_cursor.clone(),
+                                    coordination_heartbeat_cursor: coordination_heartbeat_cursor.clone(),
                                     terminals: terminals.clone(),
                                     file_watchers: file_watchers.clone(),
                                     lsp_manager: lsp_manager.clone(),
@@ -697,8 +695,10 @@ fn run_impl() {
                 });
             }
 
-            let startup_heartbeat_disabled =
-                std::env::var("PISCIS_DISABLE_STARTUP_HEARTBEAT").ok().as_deref() == Some("1");
+            let startup_heartbeat_disabled = std::env::var("WORKBUDDY_DISABLE_STARTUP_HEARTBEAT")
+                .ok()
+                .as_deref()
+                == Some("1");
 
             if !startup_heartbeat_disabled {
                 let settings_arc = state.settings.clone();
@@ -712,7 +712,7 @@ fn run_impl() {
                 let sched_arc = state.scheduler.clone();
                 let scheduled_job_ids_arc = state.scheduled_job_ids.clone();
                 let gateway_arc = state.gateway.clone();
-                let piscis_heartbeat_cursor_arc = state.piscis_heartbeat_cursor.clone();
+                let coordination_heartbeat_cursor_arc = state.coordination_heartbeat_cursor.clone();
                 let terminals_arc = state.terminals.clone();
                 let file_watchers_arc = state.file_watchers.clone();
                 let lsp_manager_arc = state.lsp_manager.clone();
@@ -757,13 +757,13 @@ fn run_impl() {
                             scheduler: sched_arc.clone(),
                             scheduled_job_ids: scheduled_job_ids_arc.clone(),
                             gateway: gateway_arc.clone(),
-                            piscis_heartbeat_cursor: piscis_heartbeat_cursor_arc.clone(),
+                            coordination_heartbeat_cursor: coordination_heartbeat_cursor_arc.clone(),
                             terminals: terminals_arc.clone(),
                             file_watchers: file_watchers_arc.clone(),
                             lsp_manager: lsp_manager_arc.clone(),
                             confirm_flags: confirm_flags_arc.clone(),
                         };
-                        let _ = crate::piscis::heartbeat::dispatch_heartbeat(
+                        let _ = crate::coordination::heartbeat::dispatch_heartbeat(
                             &state_ref,
                             &prompt,
                             "heartbeat",
@@ -874,7 +874,7 @@ fn run_impl() {
                     let app_dir = app_handle_clone
                         .path()
                         .app_data_dir()
-                        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+                        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
                     let skills_dir = app_dir.join("skills");
                     let _ = crate::skills::provenance::ensure_evolution_dirs(&skills_dir);
                     if let Ok(n) =
@@ -1031,8 +1031,14 @@ fn run_impl() {
 
             #[cfg(debug_assertions)]
             {
-                if std::env::var("PISCIS_HIDE_WINDOWS_ON_STARTUP").ok().as_deref() == Some("1")
-                    || std::env::var("PISCIS_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1")
+                if std::env::var("WORKBUDDY_HIDE_WINDOWS_ON_STARTUP")
+                    .ok()
+                    .as_deref()
+                    == Some("1")
+                    || std::env::var("WORKBUDDY_RUN_COLLAB_TRIAL")
+                        .ok()
+                        .as_deref()
+                        == Some("1")
                 {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.hide();
@@ -1044,35 +1050,21 @@ fn run_impl() {
                 let mut startup_trial_state = state.clone();
                 startup_trial_state.app_handle = app_handle.clone();
 
-                if let Some(prompt) = runtime_env("WORKBUDDY_HEADLESS_PROMPT", "PISCIS_HEADLESS_PROMPT") {
+                if let Some(prompt) = runtime_env("WORKBUDDY_HEADLESS_PROMPT") {
                     if !prompt.trim().is_empty() {
                         let state_ref = startup_headless_state;
                         let app_for_headless = app_handle.clone();
-                        let exit_after = runtime_env(
-                            "WORKBUDDY_EXIT_AFTER_HEADLESS_PROMPT",
-                            "PISCIS_EXIT_AFTER_HEADLESS_PROMPT",
-                        )
+                        let exit_after = runtime_env("WORKBUDDY_EXIT_AFTER_HEADLESS_PROMPT")
                         .as_deref()
                             == Some("1");
-                        let session_id = runtime_env(
-                            "WORKBUDDY_HEADLESS_SESSION_ID",
-                            "PISCIS_HEADLESS_SESSION_ID",
-                        )
+                        let session_id = runtime_env("WORKBUDDY_HEADLESS_SESSION_ID")
                             .unwrap_or_else(|| "startup_headless".to_string());
-                        let session_title = runtime_env(
-                            "WORKBUDDY_HEADLESS_SESSION_TITLE",
-                            "PISCIS_HEADLESS_SESSION_TITLE",
-                        )
+                        let session_title = runtime_env("WORKBUDDY_HEADLESS_SESSION_TITLE")
                             .unwrap_or_else(|| "Startup Headless Task".to_string());
-                        let channel = runtime_env(
-                            "WORKBUDDY_HEADLESS_CHANNEL",
-                            "PISCIS_HEADLESS_CHANNEL",
-                        )
+                        let channel = runtime_env("WORKBUDDY_HEADLESS_CHANNEL")
                             .unwrap_or_else(|| "startup".to_string());
-                        let extra_system_context = runtime_env(
-                            "WORKBUDDY_HEADLESS_EXTRA_SYSTEM_CONTEXT",
-                            "PISCIS_HEADLESS_EXTRA_SYSTEM_CONTEXT",
-                        );
+                        let extra_system_context =
+                            runtime_env("WORKBUDDY_HEADLESS_EXTRA_SYSTEM_CONTEXT");
                         tauri::async_runtime::spawn(async move {
                             tracing::info!(
                                 "Startup hook: running headless Codex task session_id={}",
@@ -1110,11 +1102,17 @@ fn run_impl() {
                     }
                 }
 
-                if std::env::var("PISCIS_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1") {
+                if std::env::var("WORKBUDDY_RUN_COLLAB_TRIAL")
+                    .ok()
+                    .as_deref()
+                    == Some("1")
+                {
                     let state_ref = startup_trial_state;
                     let app_for_trial = app_handle.clone();
                     let exit_after_trial =
-                        std::env::var("PISCIS_EXIT_AFTER_COLLAB_TRIAL").ok().as_deref()
+                        std::env::var("WORKBUDDY_EXIT_AFTER_COLLAB_TRIAL")
+                            .ok()
+                            .as_deref()
                             == Some("1");
                     tauri::async_runtime::spawn(async move {
                         tracing::info!("Startup hook: running real collaboration trial");

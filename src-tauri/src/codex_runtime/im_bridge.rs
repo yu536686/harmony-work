@@ -136,20 +136,18 @@ async fn deliver_request(
         .transpose()
         .map_err(|error| error.to_string());
     let outcome = match (media, routing_state) {
-        (Ok(media), Ok(routing_state)) => {
-            state
-                .gateway
-                .send(&OutboundMessage {
-                    channel: request.channel.clone(),
-                    recipient: request.recipient.clone(),
-                    content: request.content.clone(),
-                    reply_to: request.reply_to.clone(),
-                    media,
-                    routing_state,
-                })
-                .await
-                .map_err(|error| error.to_string())
-        }
+        (Ok(media), Ok(routing_state)) => state
+            .gateway
+            .send(&OutboundMessage {
+                channel: request.channel.clone(),
+                recipient: request.recipient.clone(),
+                content: request.content.clone(),
+                reply_to: request.reply_to.clone(),
+                media,
+                routing_state,
+            })
+            .await
+            .map_err(|error| error.to_string()),
         (Err(error), _) | (_, Err(error)) => Err(error),
     };
     let connection = open_bridge_database(database_path)?;
@@ -250,7 +248,10 @@ mod tests {
                 [now],
             )
             .expect("queue request");
-        assert_eq!(claim_next_request(&connection).unwrap().unwrap().id, "request-1");
+        assert_eq!(
+            claim_next_request(&connection).unwrap().unwrap().id,
+            "request-1"
+        );
         assert!(claim_next_request(&connection).unwrap().is_none());
         drop(connection);
         std::fs::remove_file(path).expect("remove database");
@@ -259,6 +260,11 @@ mod tests {
     #[test]
     fn limits_channel_status_to_serializable_values() {
         assert_eq!(channel_status(&ChannelStatus::Connected).0, "connected");
-        assert_eq!(channel_status(&ChannelStatus::Error("bad".into())).1.as_deref(), Some("bad"));
+        assert_eq!(
+            channel_status(&ChannelStatus::Error("bad".into()))
+                .1
+                .as_deref(),
+            Some("bad")
+        );
     }
 }

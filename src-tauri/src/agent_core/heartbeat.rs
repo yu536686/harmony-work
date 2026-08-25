@@ -1,6 +1,6 @@
 use super::models::{KoiTodo, PoolMessage, PoolSession};
 use super::project_state::{
-    assess_project_state, contains_delegated_piscis_mention, contains_piscis_mention,
+    assess_project_state, contains_coordinator_mention, contains_delegated_coordinator_mention,
     extract_project_status_signal, ProjectAssessment, ProjectDecision,
 };
 
@@ -16,7 +16,7 @@ pub struct PoolAttention {
     pub org_spec_excerpt: Option<String>,
 }
 
-/// True when the host assessment says Piscis should coordinate, not merely ack.
+/// True when the host assessment says Xiaoheng should coordinate, not merely ack.
 pub fn assessment_requires_coordination(assessment: &ProjectAssessment) -> bool {
     !matches!(assessment.decision, ProjectDecision::Continue)
         || assessment.needs_review_count > 0
@@ -50,8 +50,8 @@ pub fn build_heartbeat_coordination_gap_notice(attention: &PoolAttention) -> Str
          Decision: {:?}\n\
          Assessment: {}\n\
          Attention: {}\n\
-         This note was posted because the heartbeat turn did not produce any new Piscis pool activity. \
-         Compare org_spec against board evidence and coordinate via pool_org (post_status / create_todo / assign_koi) as appropriate.",
+         This note was posted because the heartbeat turn did not produce observable project coordination. \
+         Compare org_spec against StaffDeck task evidence and use staff_task_create or staff_task_update as appropriate.",
         attention.assessment.decision,
         attention.assessment.summary,
         reasons,
@@ -66,11 +66,11 @@ fn preview_chars(content: &str, max_chars: usize) -> String {
 }
 
 fn is_attention_event(msg: &PoolMessage, koi_ids: &[String]) -> bool {
-    if msg.sender_id == "piscis" {
+    if matches!(msg.sender_id.as_str(), "xiaoheng" | "piscis") {
         return false;
     }
     let from_known_koi = koi_ids.iter().any(|id| id == &msg.sender_id);
-    if contains_piscis_mention(&msg.content) {
+    if contains_coordinator_mention(&msg.content) {
         return true;
     }
     if from_known_koi && extract_project_status_signal(&msg.content).is_some() {
@@ -90,8 +90,8 @@ fn is_attention_event(msg: &PoolMessage, koi_ids: &[String]) -> bool {
     )
 }
 
-pub fn pool_piscis_session_id(pool_id: &str) -> String {
-    format!("piscis_pool_{}", pool_id)
+pub fn pool_coordinator_session_id(pool_id: &str) -> String {
+    format!("xiaoheng_pool_{}", pool_id)
 }
 
 pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention) -> String {
@@ -130,7 +130,7 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
         lines.extend([
             String::new(),
             "## Project org_spec (convergence reference)".to_string(),
-            "- Compare ALL phases/milestones/deliverables in this text against pool_org evidence — not just whether todos are done.".to_string(),
+            "- Compare all phases, milestones and deliverables against StaffDeck task evidence, not just whether existing tasks are done.".to_string(),
             org_spec.to_string(),
         ]);
     }
@@ -139,7 +139,7 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
     match assessment.decision {
         ProjectDecision::Continue => {
             lines.push(
-                "The project snapshot still shows active coordination pressure. Inspect pool_org(get_messages), the task board, and the org_spec before deciding whether Piscis should act now or continue waiting."
+                "The project snapshot still shows active coordination pressure. Inspect staff_task_list for this project and its org_spec before deciding whether Xiaoheng should act now or continue waiting."
                     .to_string(),
             );
             if assessment.active_todo_count == 0
@@ -161,15 +161,15 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
                     .to_string(),
             );
             lines.push(
-                "Mandatory before HEARTBEAT_OK: pool_org(action=\"read\") for this pool, then get_todos + get_messages. Compare all org_spec requirements (phases, milestones, roles, deliverables — whatever the spec text says) against board evidence."
+                "Mandatory before HEARTBEAT_OK: call staff_project_list and staff_task_list(project_id=...). Compare every orgSpec requirement against the task evidence."
                     .to_string(),
             );
             lines.push(
-                "If org_spec still has uncovered work (e.g. early milestones done but later ones never decomposed into todos): pool_org(post_status) stating the gap, then create_todo / assign_koi for the next concrete steps. Do NOT reply HEARTBEAT_OK while the spec is unfinished."
+                "If orgSpec still has uncovered work, use staff_list and staff_task_create for the next concrete step. Do not reply HEARTBEAT_OK while the specification is unfinished."
                     .to_string(),
             );
             lines.push(
-                "If you decide the user should weigh in before the project moves forward, call `app_control` with action='notify_user' (level='warning' or 'info', include pool_id) to surface a toast in the main UI. Do this only when user input genuinely helps, not as a routine status update."
+                "If user input is required, explain the exact decision and evidence in the final response; the host will surface it in the project UI."
                     .to_string(),
             );
         }
@@ -187,27 +187,27 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
                     .to_string(),
             );
             lines.push(
-                "Raise a user-visible toast via `app_control` with action='notify_user', level='critical', duration_ms=0, and include pool_id plus a 1-2 sentence summary of why human judgment is needed. The system may have auto-posted a baseline toast already; your call adds the diagnostic summary."
+                "Return a concise critical summary explaining why human judgment is required; the host will surface it to the user."
                     .to_string(),
             );
         }
-        ProjectDecision::ReadyForPiscisReview => {
+        ProjectDecision::ReadyForCoordinatorReview => {
             lines.push(
-                "The snapshot is compatible with Piscis review, but HEARTBEAT_OK is forbidden as the only action when needs_review todos exist."
+                "The snapshot is compatible with Xiaoheng review, but HEARTBEAT_OK is forbidden as the only action when needs_review tasks exist."
                     .to_string(),
             );
             if assessment.integration_ready_count > 0 {
                 lines.push(format!(
-                    "{} branch(es) are done on the board but not merged. Prefer pool_org(merge_branches, branch=<one branch>) incrementally after reviewing get_messages/get_todos — do not wait for a final batch merge of every koi/* branch.",
+                    "{} branch(es) are done on the board but not merged. Review the reported result and update the corresponding StaffDeck task; do not claim completion without integration evidence.",
                     assessment.integration_ready_count
                 ));
             }
             lines.push(
-                "Mandatory closeout: call pool_org(action=\"get_messages\") and pool_org(action=\"get_todos\") for this pool, inspect the reported deliverables, then choose exactly one outcome: merge_branches if the work is acceptable, resume_todo/replace_todo/assign_koi if rework is needed, or post_status plus notify_user when human review is required."
+                "Mandatory closeout: call staff_task_list(project_id=...), inspect reported deliverables, then use staff_task_update or create a focused rework task."
                     .to_string(),
             );
             lines.push(
-                "Do not say \"no change\", \"无需干预\", or HEARTBEAT_OK until you have taken a concrete closeout action or written a clear pool_org(post_status) explanation of why no autonomous action is safe."
+                "Do not say \"no change\", \"无需干预\", or HEARTBEAT_OK until you have taken a concrete closeout action or clearly explained why no autonomous action is safe."
                     .to_string(),
             );
             lines.push(
@@ -220,7 +220,7 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
 
     lines.push(String::new());
     lines.push(
-        "Do not treat a quiet board as success. Read org_spec via pool_org(read), then act or document why HEARTBEAT_OK is justified."
+        "Do not treat a quiet board as success. Read orgSpec via staff_project_list, compare staff_task_list evidence, then act or document why HEARTBEAT_OK is justified."
             .to_string(),
     );
     lines.join("\n")
@@ -245,7 +245,7 @@ pub fn collect_pool_attention(
     let assessment = assess_project_state(messages, todos, koi_ids);
     let has_historic_piscis_route = messages
         .iter()
-        .any(|msg| contains_piscis_mention(&msg.content));
+        .any(|msg| contains_coordinator_mention(&msg.content));
 
     let has_state_attention = !assessment.attention_reasons.is_empty();
     if new_attention_messages.is_empty()
@@ -296,7 +296,7 @@ pub fn collect_pool_attention(
         pool_id: pool.id.clone(),
         pool_name: pool.name.clone(),
         latest_message_id,
-        session_id: pool_piscis_session_id(&pool.id),
+        session_id: pool_coordinator_session_id(&pool.id),
         summary: lines.join("\n"),
         assessment,
         org_spec_excerpt,
@@ -315,6 +315,6 @@ pub fn build_forced_mention_attention(
     let trigger = messages
         .iter()
         .rev()
-        .find(|msg| contains_delegated_piscis_mention(&msg.content))?;
+        .find(|msg| contains_delegated_coordinator_mention(&msg.content))?;
     collect_pool_attention(pool, messages, todos, koi_ids, trigger.id.saturating_sub(1))
 }

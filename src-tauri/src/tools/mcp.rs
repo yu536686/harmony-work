@@ -447,5 +447,4 @@ impl McpClient {
             None => Err(anyhow!("MCP transport not connected")),
         }
     }
-
 }

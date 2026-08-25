@@ -1,5 +1,4 @@
-//! `robotz-automation` — cross-platform desktop control tools extracted from
-//! openpiscis.
+//! `robotz-automation` - cross-platform desktop control tools.
 //!
 //! - [`ScreenTool`] (`screen_capture`): full-screen / window / region capture,
 //!   multi-monitor enumeration, coordinate-grid + cursor-crosshair overlays.
@@ -9,9 +8,7 @@
 //!   element click/type/drag, backed by [`calibration`] for residual-drift
 //!   compensation.
 //!
-//! All tools implement [`robotz_core::Tool`]. Enable the `piscis-kernel`
-//! feature to additionally implement `piscis_kernel::agent::tool::Tool` (see
-//! [`piscis_bridge`]) so openpiscis can consume the very same structs.
+//! All tools implement [`robotz_core::Tool`] and are exposed through MCP.
 
 pub mod calibration;
 pub mod desktop_automation;
@@ -25,6 +22,3 @@ pub use screen::ScreenTool;
 
 #[cfg(target_os = "windows")]
 pub use uia::UiaTool;
-
-#[cfg(feature = "piscis-kernel")]
-pub mod piscis_bridge;

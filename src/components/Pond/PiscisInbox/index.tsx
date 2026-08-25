@@ -60,7 +60,7 @@ function isCoordinationSession(session: Session): boolean {
 function sessionBelongsToPool(session: Session, poolId: string, mode: InboxMode): boolean {
   const id = session.id ?? "";
   if (mode === "coordination") {
-    return id === `piscis_pool_${poolId}`;
+    return id === `xiaoheng_pool_${poolId}` || id === `piscis_pool_${poolId}`;
   }
   if (id.startsWith("koi_runtime_") || id.startsWith("koi_notify_")) {
     return id.endsWith(`_${poolId}`);
@@ -461,8 +461,8 @@ export default function PiscisInbox({ mode = "coordination", poolSessionId = nul
     e.stopPropagation();
     // Check if this inbox session is linked to an active pool
     let blocked = false;
-    if (session.id.startsWith("piscis_pool_")) {
-      const poolId = session.id.replace("piscis_pool_", "");
+    if (session.id.startsWith("xiaoheng_pool_") || session.id.startsWith("piscis_pool_")) {
+      const poolId = session.id.replace(/^(xiaoheng|piscis)_pool_/, "");
       try {
         const pools = await poolApi.listSessions();
         const pool = pools.find((p) => p.id === poolId);

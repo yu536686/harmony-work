@@ -4,7 +4,7 @@ Harmony AI 桌面工作台。小亨（xiaoheng）是主协调 Agent，经理（m
 
 ## 已实现
 
-- 小亨 AI 对话，支持 OpenAI、Anthropic、OpenAI 兼容接口和本地 Ollama
+- 小亨 AI 对话由 Codex app-server 驱动，当前支持 OpenAI 与 DeepSeek Responses API
 - API Key 使用 Windows Credential Manager / macOS Keychain 保存
 - 办公区、经理、职员、看板任务、长期记忆、技能和自动日程界面
 - 本地状态持久化与原子写入
@@ -12,9 +12,12 @@ Harmony AI 桌面工作台。小亨（xiaoheng）是主协调 Agent，经理（m
 - Tauri 最小前端权限与 CSP
 - Windows NSIS `.exe` 和 MSI 原生 CI 构建
 
-## 当前边界
+## 运行架构
 
-当前版本是可运行、可继续扩展的桌面工作台 MVP。任务、记忆、技能和日程已具备本地数据模型及交互界面；尚未接入 OpenPiscis 中的 MCP、即时通讯、浏览器自动化、Shell/文件工具，以及常驻自主多 Agent 调度运行时。项目采用独立实现，不直接复制参考项目的 BSL 授权源码。
+- 主会话使用 Codex app-server，并适配现有消息、Todo、活动、审批与成果协议。
+- IM、定时任务、CLI 和无头任务使用 `codex exec`。
+- Harvis、Office、技能、记忆、IM 与 StaffDeck 通过 WorkBuddy MCP Host 提供。
+- IM 渠道仅启用企业微信和个人微信 iLink。
 
 ## Mac 开发环境
 

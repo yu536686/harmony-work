@@ -37,13 +37,13 @@ export function pickMainChatActiveSession(
   return sessions.find((s) => isMainChatVisibleSession(s, filter))?.id ?? null;
 }
 
-/** Returns true for sessions that are internal/system and should not appear in the
- *  user-facing session list (heartbeat, piscis_inbox, pool coordinators, etc.). */
+/** Returns true for internal/system sessions that should not appear in the main chat list. */
 export function isInternalSession(session: { source?: string | null; id?: string | null } | undefined | null): boolean {
   if (!session) return false;
   const id = session.id ?? "";
   return session.source === "heartbeat"
     || session.source === "heartbeat_pool"
+    || session.source === "codex_staffdeck"
     || session.source === "piscis_inbox_global"
     || session.source === "piscis_inbox_pool"
     || session.source === "piscis_internal"
@@ -52,6 +52,7 @@ export function isInternalSession(session: { source?: string | null; id?: string
     || session.source === "piscis_heartbeat_pool"
     || session.id === "heartbeat"
     || session.id === "piscis_inbox_global"
+    || id.startsWith("xiaoheng_pool_")
     || id.startsWith("piscis_pool_")
     || id.startsWith("koi_runtime_")
     || id.startsWith("koi_notify_")

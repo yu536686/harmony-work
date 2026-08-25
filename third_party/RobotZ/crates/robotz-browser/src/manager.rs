@@ -169,7 +169,7 @@ impl BrowserManager {
         } else {
             // Unique temp profile per launch — avoids SingletonLock conflicts entirely
             let unique = format!(
-                "piscis-chrome-{}",
+                "xiaoheng-chrome-{}",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

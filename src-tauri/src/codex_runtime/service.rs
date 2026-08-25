@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 
@@ -216,6 +216,33 @@ fn collect_artifact_candidates(value: &Value, candidates: &mut Vec<CodexArtifact
     }
 }
 
+fn extract_staff_task_id(result: &str) -> Option<String> {
+    fn visit(value: &Value) -> Option<String> {
+        match value {
+            Value::Array(items) => items.iter().find_map(visit),
+            Value::Object(object) => {
+                let is_task = object.contains_key("ownerId")
+                    && object.contains_key("title")
+                    && object.contains_key("status");
+                if is_task {
+                    return object.get("id").and_then(Value::as_str).map(str::to_string);
+                }
+                object.values().find_map(visit)
+            }
+            Value::String(text) => serde_json::from_str::<Value>(text)
+                .ok()
+                .as_ref()
+                .and_then(visit),
+            _ => None,
+        }
+    }
+
+    serde_json::from_str::<Value>(result)
+        .ok()
+        .as_ref()
+        .and_then(visit)
+}
+
 fn artifact_type_from_media(media_type: Option<&str>) -> String {
     match media_type.unwrap_or_default() {
         value if value.starts_with("image/") => "image",
@@ -395,13 +422,8 @@ impl CodexRuntimeState {
         {
             previous.store(true, Ordering::Relaxed);
         }
-        let result = run_codex_exec(
-            command,
-            &self.codex_home,
-            &environment,
-            Some(cancellation),
-        )
-        .await;
+        let result =
+            run_codex_exec(command, &self.codex_home, &environment, Some(cancellation)).await;
         self.active_execs.lock().await.remove(workbuddy_session_id);
         let result = result?;
         if let Some(thread_id) = result.thread_id.as_deref() {
@@ -1042,7 +1064,7 @@ pub async fn codex_chat_send(
     let attachments = materialize_chat_attachments(&app, &session_id, attachment, attachments)?;
     let content = compose_turn_content(content, explicit_skills, user_context);
     let mut developer_instructions =
-        "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。使用 Codex 原生工具和 WorkBuddy MCP 能力；不要声称自己是 Piscis，也不要回退到旧 Agent Loop。"
+        "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
             .to_string();
     if let Some(persona) = persona_koi_id.filter(|value| !value.trim().is_empty()) {
         developer_instructions.push_str(&format!(
@@ -1121,7 +1143,25 @@ pub async fn codex_chat_send(
                         let _ = app.emit("koi_status_changed", serde_json::json!({}));
                         let _ = app.emit("koi_updated", serde_json::json!({}));
                     }
-                    "staff_task_create" | "staff_task_update" => {
+                    "staff_task_create" => {
+                        let _ = app.emit("koi_todo_updated", serde_json::json!({}));
+                        if let Some(todo_id) = extract_staff_task_id(result) {
+                            let task_app = app.clone();
+                            let task_state = app_state.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = crate::pool::bridge::dispatch_todo_by_id(
+                                    &task_app,
+                                    &task_state,
+                                    &todo_id,
+                                )
+                                .await
+                                {
+                                    tracing::error!(%error, %todo_id, "Codex StaffDeck dispatch failed");
+                                }
+                            });
+                        }
+                    }
+                    "staff_task_update" => {
                         let _ = app.emit("koi_todo_updated", serde_json::json!({}));
                     }
                     _ => {}
@@ -1260,6 +1300,23 @@ mod tests {
     }
 
     #[test]
+    fn extracts_created_staff_task_id_from_structured_mcp_result() {
+        let result = serde_json::json!({
+            "result": {
+                "structuredContent": {
+                    "id": "todo-42",
+                    "ownerId": "staff-1",
+                    "title": "生成职责介绍",
+                    "status": "todo"
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(extract_staff_task_id(&result).as_deref(), Some("todo-42"));
+    }
+
+    #[test]
     fn legacy_model_override_keeps_or_replaces_provider_explicitly() {
         assert_eq!(
             parse_model_override("deepseek", "deepseek-v4-pro", Some("deepseek-chat")),
@@ -1334,8 +1391,7 @@ mod tests {
 
     #[tokio::test]
     async fn interrupts_active_headless_session() {
-        let directory =
-            std::env::temp_dir().join(format!("codex-cancel-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("codex-cancel-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).expect("create state dir");
         let state = CodexRuntimeState::new(&directory).expect("state");
         let flag = Arc::new(AtomicBool::new(false));

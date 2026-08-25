@@ -7,21 +7,22 @@ use std::collections::HashMap;
 
 pub const STATUS_FOLLOW_UP: &str = "[projectstatus] follow_up_needed";
 pub const STATUS_WAITING: &str = "[projectstatus] waiting";
-pub const STATUS_READY: &str = "[projectstatus] ready_for_piscis_review";
+pub const STATUS_READY: &str = "[projectstatus] ready_for_xiaoheng_review";
+const LEGACY_STATUS_READY: &str = "[projectstatus] ready_for_piscis_review";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectDecision {
     Continue,
     SupervisorDecisionRequired,
     EscalateToHuman,
-    ReadyForPiscisReview,
+    ReadyForCoordinatorReview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinationSignalKind {
     FollowUpNeeded,
     Waiting,
-    ReadyForPiscisReview,
+    ReadyForCoordinatorReview,
 }
 
 impl CoordinationSignalKind {
@@ -29,7 +30,7 @@ impl CoordinationSignalKind {
         match self {
             CoordinationSignalKind::FollowUpNeeded => STATUS_FOLLOW_UP,
             CoordinationSignalKind::Waiting => STATUS_WAITING,
-            CoordinationSignalKind::ReadyForPiscisReview => STATUS_READY,
+            CoordinationSignalKind::ReadyForCoordinatorReview => STATUS_READY,
         }
     }
 }
@@ -43,7 +44,7 @@ pub struct ProjectAssessment {
     pub task_failed_count: usize,
     pub follow_up_signal_count: usize,
     pub ready_signal_count: usize,
-    pub explicit_piscis_handoff_count: usize,
+    pub explicit_coordinator_handoff_count: usize,
     /// Done/needs_review todos with a git branch not yet merged into main.
     pub integration_ready_count: usize,
     /// Todo rows waiting on an unmerged depends_on upstream.
@@ -60,7 +61,7 @@ pub struct CoordinationEventDigest {
 #[derive(Debug, Clone, Copy)]
 struct SenderState {
     signal: CoordinationSignalKind,
-    mentions_piscis: bool,
+    mentions_coordinator: bool,
 }
 
 pub fn extract_project_status_signal(content: &str) -> Option<&'static str> {
@@ -73,36 +74,56 @@ pub fn detect_coordination_signal(content: &str) -> Option<CoordinationSignalKin
         Some(CoordinationSignalKind::FollowUpNeeded)
     } else if lower.starts_with(STATUS_WAITING) {
         Some(CoordinationSignalKind::Waiting)
-    } else if lower.starts_with(STATUS_READY) {
-        Some(CoordinationSignalKind::ReadyForPiscisReview)
+    } else if lower.starts_with(STATUS_READY) || lower.starts_with(LEGACY_STATUS_READY) {
+        Some(CoordinationSignalKind::ReadyForCoordinatorReview)
     } else {
         None
     }
 }
 
-/// True when a line delegates to Piscis via `@!Piscis` / `@!piscis` at line start.
-pub fn contains_delegated_piscis_mention(content: &str) -> bool {
-    let needle = "@!piscis";
+/// Recognizes current WorkBuddy coordinator mentions and legacy mentions in
+/// persisted project history. New messages should use `@!小亨` or `@!xiaoheng`.
+pub fn contains_delegated_coordinator_mention(content: &str) -> bool {
+    const TARGETS: [&str; 3] = ["@!小亨", "@!xiaoheng", "@!piscis"];
     content.lines().any(|line| {
-        let trimmed = line.trim_start();
-        let lower = trimmed.to_lowercase();
-        if !lower.starts_with(needle) {
-            return false;
-        }
-        trimmed[needle.len()..]
-            .chars()
-            .next()
-            .map(|ch| ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | ',' | '，' | '.'))
-            .unwrap_or(true)
+        let normalized = line.trim_start().to_lowercase();
+        TARGETS.iter().any(|target| {
+            normalized
+                .strip_prefix(target)
+                .and_then(|rest| rest.chars().next())
+                .map(|ch| {
+                    ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | ',' | '，' | '.')
+                })
+                .unwrap_or_else(|| normalized == *target)
+        })
     })
 }
 
-/// True when content mentions or delegates to Piscis (`@!Piscis` or legacy `@piscis`).
-pub fn contains_piscis_mention(content: &str) -> bool {
-    if contains_delegated_piscis_mention(content) {
+#[cfg(test)]
+mod coordinator_contract_tests {
+    use super::contains_delegated_coordinator_mention;
+
+    #[test]
+    fn recognizes_current_workbuddy_coordinator_mentions() {
+        assert!(contains_delegated_coordinator_mention("@!小亨 请复核"));
+        assert!(contains_delegated_coordinator_mention("@!xiaoheng: review"));
+    }
+
+    #[test]
+    fn reads_legacy_mentions_for_stored_project_history() {
+        assert!(contains_delegated_coordinator_mention(
+            "@!piscis legacy handoff"
+        ));
+    }
+}
+
+/// True when content mentions Xiaoheng, including legacy persisted `@piscis` records.
+pub fn contains_coordinator_mention(content: &str) -> bool {
+    if contains_delegated_coordinator_mention(content) {
         return true;
     }
-    content.to_lowercase().contains("@piscis")
+    let lower = content.to_lowercase();
+    lower.contains("@xiaoheng") || content.contains("@小亨") || lower.contains("@piscis")
 }
 
 fn parse_message_metadata(metadata: &str) -> Option<Value> {
@@ -115,22 +136,22 @@ fn coordination_signal_from_metadata(metadata: &str) -> Option<SenderState> {
     let signal = match coordination.get("signal").and_then(Value::as_str) {
         Some(STATUS_FOLLOW_UP) => CoordinationSignalKind::FollowUpNeeded,
         Some(STATUS_WAITING) => CoordinationSignalKind::Waiting,
-        Some(STATUS_READY) => CoordinationSignalKind::ReadyForPiscisReview,
+        Some(STATUS_READY) => CoordinationSignalKind::ReadyForCoordinatorReview,
         _ => return None,
     };
-    let mentions_piscis = coordination
-        .get("mentions_piscis")
+    let mentions_coordinator = coordination
+        .get("mentions_coordinator")
         .and_then(Value::as_bool)
         .or_else(|| {
             metadata
                 .get("mentions")
-                .and_then(|mentions| mentions.get("piscis"))
+                .and_then(|mentions| mentions.get("xiaoheng").or_else(|| mentions.get("piscis")))
                 .and_then(Value::as_bool)
         })
         .unwrap_or(false);
     Some(SenderState {
         signal,
-        mentions_piscis,
+        mentions_coordinator,
     })
 }
 
@@ -138,7 +159,7 @@ fn extract_sender_state(msg: &PoolMessage) -> Option<SenderState> {
     coordination_signal_from_metadata(&msg.metadata).or_else(|| {
         detect_coordination_signal(&msg.content).map(|signal| SenderState {
             signal,
-            mentions_piscis: contains_piscis_mention(&msg.content),
+            mentions_coordinator: contains_coordinator_mention(&msg.content),
         })
     })
 }
@@ -166,7 +187,7 @@ pub fn enrich_pool_message_metadata(base: Value, content: &str) -> Value {
         Value::Object(map) => Value::Object(map),
         _ => json!({}),
     };
-    if contains_piscis_mention(content) {
+    if contains_coordinator_mention(content) {
         if metadata
             .get("mentions")
             .and_then(Value::as_object)
@@ -174,13 +195,13 @@ pub fn enrich_pool_message_metadata(base: Value, content: &str) -> Value {
         {
             metadata["mentions"] = json!({});
         }
-        metadata["mentions"]["piscis"] = json!(true);
+        metadata["mentions"]["xiaoheng"] = json!(true);
     }
     if let Some(signal) = detect_coordination_signal(content) {
         metadata["coordination"] = json!({
             "protocol": "project_status_v1",
             "signal": signal.as_status_str(),
-            "mentions_piscis": contains_piscis_mention(content),
+            "mentions_coordinator": contains_coordinator_mention(content),
         });
     }
     metadata
@@ -253,7 +274,7 @@ fn build_attention_reasons(
     task_failed_still_blocks: bool,
     follow_up_signal_count: usize,
     ready_signal_count: usize,
-    explicit_piscis_handoff_count: usize,
+    explicit_coordinator_handoff_count: usize,
     integration_ready_count: usize,
     dependency_blocked_count: usize,
 ) -> Vec<String> {
@@ -296,9 +317,9 @@ fn build_attention_reasons(
             follow_up_signal_count
         ));
     }
-    if ready_signal_count > 0 && explicit_piscis_handoff_count == 0 {
+    if ready_signal_count > 0 && explicit_coordinator_handoff_count == 0 {
         reasons.push(format!(
-            "{} ready-for-review signal(s) did not explicitly hand off to @piscis",
+            "{} ready-for-review signal(s) did not explicitly hand off to @xiaoheng",
             ready_signal_count
         ));
     }
@@ -319,11 +340,11 @@ fn build_attention_reasons(
         && needs_review_count == 0
         && !task_failed_still_blocks
         && follow_up_signal_count == 0
-        && explicit_piscis_handoff_count == 0
+        && explicit_coordinator_handoff_count == 0
         && integration_ready_count == 0
     {
         reasons.push(
-            "worker-visible work appears exhausted; Piscis must make the next global decision"
+            "worker-visible work appears exhausted; Xiaoheng must make the next global decision"
                 .to_string(),
         );
     }
@@ -344,7 +365,7 @@ pub fn assess_project_state(
             task_failed_count: 0,
             follow_up_signal_count: 0,
             ready_signal_count: 0,
-            explicit_piscis_handoff_count: 0,
+            explicit_coordinator_handoff_count: 0,
             integration_ready_count: 0,
             dependency_blocked_count: 0,
             attention_reasons: Vec::new(),
@@ -418,23 +439,23 @@ pub fn assess_project_state(
         .count();
     let ready_states: Vec<_> = latest_signals
         .iter()
-        .filter(|(_, s)| s.signal == CoordinationSignalKind::ReadyForPiscisReview)
+        .filter(|(_, s)| s.signal == CoordinationSignalKind::ReadyForCoordinatorReview)
         .map(|(sender, state)| (sender.clone(), *state))
         .collect();
     let ready_signal_count = ready_states.len();
-    let explicit_piscis_handoff_count = ready_states
+    let explicit_coordinator_handoff_count = ready_states
         .iter()
-        .filter(|(_, s)| s.mentions_piscis)
+        .filter(|(_, s)| s.mentions_coordinator)
         .count();
     let latest_explicit_handoff_at: Option<DateTime<Utc>> = ready_states
         .iter()
-        .filter(|(_, state)| state.mentions_piscis)
+        .filter(|(_, state)| state.mentions_coordinator)
         .filter_map(|(sender, _)| latest_signal_times.get(sender).copied())
         .max();
 
     // Convergence guard: a historical task_failed only blocks convergence
     // when it is the most recent resolution signal. A later explicit
-    // @piscis handoff or a fresh needs_review todo counts as the koi's
+    // A coordinator handoff or a fresh needs_review todo counts as the staff member's
     // considered judgment that the failure has been addressed.
     let task_failed_still_blocks = match latest_task_failed_at {
         None => false,
@@ -457,7 +478,7 @@ pub fn assess_project_state(
         task_failed_still_blocks,
         follow_up_signal_count,
         ready_signal_count,
-        explicit_piscis_handoff_count,
+        explicit_coordinator_handoff_count,
         integration_ready_count,
         dependency_blocked_count,
     );
@@ -496,7 +517,7 @@ pub fn assess_project_state(
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
@@ -513,7 +534,7 @@ pub fn assess_project_state(
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
@@ -526,14 +547,14 @@ pub fn assess_project_state(
 
     if needs_review_count > 0 {
         return ProjectAssessment {
-            decision: ProjectDecision::ReadyForPiscisReview,
+            decision: ProjectDecision::ReadyForCoordinatorReview,
             active_todo_count,
             blocked_todo_count,
             needs_review_count,
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
@@ -544,22 +565,22 @@ pub fn assess_project_state(
         };
     }
 
-    if explicit_piscis_handoff_count > 0 {
+    if explicit_coordinator_handoff_count > 0 {
         return ProjectAssessment {
-            decision: ProjectDecision::ReadyForPiscisReview,
+            decision: ProjectDecision::ReadyForCoordinatorReview,
             active_todo_count,
             blocked_todo_count,
             needs_review_count,
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
             summary: format!(
-                "Project state shows {} ready-for-review handoff(s) to @piscis and no unfinished todos.",
-                explicit_piscis_handoff_count
+                "Project state shows {} ready-for-review handoff(s) to @xiaoheng and no unfinished todos.",
+                explicit_coordinator_handoff_count
             ),
         };
     }
@@ -573,7 +594,7 @@ pub fn assess_project_state(
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
@@ -586,19 +607,19 @@ pub fn assess_project_state(
 
     if integration_ready_count > 0 {
         return ProjectAssessment {
-            decision: ProjectDecision::ReadyForPiscisReview,
+            decision: ProjectDecision::ReadyForCoordinatorReview,
             active_todo_count,
             blocked_todo_count,
             needs_review_count,
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
             summary: format!(
-                "Project state shows {} completed branch(es) awaiting merge into main. Piscis should review and merge incrementally (pool_org merge_branches), not wait for a final batch.",
+                "Project state shows {} completed branch(es) awaiting integration. Xiaoheng should review the reported deliverables before marking the project complete.",
                 integration_ready_count
             ),
         };
@@ -613,12 +634,12 @@ pub fn assess_project_state(
             task_failed_count: recent_task_failed_count,
             follow_up_signal_count,
             ready_signal_count,
-            explicit_piscis_handoff_count,
+            explicit_coordinator_handoff_count,
             integration_ready_count,
             dependency_blocked_count,
             attention_reasons,
             summary: format!(
-                "Project state shows {} ready-for-review signal(s), but there is still no explicit ready-for-review handoff to @piscis. Piscis must inspect the pool and make the next global decision.",
+                "Project state shows {} ready-for-review signal(s), but there is still no explicit handoff to @xiaoheng. Xiaoheng must inspect the project and make the next global decision.",
                 ready_signal_count
             ),
         };
@@ -632,12 +653,12 @@ pub fn assess_project_state(
         task_failed_count: recent_task_failed_count,
         follow_up_signal_count,
         ready_signal_count,
-        explicit_piscis_handoff_count,
+        explicit_coordinator_handoff_count,
         integration_ready_count,
         dependency_blocked_count,
         attention_reasons,
         summary:
-            "Project state shows no unfinished todos, but there is still no explicit ready-for-review handoff to @piscis. Piscis must inspect the pool and decide what happens next."
+            "Project state shows no unfinished todos, but there is still no explicit ready-for-review handoff to @xiaoheng. Xiaoheng must inspect the project and decide what happens next."
                 .into(),
     }
 }

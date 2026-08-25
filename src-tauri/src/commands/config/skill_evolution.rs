@@ -31,7 +31,7 @@ fn app_skills_root(state: &AppState) -> std::path::PathBuf {
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     service::skills_root_from_app_data(&app_dir)
 }
 

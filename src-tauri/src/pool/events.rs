@@ -67,10 +67,9 @@ pub fn pool_event_envelopes(event: &PoolEvent) -> Vec<(String, Value)> {
             "koi_status_changed".into(),
             json!({"id":koi_id,"pool_id":pool_id,"status":"idle","recovered_todo_count":recovered_todo_count,"stale_recovered":true}),
         )],
-        PoolEvent::CoordinatorIdle { pool_id } => vec![(
-            "pool_coordinator_idle".into(),
-            json!({"pool_id":pool_id}),
-        )],
+        PoolEvent::CoordinatorIdle { pool_id } => {
+            vec![("pool_coordinator_idle".into(), json!({"pool_id":pool_id}))]
+        }
         PoolEvent::CoordinatorCompleted { pool_id, summary } => vec![(
             "pool_coordinator_completed".into(),
             json!({"pool_id":pool_id,"summary":summary}),

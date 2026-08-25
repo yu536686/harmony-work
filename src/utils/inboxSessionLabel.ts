@@ -52,7 +52,7 @@ function koiDisplayName(koi: KoiWithStats | undefined, fallbackId: string | null
 }
 
 /**
- * Human-readable session title for PiscisInbox sidebars (replaces raw session id / hash).
+ * Human-readable session title for the coordinator inbox.
  */
 type LabelT = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -73,6 +73,7 @@ export function resolveInboxSessionLabel(
     stored.startsWith("koi_task_") ||
     stored.startsWith("koi_runtime_") ||
     stored.startsWith("koi_notify_") ||
+    stored.startsWith("xiaoheng_pool_") ||
     stored.startsWith("piscis_pool_");
 
   if (stored && !looksLikeRawId) {
@@ -118,8 +119,8 @@ export function resolveInboxSessionLabel(
     };
   }
 
-  if (id.startsWith("piscis_pool_")) {
-    const poolId = id.replace("piscis_pool_", "");
+  if (id.startsWith("xiaoheng_pool_") || id.startsWith("piscis_pool_")) {
+    const poolId = id.replace(/^(xiaoheng|piscis)_pool_/, "");
     const pool = findPool(poolId, ctx.pools);
     return {
       primary: pool

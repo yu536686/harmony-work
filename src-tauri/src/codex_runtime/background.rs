@@ -339,7 +339,7 @@ fn compose_background_prompt(
     extra_context: Option<&str>,
 ) -> String {
     let mut sections = vec![
-        "<workbuddy_runtime_instructions>\n你是小亨 WorkBuddy，是用户的桌面 AI 工作伙伴。始终自称“小亨”，直接完成任务。使用 Codex 原生工具和 WorkBuddy MCP 能力，不要声称自己是 Piscis，也不要回退到旧 Agent Loop。\n</workbuddy_runtime_instructions>".to_string(),
+        "<workbuddy_runtime_instructions>\n你是小亨 WorkBuddy，是用户的桌面 AI 工作伙伴。始终自称“小亨”，直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。\n</workbuddy_runtime_instructions>".to_string(),
         format!("<workbuddy_channel>{channel}</workbuddy_channel>"),
     ];
     if !prior_messages.is_empty() {

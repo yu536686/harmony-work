@@ -21,7 +21,7 @@ import { openPath } from "../../../services/tauri";
 import { poolApi, koiApi, PoolMessage, KoiWithStats, poolSessionFromWire, type PoolSessionSnapshot } from "../../../services/tauri";
 import { RootState, poolActions, koiActions, boardActions, POOL_DEFAULT_CAPACITY, parseMentions, hasMentions } from "../../../store";
 import { useScrollPrependedHistory } from "../../../hooks/useScrollPrependedHistory";
-import { containsDelegatedPiscisMention } from "../../../utils/poolMention";
+import { containsDelegatedCoordinatorMention } from "../../../utils/poolMention";
 import {
   handleInputHistoryKeyDown,
   pushInputHistory,
@@ -118,7 +118,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 function MessageBubble({ msg, kois }: { msg: PoolMessage; kois: KoiWithStats[] }) {
   const sender = kois.find((k) => k.id === msg.sender_id);
-  const isPiscis = msg.sender_id === "piscis";
+  const isPiscis = msg.sender_id === "xiaoheng" || msg.sender_id === "piscis";
   const icon = isPiscis ? "🐋" : sender?.icon ?? "🐟";
   const color = isPiscis ? "#7c3aed" : sender?.color ?? "#6b7280";
   const name = isPiscis ? "小亨" : sender?.name ?? msg.sender_id;
@@ -194,7 +194,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   useEffect(() => {
     if (!poolInputHistoryScope) return;
     const texts = messages
-      .filter((m) => m.sender_id === "piscis")
+      .filter((m) => m.sender_id === "xiaoheng" || m.sender_id === "piscis")
       .map((m) => m.content);
     seedInputHistory(poolInputHistoryScope, texts);
   }, [poolInputHistoryScope, messages]);
@@ -857,7 +857,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   const handleSendMessage = async () => {
     const text = userInput.trim();
     if (!text || !activeSessionId) return;
-    if (containsDelegatedPiscisMention(text)) {
+    if (containsDelegatedCoordinatorMention(text)) {
       setMentionError(t("pool.noDelegateSelfPiscis"));
       setTimeout(() => setMentionError(""), 8000);
       return;
@@ -874,7 +874,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
       const metadata = mentions.includes("all") ? "all" : mentions.join(",");
       await poolApi.sendMessage({
         session_id: activeSessionId,
-        sender_id: "piscis",
+        sender_id: "xiaoheng",
         content: text,
         msg_type: "mention",
         metadata,

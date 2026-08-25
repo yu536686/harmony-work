@@ -196,7 +196,7 @@ pub async fn validate_vision_model(
 }
 
 pub(crate) fn pool_coordinator_session_id(pool_id: &str) -> String {
-    format!("workbuddy_pool_{pool_id}")
+    format!("xiaoheng_pool_{pool_id}")
 }
 
 #[tauri::command]

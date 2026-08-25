@@ -1,7 +1,7 @@
 /// Koi (锦鲤) commands — CRUD for persistent independent Agents.
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::commands::chat::pool_coordinator_session_id;
-use crate::piscis::heartbeat::ensure_heartbeat_session;
+use crate::coordination::heartbeat::ensure_heartbeat_session;
 use crate::pool::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
@@ -260,7 +260,7 @@ pub async fn update_koi(
     // Trigger Piscis to reassess if there are meaningful changes
     if !change_parts.is_empty() && !affected_pools.is_empty() {
         let pool_names: Vec<&str> = affected_pools.iter().map(|(_, n)| n.as_str()).collect();
-        let piscis_prompt = format!(
+        let coordinator_prompt = format!(
             "用户对团队成员 {} ({}) 进行了调整：{}\n\n\
              受影响的项目：{}\n\n\
              请评估是否需要：\n\
@@ -281,7 +281,7 @@ pub async fn update_koi(
         let session_id_clone = session_id.clone();
         let pool_name_clone = first_pool_name.clone();
         let pool_id_clone = first_pool_id.clone();
-        let piscis_prompt_clone = piscis_prompt.clone();
+        let coordinator_prompt_clone = coordinator_prompt.clone();
         tokio::spawn(async move {
             let st = app_clone.state::<AppState>();
             let _ = ensure_heartbeat_session(
@@ -294,7 +294,7 @@ pub async fn update_koi(
             let _ = run_codex_background(
                 &st,
                 &session_id_clone,
-                &piscis_prompt_clone,
+                &coordinator_prompt_clone,
                 None,
                 "heartbeat",
                 CodexBackgroundOptions {
@@ -401,7 +401,7 @@ pub async fn delete_koi(
     // Trigger Piscis to reassess affected projects
     if !affected_pools.is_empty() {
         let pool_names: Vec<&str> = affected_pools.iter().map(|(_, n)| n.as_str()).collect();
-        let piscis_prompt = format!(
+        let coordinator_prompt = format!(
             "用户解雇了团队成员 {} {}（角色：{}），其所有任务已取消。\n\n\
              受影响的项目：{}\n\n\
              请评估是否需要：\n\
@@ -433,7 +433,7 @@ pub async fn delete_koi(
             let _ = run_codex_background(
                 &st,
                 &session_id_clone,
-                &piscis_prompt,
+                &coordinator_prompt,
                 None,
                 "heartbeat",
                 CodexBackgroundOptions {
@@ -527,7 +527,7 @@ pub async fn set_koi_active(
 
         if !affected_pools.is_empty() {
             let pool_names: Vec<&str> = affected_pools.iter().map(|(_, n)| n.as_str()).collect();
-            let piscis_prompt = format!(
+            let coordinator_prompt = format!(
                 "{} {}（{}）已回归上班。\n\n\
                  受影响的项目：{}\n\n\
                  请检查是否有待分配或被取消的任务可以重新交给 {}，\
@@ -557,7 +557,7 @@ pub async fn set_koi_active(
                 let _ = run_codex_background(
                     &st,
                     &session_id_clone,
-                    &piscis_prompt,
+                    &coordinator_prompt,
                     None,
                     "heartbeat",
                     CodexBackgroundOptions {
@@ -637,7 +637,7 @@ pub async fn set_koi_active(
             let koi_name = koi.name.clone();
             let koi_role = koi.role.clone();
             let koi_icon = koi.icon.clone();
-            let piscis_prompt = format!(
+            let coordinator_prompt = format!(
                 "用户让 {} {}（{}）进入休假，其进行中的任务已自动取消。\n\n\
                  受影响的项目：{}\n\n\
                  请评估是否需要：\n\
@@ -668,7 +668,7 @@ pub async fn set_koi_active(
                 let _ = run_codex_background(
                     &st,
                     &session_id_clone,
-                    &piscis_prompt,
+                    &coordinator_prompt,
                     None,
                     "heartbeat",
                     CodexBackgroundOptions {

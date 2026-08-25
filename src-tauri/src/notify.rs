@@ -1,18 +1,18 @@
 //! Host-side notification dispatcher.
 //!
-//! Implements [`piscis_kernel::notify`] semantics for the desktop host:
-//! UI toasts go through the Tauri `piscis_toast` event, IM targets are
+//! Implements WorkBuddy notification semantics for the desktop host:
+//! UI toasts go through the Tauri `workbuddy_toast` event, IM targets are
 //! resolved against the persisted `im_session_bindings` table and sent
 //! via the existing [`crate::gateway::GatewayManager`].
 //!
 //! The kernel side stays UI-neutral; everything that touches an
 //! `AppHandle`, `tauri::Emitter`, or the gateway lives here.
 
-use crate::gateway;
-use crate::store::Database;
 pub use crate::agent_core::notification::{
     NotificationLevel, NotificationOutcome, NotificationRequest, NotificationTarget,
 };
+use crate::gateway;
+use crate::store::Database;
 use serde_json::json;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -103,7 +103,7 @@ fn build_toast_payload(request: &NotificationRequest) -> serde_json::Value {
         "decision_id": request.decision_id,
         "duration_ms": request.effective_duration_ms(),
         "source": if request.source.is_empty() {
-            "piscis".to_string()
+            "xiaoheng".to_string()
         } else {
             request.source.clone()
         },
@@ -119,7 +119,7 @@ fn emit_ui_toast(deps: &NotifierDeps, request: &NotificationRequest) -> Notifica
         );
     };
     let payload = build_toast_payload(request);
-    match app.emit("piscis_toast", payload) {
+    match app.emit("workbuddy_toast", payload) {
         Ok(()) => {
             debug!(
                 "notify: ui toast emitted level={} title={:?}",
@@ -129,10 +129,10 @@ fn emit_ui_toast(deps: &NotifierDeps, request: &NotificationRequest) -> Notifica
             NotificationOutcome::ok(NotificationTarget::Ui, "toast emitted")
         }
         Err(err) => {
-            warn!("notify: failed to emit piscis_toast: {}", err);
+            warn!("notify: failed to emit workbuddy_toast: {}", err);
             NotificationOutcome::failed(
                 NotificationTarget::Ui,
-                format!("failed to emit piscis_toast: {}", err),
+                format!("failed to emit workbuddy_toast: {}", err),
             )
         }
     }

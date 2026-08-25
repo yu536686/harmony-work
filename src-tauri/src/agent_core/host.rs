@@ -1,16 +1,4 @@
-//! Host traits — the contract between `piscis-kernel` (OS/UI-neutral runtime)
-//! and the concrete hosts that embed it (Tauri desktop, `openpiscis-headless` CLI,
-//! future server process, …).
-//!
-//! The kernel always consumes these traits behind `Arc<dyn Trait>` pointers
-//! obtained from a [`HostRuntime`]. The desktop host implements them by
-//! forwarding to Tauri events / windows; the CLI host implements them by
-//! writing NDJSON to stdout and returning deterministic defaults for
-//! interactive prompts.
-//!
-//! `piscis-core` remains dependency-light on purpose: only `chrono`, `serde`,
-//! `serde_json` and `async-trait`. No tokio, no reqwest, no rusqlite. If a
-//! future trait needs async, express it via `#[async_trait]`.
+//! WorkBuddy-owned host and persistence contracts retained for UI and data compatibility.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -20,7 +8,7 @@ use std::sync::Arc;
 
 // -- EventSink -------------------------------------------------------------
 
-/// Publishes agent events out of the kernel so that a host can surface them
+/// Publishes agent events so that a host can surface them
 /// to whatever UI (Tauri window, terminal, web socket) it maintains.
 ///
 /// Every `emit_session` call corresponds to a one-off payload tied to a
@@ -72,30 +60,7 @@ pub trait Notifier: Send + Sync {
 
 // -- HostTools -------------------------------------------------------------
 
-/// Opaque handle to the kernel's `ToolRegistry`, supplied to `HostTools::
-/// register` so hosts can drop in platform-specific tools without the core
-/// crate taking a dependency on the concrete registry type.
-///
-/// Because `piscis-core` cannot mention the kernel's concrete `ToolRegistry`
-/// type, we keep the payload type-erased behind `Box<dyn Any>`. Hosts that
-/// live inside the same process (always the case for us: desktop and CLI
-/// link against the exact same kernel build) can recover the concrete type
-/// through [`downcast_mut`](Self::downcast_mut) / [`downcast_ref`](Self::downcast_ref).
-///
-/// The ergonomic kernel-side helpers (`as_registry_mut`, `register_tool`,
-/// …) live in `piscis-kernel::agent::tool::ToolRegistryHandleExt` so host
-/// crates can drop the downcast entirely:
-///
-/// ```ignore
-/// use piscis_kernel::agent::tool::ToolRegistryHandleExt;
-///
-/// impl HostTools for DesktopHostTools {
-///     fn register(&self, handle: &mut ToolRegistryHandle) {
-///         let reg = handle.as_registry_mut().expect("kernel registry");
-///         reg.register(Box::new(MyDesktopTool::new()));
-///     }
-/// }
-/// ```
+/// Type-erased registry handle retained for stored host extension contracts.
 pub struct ToolRegistryHandle {
     /// Type-erased pointer managed by the kernel; boxing keeps the ABI
     /// stable while we move real tool registration code in.
@@ -214,14 +179,14 @@ pub trait HostRuntime: Send + Sync {
 #[serde(rename_all = "snake_case")]
 pub enum HeadlessCliMode {
     #[default]
-    Piscis,
+    Codex,
     Pool,
 }
 
 impl HeadlessCliMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Piscis => "piscis",
+            Self::Codex => "codex",
             Self::Pool => "pool",
         }
     }
@@ -631,17 +596,10 @@ impl PoolEventSink for NullPoolEventSink {
     fn emit_pool(&self, _event: &PoolEvent) {}
 }
 
-// ─── Subagent runtime ──────────────────────────────────────────────────
+// ─── StaffDeck execution contracts ─────────────────────────────────────
 //
-// `SubagentRuntime` abstracts how a Koi turn is actually executed:
-//   * Desktop: run Koi turns in the GUI process through a host-provided
-//     in-process runtime.
-//   * CLI/eval: optionally spawn `openpiscis-headless rpc` children when
-//     stronger subprocess isolation is desired.
-//   * Tests: `StubSubagentRuntime` that returns a scripted outcome.
-//
-// The runtime is driven by the kernel pool coordinator (Phase 2.1) and
-// exposed to `call_koi` / `call_fish` through `ToolContext`.
+// These persisted request/result types remain as database and UI contracts.
+// Actual execution is owned by the Codex StaffDeck dispatcher.
 
 /// Input payload for one Koi turn. The coordinator fills this in before
 /// handing it to the runtime; the runtime is responsible for materialising
@@ -853,5 +811,25 @@ mod tool_registry_handle_tests {
     fn type_name_reports_inner_type() {
         let h = ToolRegistryHandle::new(FakeRegistry::default());
         assert!(h.type_name().contains("FakeRegistry"));
+    }
+}
+
+#[cfg(test)]
+mod headless_cli_mode_tests {
+    use super::HeadlessCliMode;
+
+    #[test]
+    fn codex_is_the_default_headless_mode() {
+        assert_eq!(HeadlessCliMode::default(), HeadlessCliMode::Codex);
+        assert_eq!(HeadlessCliMode::Codex.as_str(), "codex");
+        assert_eq!(
+            serde_json::to_string(&HeadlessCliMode::Codex).unwrap(),
+            "\"codex\""
+        );
+    }
+
+    #[test]
+    fn legacy_piscis_mode_is_not_an_execution_fallback() {
+        assert!(serde_json::from_str::<HeadlessCliMode>("\"piscis\"").is_err());
     }
 }

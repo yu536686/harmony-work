@@ -124,7 +124,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "pool_org".into(),
-            description: "创建和管理项目池与组织规范，由 Piscis 主动发起协作项目".into(),
+            description: "创建和管理项目池与组织规范，由小亨协调 StaffDeck 人员执行".into(),
             icon: "🏊".into(),
             windows_only: false,
         },
@@ -225,7 +225,8 @@ pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String>
     }
     let state_ref = (*state).clone();
     tokio::spawn(async move {
-        let _ = crate::piscis::heartbeat::dispatch_heartbeat(&state_ref, &prompt, "internal").await;
+        let _ = crate::coordination::heartbeat::dispatch_heartbeat(&state_ref, &prompt, "internal")
+            .await;
     });
     Ok(())
 }

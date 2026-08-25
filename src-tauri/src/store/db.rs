@@ -162,7 +162,7 @@ pub struct Memory {
     pub confidence: f64,
     pub source_session_id: Option<String>,
     pub memory_type: String,
-    /// Who owns this memory: "piscis" or a koi_id
+    /// Who owns this memory: "xiaoheng" or a staff id.
     pub owner_id: String,
     /// "private" | "project" | "global"
     pub scope_type: String,
@@ -1010,7 +1010,7 @@ impl Database {
 
         // Memory isolation: add owner_id, scope_type, scope_id to memories
         let _ = self.conn.execute(
-            "ALTER TABLE memories ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'piscis'",
+            "ALTER TABLE memories ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'xiaoheng'",
             [],
         );
         let _ = self.conn.execute(
@@ -1018,12 +1018,20 @@ impl Database {
             [],
         );
         let _ = self.conn.execute(
-            "ALTER TABLE memories ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'piscis'",
+            "ALTER TABLE memories ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'xiaoheng'",
             [],
         );
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_id);
              CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope_type, scope_id);",
+        );
+        let _ = self.conn.execute(
+            "UPDATE memories SET owner_id='xiaoheng' WHERE owner_id='piscis'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "UPDATE memories SET scope_id='xiaoheng' WHERE scope_id='piscis'",
+            [],
         );
 
         // Memory project tagging: allows private memories to be tagged with the project they were
@@ -1973,13 +1981,13 @@ impl Database {
             memory_type: "personal".to_string(),
             owner_id: r
                 .get::<_, String>(5)
-                .unwrap_or_else(|_| "piscis".to_string()),
+                .unwrap_or_else(|_| "xiaoheng".to_string()),
             scope_type: r
                 .get::<_, String>(6)
                 .unwrap_or_else(|_| "private".to_string()),
             scope_id: r
                 .get::<_, String>(7)
-                .unwrap_or_else(|_| "piscis".to_string()),
+                .unwrap_or_else(|_| "xiaoheng".to_string()),
             project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
             created_at: r
                 .get::<_, String>(9)?
@@ -2235,13 +2243,13 @@ impl Database {
                     memory_type: "personal".to_string(),
                     owner_id: r
                         .get::<_, String>(5)
-                        .unwrap_or_else(|_| "piscis".to_string()),
+                        .unwrap_or_else(|_| "xiaoheng".to_string()),
                     scope_type: r
                         .get::<_, String>(6)
                         .unwrap_or_else(|_| "private".to_string()),
                     scope_id: r
                         .get::<_, String>(7)
-                        .unwrap_or_else(|_| "piscis".to_string()),
+                        .unwrap_or_else(|_| "xiaoheng".to_string()),
                     project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
                     created_at: r
                         .get::<_, String>(9)?
@@ -3350,29 +3358,30 @@ impl Database {
     }
 
     pub fn get_koi(&self, id: &str) -> Result<Option<crate::agent_core::models::KoiDefinition>> {
-        let koi_row = |r: &rusqlite::Row| -> rusqlite::Result<crate::agent_core::models::KoiDefinition> {
-            Ok(crate::agent_core::models::KoiDefinition {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                role: r.get::<_, String>(2).unwrap_or_default(),
-                icon: r.get(3)?,
-                color: r.get(4)?,
-                system_prompt: r.get(5)?,
-                description: r.get(6)?,
-                status: r.get(7)?,
-                created_at: r
-                    .get::<_, String>(8)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                updated_at: r
-                    .get::<_, String>(9)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                llm_provider_id: r.get(10)?,
-                max_iterations: r.get::<_, u32>(11).unwrap_or(0),
-                task_timeout_secs: r.get::<_, u32>(12).unwrap_or(0),
-            })
-        };
+        let koi_row =
+            |r: &rusqlite::Row| -> rusqlite::Result<crate::agent_core::models::KoiDefinition> {
+                Ok(crate::agent_core::models::KoiDefinition {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    role: r.get::<_, String>(2).unwrap_or_default(),
+                    icon: r.get(3)?,
+                    color: r.get(4)?,
+                    system_prompt: r.get(5)?,
+                    description: r.get(6)?,
+                    status: r.get(7)?,
+                    created_at: r
+                        .get::<_, String>(8)?
+                        .parse::<DateTime<Utc>>()
+                        .unwrap_or_else(|_| Utc::now()),
+                    updated_at: r
+                        .get::<_, String>(9)?
+                        .parse::<DateTime<Utc>>()
+                        .unwrap_or_else(|_| Utc::now()),
+                    llm_provider_id: r.get(10)?,
+                    max_iterations: r.get::<_, u32>(11).unwrap_or(0),
+                    task_timeout_secs: r.get::<_, u32>(12).unwrap_or(0),
+                })
+            };
 
         // Exact match first
         let mut stmt = self.conn.prepare(
@@ -4029,7 +4038,9 @@ impl Database {
         })
     }
 
-    fn map_pool_session(r: &rusqlite::Row) -> rusqlite::Result<crate::agent_core::models::PoolSession> {
+    fn map_pool_session(
+        r: &rusqlite::Row,
+    ) -> rusqlite::Result<crate::agent_core::models::PoolSession> {
         Ok(crate::agent_core::models::PoolSession {
             id: r.get(0)?,
             name: r.get(1)?,
@@ -4080,7 +4091,10 @@ impl Database {
             .collect()
     }
 
-    pub fn get_pool_session(&self, id: &str) -> Result<Option<crate::agent_core::models::PoolSession>> {
+    pub fn get_pool_session(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::agent_core::models::PoolSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at, team_id, workflow_run_id \
              FROM pool_sessions WHERE id = ?1"
@@ -4564,27 +4578,30 @@ impl Database {
 
     fn internal_session_ids_for_pool(&self, pool_id: &str) -> Result<Vec<String>> {
         let suffix = format!("_{}", pool_id);
-        let pool_piscis_id = format!("piscis_pool_{}", pool_id);
+        let coordinator_id = format!("xiaoheng_pool_{}", pool_id);
+        let legacy_coordinator_id = format!("piscis_pool_{}", pool_id);
         let mut stmt = self.conn.prepare(
             "SELECT id, COALESCE(source, 'chat') FROM sessions
-             WHERE id = ?1
-                OR source IN ('piscis_pool', 'piscis_heartbeat_pool')
+             WHERE id IN (?1, ?2)
+                OR source IN ('codex_staffdeck', 'piscis_pool', 'piscis_heartbeat_pool')
                 OR id LIKE 'koi\\_%' ESCAPE '\\'",
         )?;
-        let rows = stmt.query_map(params![pool_piscis_id], |r| {
+        let rows = stmt.query_map(params![coordinator_id, legacy_coordinator_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })?;
         let mut ids = Vec::new();
         for row in rows {
             let (session_id, source) = row?;
-            let linked_by_id = session_id == pool_piscis_id
+            let linked_by_id = session_id == coordinator_id
+                || session_id == legacy_coordinator_id
                 || (session_id.ends_with(&suffix)
                     && (session_id.starts_with("koi_runtime_")
                         || session_id.starts_with("koi_notify_")
                         || session_id.starts_with("koi_")));
-            let linked_by_source =
-                matches!(source.as_str(), "piscis_pool" | "piscis_heartbeat_pool")
-                    && session_id.ends_with(&suffix);
+            let linked_by_source = matches!(
+                source.as_str(),
+                "codex_staffdeck" | "piscis_pool" | "piscis_heartbeat_pool"
+            ) && session_id.ends_with(&suffix);
             if linked_by_id || linked_by_source {
                 ids.push(session_id);
             }
@@ -4829,7 +4846,9 @@ impl Database {
             .map_err(Into::into)
     }
 
-    fn map_pool_message(r: &rusqlite::Row) -> rusqlite::Result<crate::agent_core::models::PoolMessage> {
+    fn map_pool_message(
+        r: &rusqlite::Row,
+    ) -> rusqlite::Result<crate::agent_core::models::PoolMessage> {
         Ok(crate::agent_core::models::PoolMessage {
             id: r.get(0)?,
             pool_session_id: r.get(1)?,
@@ -5130,13 +5149,14 @@ mod tests {
             .expect("create other pool");
 
         let linked = [
+            format!("xiaoheng_pool_{}", pool.id),
             format!("piscis_pool_{}", pool.id),
             format!("koi_runtime_alpha_{}", pool.id),
             format!("koi_notify_beta_{}", pool.id),
             format!("koi_gamma_{}", pool.id),
         ];
         for session_id in &linked {
-            db.ensure_fixed_session(session_id, session_id, "piscis_pool")
+            db.ensure_fixed_session(session_id, session_id, "codex_staffdeck")
                 .expect("internal session");
             db.append_message(session_id, "assistant", "large hidden history")
                 .expect("message");

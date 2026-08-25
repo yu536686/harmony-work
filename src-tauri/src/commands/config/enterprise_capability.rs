@@ -6,9 +6,9 @@
 use crate::commands::config::mcp::{
     resolve_settings_placeholders_in_mcp_config, test_mcp_server_config, McpTestResult,
 };
+use crate::process::tokio_command;
 use crate::store::{AppState, Settings};
 use crate::tools::mcp::{McpServerConfig, McpToolInfo};
-use crate::process::tokio_command;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -571,12 +571,16 @@ mod tests {
 
     #[tokio::test]
     async fn real_feishu_lark_mcp_lists_tools_when_enabled() {
-        if std::env::var("PISCIS_REAL_FEISHU_MCP_TEST").ok().as_deref() != Some("1") {
-            eprintln!("skipping real Feishu MCP test; set PISCIS_REAL_FEISHU_MCP_TEST=1");
+        if std::env::var("WORKBUDDY_REAL_FEISHU_MCP_TEST")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            eprintln!("skipping real Feishu MCP test; set WORKBUDDY_REAL_FEISHU_MCP_TEST=1");
             return;
         }
 
-        let config_path = std::env::var("PISCIS_REAL_FEISHU_CONFIG_PATH")
+        let config_path = std::env::var("WORKBUDDY_REAL_FEISHU_CONFIG_PATH")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
                 let roaming = dirs::data_dir()

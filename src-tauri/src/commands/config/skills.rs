@@ -84,7 +84,7 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
     let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
     loader.load_all().map_err(|e| e.to_string())?;
@@ -137,7 +137,7 @@ pub async fn scan_skill_catalog(
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = app_dir.join("skills");
     let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
     loader.load_all().map_err(|e| e.to_string())?;
@@ -179,7 +179,7 @@ pub async fn sync_skills_from_disk(state: State<'_, AppState>) -> Result<SyncSki
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = app_dir.join("skills");
 
     // Load all skills from the filesystem
@@ -293,7 +293,7 @@ async fn install_skill_from_content_sourced(
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
 
     let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
@@ -442,7 +442,7 @@ pub async fn install_skill(
             .map_err(|e| e.to_string())?;
         let resp = client
             .get(&source_trimmed)
-            .header("User-Agent", "Piscis-Desktop/1.0")
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
             .send()
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
@@ -500,7 +500,7 @@ async fn install_skill_from_zip(
             .map_err(|e| e.to_string())?;
         let resp = client
             .get(source)
-            .header("User-Agent", "Piscis-Desktop/1.0")
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
             .send()
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
@@ -589,7 +589,7 @@ async fn install_skill_from_zip(
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = app_dir.join("skills");
 
     let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
@@ -717,7 +717,7 @@ pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> 
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
     let skills_dir = app_dir.join("skills");
 
     let safe_name: String = skill_name
@@ -871,7 +871,7 @@ pub async fn clawhub_search(
     let limit = limit.unwrap_or(20).min(50);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Piscis-Desktop/1.0")
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -1148,7 +1148,7 @@ pub async fn check_skill_compat(
             .map_err(|e| e.to_string())?;
         let resp = client
             .get(&source)
-            .header("User-Agent", "Piscis-Desktop/1.0")
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
             .send()
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
@@ -1189,7 +1189,7 @@ pub async fn clawhub_install(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("Piscis-Desktop/1.0")
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -1360,9 +1360,9 @@ async fn enrich_triggers_with_codex(
             Some("Return only the requested JSON array. Do not call tools."),
         ),
     )
-        .await
-        .map_err(|_| anyhow::anyhow!("Codex trigger enrichment timed out"))?
-        .map_err(|error| anyhow::anyhow!("Codex error: {}", error))?;
+    .await
+    .map_err(|_| anyhow::anyhow!("Codex trigger enrichment timed out"))?
+    .map_err(|error| anyhow::anyhow!("Codex error: {}", error))?;
 
     let text = response.final_message;
 

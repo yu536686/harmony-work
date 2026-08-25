@@ -243,7 +243,7 @@ pub async fn openai_skills_list(
     let limit = limit.unwrap_or(60).min(120) as usize;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Piscis-Desktop/1.0")
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -287,7 +287,7 @@ pub async fn openai_skills_list(
 pub async fn openai_skills_detail(skill_id: String) -> Result<OpenAISkillDetail, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Piscis-Desktop/1.0")
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -323,7 +323,7 @@ pub async fn openai_skills_install(
 ) -> Result<OpenAISkillInstallResult, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        .user_agent("Piscis-Desktop/1.0")
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -347,11 +347,11 @@ pub async fn openai_skills_install(
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| PathBuf::from(".xiaoheng"));
     let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
 
     let temp_root =
-        std::env::temp_dir().join(format!("piscis-openai-skills-{}", std::process::id()));
+        std::env::temp_dir().join(format!("workbuddy-openai-skills-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp_root);
 
     let mut installed = Vec::new();

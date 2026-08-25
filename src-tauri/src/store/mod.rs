@@ -15,6 +15,39 @@ use tokio::sync::Mutex;
 
 use crate::lsp::manager::LspManager;
 
+fn copy_missing_tree(source: &Path, target: &Path) -> Result<()> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let destination = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_missing_tree(&entry.path(), &destination)?;
+        } else if file_type.is_file() && !destination.exists() {
+            std::fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_app_data_from(legacy_dir: &Path, app_dir: &Path) -> Result<()> {
+    copy_missing_tree(legacy_dir, app_dir)
+}
+
+fn migrate_legacy_app_data(app_dir: &Path) -> Result<()> {
+    let Some(data_root) = app_dir.parent() else {
+        return Ok(());
+    };
+    let legacy_dir = data_root.join("com.piscis.desktop");
+    if legacy_dir == app_dir || !legacy_dir.is_dir() {
+        return Ok(());
+    }
+    migrate_legacy_app_data_from(&legacy_dir, app_dir)
+}
+
 fn database_has_table(path: &Path, table: &str) -> bool {
     if !path.is_file() {
         return false;
@@ -87,9 +120,8 @@ pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub settings: Arc<Mutex<Settings>>,
     /// Current visible execution plan per session
-    pub plan_state: Arc<
-        Mutex<std::collections::HashMap<String, Vec<crate::agent_core::plan::PlanTodoItem>>>,
-    >,
+    pub plan_state:
+        Arc<Mutex<std::collections::HashMap<String, Vec<crate::agent_core::plan::PlanTodoItem>>>>,
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags:
         Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
@@ -111,7 +143,7 @@ pub struct AppState {
     /// IM gateway manager
     pub gateway: Arc<crate::gateway::GatewayManager>,
     /// Per-pool heartbeat cursor: pool_id -> last processed pool_message.id
-    pub piscis_heartbeat_cursor: Arc<Mutex<std::collections::HashMap<String, i64>>>,
+    pub coordination_heartbeat_cursor: Arc<Mutex<std::collections::HashMap<String, i64>>>,
     /// IDE terminal session registry
     pub terminals: Arc<Mutex<crate::commands::ide::TerminalRegistry>>,
     /// IDE file watcher registry: project_dir -> notify watcher handle
@@ -128,7 +160,7 @@ impl AppState {
         let app_dir = app
             .path()
             .app_data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+            .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
         Self::new_sync_with_app_dir(app, scheduler, app_dir)
     }
 
@@ -140,6 +172,7 @@ impl AppState {
         scheduler: crate::scheduler::CronScheduler,
         app_dir: std::path::PathBuf,
     ) -> Result<Self> {
+        migrate_legacy_app_data(&app_dir)?;
         std::fs::create_dir_all(&app_dir)?;
 
         let db_path = migrate_database_file(&app_dir)?;
@@ -175,10 +208,40 @@ impl AppState {
             confirmation_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             interactive_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             gateway: Arc::new(crate::gateway::GatewayManager::new()),
-            piscis_heartbeat_cursor: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            coordination_heartbeat_cursor: Arc::new(Mutex::new(std::collections::HashMap::new())),
             terminals: Arc::new(Mutex::new(crate::commands::ide::TerminalRegistry::new())),
             file_watchers: Arc::new(Mutex::new(std::collections::HashMap::new())),
             lsp_manager: Arc::new(LspManager::with_bridge_name("Harmony WorkBuddy")),
         })
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::migrate_legacy_app_data_from;
+
+    #[test]
+    fn legacy_app_data_is_copied_without_overwriting_current_files() {
+        let root =
+            std::env::temp_dir().join(format!("workbuddy-migration-{}", uuid::Uuid::new_v4()));
+        let legacy = root.join("legacy");
+        let current = root.join("current");
+        std::fs::create_dir_all(legacy.join("skills")).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(legacy.join("config.json"), "legacy").unwrap();
+        std::fs::write(legacy.join("skills").join("sample.md"), "skill").unwrap();
+        std::fs::write(current.join("config.json"), "current").unwrap();
+
+        migrate_legacy_app_data_from(&legacy, &current).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(current.join("config.json")).unwrap(),
+            "current"
+        );
+        assert_eq!(
+            std::fs::read_to_string(current.join("skills").join("sample.md")).unwrap(),
+            "skill"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

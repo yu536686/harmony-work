@@ -1,13 +1,7 @@
-pub mod dingtalk;
-pub mod discord;
-pub mod feishu;
-pub mod matrix;
-pub mod slack;
-pub mod teams;
-pub mod telegram;
-pub mod webhook;
 pub mod wechat;
 pub mod wecom;
+
+pub const SUPPORTED_IM_CHANNELS: [&str; 2] = ["wecom", "wechat"];
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -130,6 +124,10 @@ impl GatewayManager {
 
     pub async fn register_channel(&self, channel: Box<dyn Channel>) {
         let name = channel.name().to_string();
+        if !SUPPORTED_IM_CHANNELS.contains(&name.as_str()) {
+            warn!("Ignoring unsupported IM channel: {}", name);
+            return;
+        }
         info!("Registering gateway channel: {}", name);
         self.channels
             .write()
@@ -262,6 +260,10 @@ impl GatewayManager {
         Ok(())
     }
 
+    pub async fn clear_channels(&self) {
+        self.channels.write().await.clear();
+    }
+
     pub async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         let channels = self.channels.read().await;
         if let Some(channel) = channels.get(&msg.channel) {
@@ -288,5 +290,15 @@ impl GatewayManager {
             });
         }
         infos
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SUPPORTED_IM_CHANNELS;
+
+    #[test]
+    fn only_supported_im_channels_are_exposed() {
+        assert_eq!(SUPPORTED_IM_CHANNELS, ["wecom", "wechat"]);
     }
 }

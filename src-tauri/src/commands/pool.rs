@@ -10,11 +10,11 @@ pub mod koi;
 
 use std::sync::Arc;
 
+use crate::agent_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
 use crate::pool::bridge;
 use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::{PoolMessage, PoolSession};
 use crate::store::AppState;
-use crate::agent_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::State;
@@ -142,19 +142,24 @@ pub async fn send_pool_message(
     state: State<'_, AppState>,
     input: SendPoolMessageInput,
 ) -> Result<PoolMessage, String> {
+    let sender_id = if input.sender_id == "piscis" {
+        "xiaoheng"
+    } else {
+        input.sender_id.as_str()
+    };
     if input.sender_id == "user" {
         return Err(
             "Pool chat no longer accepts sender_id \"user\". \
-             Humans act as the Piscis coordinator (sender_id \"piscis\") and delegate to Koi via @!mentions."
+             Humans act as the Xiaoheng coordinator (sender_id \"xiaoheng\") and delegate to Koi via @!mentions."
                 .into(),
         );
     }
-    if input.sender_id == "piscis"
-        && crate::piscis::heartbeat::content_targets_piscis(&input.content)
+    if sender_id == "xiaoheng"
+        && crate::coordination::heartbeat::content_targets_coordinator(&input.content)
     {
         return Err(
-            "Cannot @!mention Piscis from a Piscis-role message. \
-             Delegate to Koi with @!KoiName, or use the IDE Piscis CLI for a direct Piscis conversation."
+            "Cannot @!mention Xiaoheng from a coordinator-role message. \
+             Delegate to staff with @!PersonName, or use Xiaoheng CLI for a direct conversation."
                 .into(),
         );
     }
@@ -163,7 +168,7 @@ pub async fn send_pool_message(
     let msg = db
         .insert_pool_message(
             &input.session_id,
-            &input.sender_id,
+            sender_id,
             &input.content,
             input.msg_type.as_deref().unwrap_or("text"),
             input.metadata.as_deref().unwrap_or("{}"),
@@ -176,10 +181,10 @@ pub async fn send_pool_message(
     // Auto-detect @mention and dispatch to Koi asynchronously via the
     // kernel coordinator. The coordinator reuses the same PoolStore
     // (SQLite DB) and queues each mention as its own subprocess turn.
-    if input.content.contains('@') && input.sender_id != "system" {
+    if input.content.contains('@') && sender_id != "system" {
         let app_clone = app.clone();
         let db_arc = state.db.clone();
-        let sender = input.sender_id.clone();
+        let sender = sender_id.to_string();
         let pool_sid = input.session_id.clone();
         let content = input.content.clone();
         tokio::spawn(async move {
@@ -190,13 +195,12 @@ pub async fn send_pool_message(
             }
         });
 
-        // User @!Piscis in pool chat is rejected above. Non-user senders (piscis,
-        // system) may still @!Piscis for automated coordination.
-        if input.sender_id != "user"
-            && input.sender_id != "piscis"
-            && crate::piscis::heartbeat::content_targets_piscis(&input.content)
+        // Non-coordinator senders may explicitly hand control back to Xiaoheng.
+        if sender_id != "user"
+            && sender_id != "xiaoheng"
+            && crate::coordination::heartbeat::content_targets_coordinator(&input.content)
         {
-            crate::piscis::heartbeat::spawn_mention_dispatch(
+            crate::coordination::heartbeat::spawn_mention_dispatch(
                 &state,
                 input.session_id.clone(),
                 "mention",
@@ -524,7 +528,7 @@ pub async fn pause_pool_session(
 
 /// Resume a paused or archived project pool.
 /// - Sets pool status back to "active"
-/// - Posts a system message and @piscis to re-engage coordination
+/// - Posts a system message and @!xiaoheng to re-engage coordination
 #[tauri::command]
 pub async fn resume_pool_session(
     app: tauri::AppHandle,
@@ -538,8 +542,8 @@ pub async fn resume_pool_session(
             .map_err(|e| e.to_string())?;
     }
 
-    // 2. Post system message + @piscis to re-engage
-    let resume_msg = "▶ 项目已被用户恢复。@piscis 请检查待办任务并继续协调。".to_string();
+    // 2. Post system message + coordinator mention to re-engage
+    let resume_msg = "项目已被用户恢复。@!xiaoheng 请检查待办任务并继续协调。".to_string();
     let (session, sys_msg) = {
         let db = state.db.lock().await;
         let msg = db
@@ -554,7 +558,7 @@ pub async fn resume_pool_session(
 
     emit_message(&app, &sys_msg);
 
-    // 3. Trigger @piscis mention so Piscis wakes up and resumes coordination
+    // 3. Trigger the coordinator mention so Xiaoheng resumes coordination
     let app_clone = app.clone();
     let db_arc = state.db.clone();
     let pool_id = id.clone();

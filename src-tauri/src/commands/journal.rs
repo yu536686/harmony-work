@@ -1,9 +1,7 @@
 //! File-journal commands (Undo / replay).
 //!
-//! The journal implementation is the shared kernel one
-//! ([`piscis_kernel::agent::file_journal`]) — the same component AgentZ uses — so
-//! both hosts stay in lockstep. openpiscis stores snapshots per workspace at
-//! `{workspace_root}/.piscis/journal.db`.
+//! WorkBuddy stores compatibility snapshots per workspace at
+//! `{workspace_root}/.xiaoheng/journal.db`.
 //!
 //! `chat_send` returns before the agent finishes (the turn runs in a spawned
 //! task), so these commands operate on the *latest* turn that still has
@@ -18,7 +16,15 @@ use crate::commands::chat::resolve_session_workspace_root;
 use crate::store::AppState;
 
 fn open_workspace_journal(workspace_root: &str) -> Result<FileJournal, String> {
-    let db = Path::new(workspace_root).join(".piscis").join("journal.db");
+    let root = Path::new(workspace_root);
+    let db = root.join(".xiaoheng").join("journal.db");
+    let legacy_db = root.join(".piscis").join("journal.db");
+    if !db.exists() && legacy_db.is_file() {
+        if let Some(parent) = db.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(&legacy_db, &db).map_err(|e| e.to_string())?;
+    }
     FileJournal::open(workspace_root, db).map_err(|e| e.to_string())
 }
 

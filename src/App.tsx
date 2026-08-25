@@ -62,6 +62,17 @@ const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
 const REGISTER_URL = "http://www.harmonywatch.cn:8090";
 
+function readMigratedStorage(key: string, legacyKey: string): string | null {
+  const current = localStorage.getItem(key);
+  if (current !== null) return current;
+  const legacy = localStorage.getItem(legacyKey);
+  if (legacy !== null) {
+    localStorage.setItem(key, legacy);
+    localStorage.removeItem(legacyKey);
+  }
+  return legacy;
+}
+
 function WindowTitlebar() {
   const appWindow = getCurrentWindow();
   return (
@@ -108,10 +119,10 @@ function AppContent() {
   const [initialized, setInitialized] = useState(false);
   const [showBootstrap, setShowBootstrap] = useState(() => localStorage.getItem(BOOTSTRAP_STORAGE_KEY) !== "done");
   const [theme, setTheme] = useState<'violet' | 'gold'>(() => {
-    return (localStorage.getItem('piscis-theme') as 'violet' | 'gold') || 'violet';
+    return (readMigratedStorage('workbuddy-theme', 'piscis-theme') as 'violet' | 'gold') || 'violet';
   });
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('piscis-color-mode') as 'light' | 'dark') || 'light';
+    return (readMigratedStorage('workbuddy-color-mode', 'piscis-color-mode') as 'light' | 'dark') || 'light';
   });
 
   useEffect(() => {
@@ -151,8 +162,8 @@ function AppContent() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.setAttribute('data-color-mode', colorMode);
-    localStorage.setItem('piscis-theme', theme);
-    localStorage.setItem('piscis-color-mode', colorMode);
+    localStorage.setItem('workbuddy-theme', theme);
+    localStorage.setItem('workbuddy-color-mode', colorMode);
   }, [theme, colorMode]);
 
   useEffect(() => {

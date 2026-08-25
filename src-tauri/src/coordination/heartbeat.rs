@@ -1,3 +1,10 @@
+pub use crate::agent_core::heartbeat::{
+    assessment_requires_coordination, build_forced_mention_attention,
+    build_heartbeat_coordination_gap_notice, build_pool_heartbeat_message, collect_pool_attention,
+    is_heartbeat_ack_only, PoolAttention,
+};
+use crate::agent_core::project_state::contains_delegated_coordinator_mention;
+use crate::agent_core::project_state::ProjectDecision;
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::notify::{
     dispatch_notification, NotificationLevel, NotificationRequest, NotificationTarget, NotifierDeps,
@@ -5,13 +12,6 @@ use crate::notify::{
 use crate::pool::bridge;
 use crate::pool::KoiTodo;
 use crate::store::AppState;
-pub use crate::agent_core::heartbeat::{
-    assessment_requires_coordination, build_forced_mention_attention,
-    build_heartbeat_coordination_gap_notice, build_pool_heartbeat_message, collect_pool_attention,
-    is_heartbeat_ack_only, PoolAttention,
-};
-use crate::agent_core::project_state::contains_delegated_piscis_mention;
-use crate::agent_core::project_state::ProjectDecision;
 use tracing::warn;
 
 const HEARTBEAT_SOURCE: &str = "codex_heartbeat_global";
@@ -42,7 +42,7 @@ async fn run_mechanical_pool_recovery(state: &AppState) -> Result<Vec<String>, S
 
 pub async fn scan_attention_pools(state: &AppState) -> Result<Vec<PoolAttention>, String> {
     let cursor_snapshot = {
-        let cursor = state.piscis_heartbeat_cursor.lock().await;
+        let cursor = state.coordination_heartbeat_cursor.lock().await;
         cursor.clone()
     };
 
@@ -86,7 +86,7 @@ pub async fn scan_attention_pools(state: &AppState) -> Result<Vec<PoolAttention>
     }
 
     if !advance_cursors.is_empty() {
-        let mut cursor = state.piscis_heartbeat_cursor.lock().await;
+        let mut cursor = state.coordination_heartbeat_cursor.lock().await;
         for (pool_id, latest_message_id) in advance_cursors {
             cursor.insert(pool_id, latest_message_id);
         }
@@ -108,12 +108,12 @@ pub async fn ensure_heartbeat_session(
     Ok(())
 }
 
-/// Case-insensitive `@!Piscis` / `@!piscis` delegated mention at line start.
-pub fn content_targets_piscis(content: &str) -> bool {
-    contains_delegated_piscis_mention(content)
+/// WorkBuddy coordinator mention at line start.
+pub fn content_targets_coordinator(content: &str) -> bool {
+    contains_delegated_coordinator_mention(content)
 }
 
-/// Spawn an immediate Piscis heartbeat so that `@!Piscis` mentions and
+/// Spawn an immediate coordinator heartbeat so direct mentions and
 /// other attention events do not have to wait for the periodic timer.
 ///
 /// Resolves the heartbeat prompt from settings and runs `dispatch_heartbeat`
@@ -121,8 +121,7 @@ pub fn content_targets_piscis(content: &str) -> bool {
 /// or the prompt is empty (matches the periodic loop's behavior).
 ///
 /// NOTE: Currently superseded by [`spawn_mention_dispatch`], which handles
-/// `@!Piscis` mentions with pool-scoped dispatch. Kept as a fallback entry
-/// point for future callers.
+/// pool-scoped direct mentions.
 #[allow(dead_code)]
 pub fn spawn_immediate_dispatch(state: &crate::store::AppState, channel: &'static str) {
     let cloned = state.clone();
@@ -140,7 +139,7 @@ pub fn spawn_immediate_dispatch(state: &crate::store::AppState, channel: &'stati
             }
         };
         if let Err(e) = dispatch_heartbeat(&cloned, &prompt, channel).await {
-            warn!("immediate Piscis dispatch failed: {}", e);
+            warn!("immediate coordinator dispatch failed: {}", e);
         }
     });
 }
@@ -173,7 +172,7 @@ async fn collect_forced_mention_pool_attention(
     build_forced_mention_attention(&pool, &messages, &pool_todos, &koi_ids)
 }
 
-/// Spawn an immediate Piscis turn in response to a direct `@!Piscis` mention
+/// Spawn an immediate Xiaoheng turn in response to a direct coordinator mention
 /// in a specific pool. Unlike [`spawn_immediate_dispatch`], this path is NOT
 /// gated behind `heartbeat_enabled` — an explicit mention from a human is
 /// an interactive request and must be honored even if periodic heartbeats
@@ -182,7 +181,7 @@ async fn collect_forced_mention_pool_attention(
 /// `pool_id` scopes the dispatch to a single pool. `scan_attention_pools`
 /// will pick that pool up (the new mention is an attention event, so the
 /// pool appears in the result set) and `dispatch_heartbeat` will run
-/// Piscis only in that pool's attention session.
+/// Xiaoheng only in that pool's attention session.
 pub fn spawn_mention_dispatch(
     state: &crate::store::AppState,
     pool_id: String,
@@ -209,10 +208,10 @@ pub fn spawn_mention_dispatch(
                     dispatch_single_pool_attention(&cloned, &prompt, &attention, channel).await
                 {
                     warn!(
-                        "@!Piscis mention dispatch failed for pool {}: {}",
+                        "Xiaoheng mention dispatch failed for pool {}: {}",
                         pool_id, e
                     );
-                    let _ = crate::pool::notice::post_piscis_pool_notice(
+                    let _ = crate::pool::notice::post_coordinator_pool_notice(
                         &cloned.app_handle,
                         &cloned,
                         &pool_id,
@@ -223,9 +222,9 @@ pub fn spawn_mention_dispatch(
             }
             None => {
                 tracing::info!(
-                    target: "pool::piscis",
+                    target: "pool::xiaoheng",
                     pool_id = %pool_id,
-                    "@!Piscis mention: no delegated mention found in pool; skipping dispatch"
+                    "Xiaoheng mention: no delegated mention found in pool; skipping dispatch"
                 );
             }
         }
@@ -240,17 +239,17 @@ async fn latest_pool_message_id(state: &AppState, pool_id: &str) -> i64 {
         .unwrap_or(0)
 }
 
-async fn piscis_pool_activity_since(state: &AppState, pool_id: &str, since_id: i64) -> bool {
+async fn coordinator_pool_activity_since(state: &AppState, pool_id: &str, since_id: i64) -> bool {
     let db = state.db.lock().await;
     let Ok(messages) = db.get_pool_messages(pool_id, 100, 0) else {
         return false;
     };
     messages
         .iter()
-        .any(|m| m.id > since_id && m.sender_id == "piscis")
+        .any(|m| m.id > since_id && m.sender_id == "xiaoheng")
 }
 
-/// Run Piscis in a single pool's attention session. Extracted from
+/// Run Xiaoheng in a single pool's attention session. Extracted from
 /// [`dispatch_heartbeat`] so both the periodic loop and the
 /// mention-triggered path can reuse the same per-pool dispatch logic.
 async fn dispatch_single_pool_attention(
@@ -278,12 +277,9 @@ async fn dispatch_single_pool_attention(
     let heartbeat_message = build_pool_heartbeat_message(base_prompt, attention);
     let mention_reply_rules = if channel == "mention" {
         "\n\
-         ## Direct @!Piscis mention (mandatory visible reply)\n\
-         A human explicitly @!mentioned you in this pool. They are watching the pool chat UI, NOT a hidden heartbeat session.\n\
-         - You MUST call pool_org(action=\"post_status\", pool_id, content=...) with a clear reply to the user's request before finishing.\n\
-         - Do NOT reply with only HEARTBEAT_OK or stay silent in the pool — that looks like no response.\n\
-         - Do not use pool_chat; use pool_org(post_status) for all user-visible pool messages.\n\
-         - If you cannot act (missing API access, blocked tool, unclear request), still post_status explaining why and what you need.\n"
+         ## Direct Xiaoheng mention (mandatory visible reply)\n\
+         A human explicitly @!mentioned you in this project. Give a clear final reply to the request.\n\
+         Do not reply with only HEARTBEAT_OK. If blocked, explain the exact reason and required input.\n"
     } else {
         ""
     };
@@ -299,18 +295,17 @@ async fn dispatch_single_pool_attention(
                 "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
                  Assessment: {} | Decision: {:?}\n\
                  {}\
-                 Available coordination tools: pool_org (list, get_todos, get_messages, post_status, resume_todo, add_member, remove_member, list_members, assign_koi, merge_branches, etc.).\n\
-                 Koi must be project members before they can be assigned work: call pool_org(add_member, pool_id, koi_id) first; assign_koi rejects non-members.\n\
-                 Do not use pool_chat from heartbeat; Piscis heartbeat communicates through pool_org-controlled actions.\n\
+                 Available coordination tools: staff_project_list, staff_task_list, staff_list, staff_task_create, staff_task_update and staff_status_set.\n\
+                 Use project_id='{}' when listing or creating StaffDeck tasks. A created task is executed by the Codex StaffDeck dispatcher.\n\
                  If you decide a human must be notified through IM, resolve the route explicitly: use im_channel_list, im_channel_connect if required, then im_channel_binding_lookup(pool_id=\"{}\") before im_send_message. If no binding exists, explain that gap instead of pretending the IM notification was sent.\n\
-                 If the pool has a project_dir and branches need merging, prefer incremental pool_org(merge_branches, branch=...) when integration_ready_count > 0.\n\
                  During heartbeat, NEVER archive a pool automatically — only the user can explicitly request archiving.\n\
-                 Reply HEARTBEAT_OK only after org_spec convergence is verified and pool_org actions are taken, not because the board is quiet or todos are all done.",
+                 Reply HEARTBEAT_OK only after orgSpec convergence is verified and any required staff_* actions are taken, not because the board is quiet or todos are all done.",
                 attention.pool_name,
                 attention.pool_id,
                 attention.assessment.summary,
                 attention.assessment.decision,
                 mention_reply_rules,
+                attention.pool_id,
                 attention.pool_id,
             )),
             session_title: Some(format!("小亨 · {}", attention.pool_name)),
@@ -321,13 +316,24 @@ async fn dispatch_single_pool_attention(
     .await?;
     let response_text = output.final_message;
 
-    let coordinated = piscis_pool_activity_since(state, &attention.pool_id, pool_msg_before).await;
+    if channel == "mention" && !response_text.trim().is_empty() {
+        crate::pool::notice::post_coordinator_pool_notice(
+            &state.app_handle,
+            state,
+            &attention.pool_id,
+            response_text.trim(),
+        )
+        .await?;
+    }
+
+    let coordinated =
+        coordinator_pool_activity_since(state, &attention.pool_id, pool_msg_before).await;
     let needs_follow_up = !coordinated
         && (assessment_requires_coordination(&attention.assessment) || channel == "mention")
         && (channel == "mention" || is_heartbeat_ack_only(&response_text));
     if needs_follow_up {
         let notice = build_heartbeat_coordination_gap_notice(attention);
-        if let Err(err) = crate::pool::notice::post_piscis_pool_notice(
+        if let Err(err) = crate::pool::notice::post_coordinator_pool_notice(
             &state.app_handle,
             state,
             &attention.pool_id,
@@ -343,7 +349,7 @@ async fn dispatch_single_pool_attention(
     }
 
     let latest_after = latest_pool_message_id(state, &attention.pool_id).await;
-    let mut cursor = state.piscis_heartbeat_cursor.lock().await;
+    let mut cursor = state.coordination_heartbeat_cursor.lock().await;
     cursor.insert(
         attention.pool_id.clone(),
         latest_after.max(attention.latest_message_id),
@@ -403,14 +409,14 @@ pub async fn dispatch_heartbeat(
     }
 }
 
-/// Emit a `piscis_toast` event as a human-escalation safety net. This runs
-/// before Piscis's own turn so the user is alerted even if Piscis itself fails
-/// or takes a long time to respond. Piscis is still expected to call
+/// Emit a WorkBuddy toast as a human-escalation safety net. This runs
+/// before Xiaoheng's own turn so the user is alerted even if the agent fails
+/// or takes a long time to respond. Xiaoheng is still expected to call
 /// `app_control(notify_user, ...)` itself to add a diagnostic summary.
 ///
 /// When the pool was created from an IM conversation
 /// (`pool_sessions.origin_im_binding_key`), the same notification is
-/// fanned out to that IM channel so users who interact with Piscis
+/// fanned out to that IM channel so users who interact with Xiaoheng
 /// remotely don't miss escalations while the desktop UI is closed.
 async fn emit_auto_escalation_toast(state: &AppState, attention: &PoolAttention) {
     let reasons = if attention.assessment.attention_reasons.is_empty() {

@@ -1,11 +1,11 @@
-//! Piscis-visible pool status lines (acks, errors) without going through the agent.
+//! Coordinator-visible pool status lines without going through the agent.
 
 use std::sync::Arc;
 
+use crate::agent_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot};
 use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::PoolMessage;
 use crate::store::AppState;
-use crate::agent_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot};
 
 fn emit_message(app: &tauri::AppHandle, msg: &PoolMessage) {
     let sink = Arc::new(DesktopPoolEventSink::new(app.clone()));
@@ -15,8 +15,8 @@ fn emit_message(app: &tauri::AppHandle, msg: &PoolMessage) {
     });
 }
 
-/// Insert a Piscis supervisor status line into the pool and push it to the UI.
-pub async fn post_piscis_pool_notice(
+/// Insert a Xiaoheng coordinator status line into the pool and push it to the UI.
+pub async fn post_coordinator_pool_notice(
     app: &tauri::AppHandle,
     state: &AppState,
     pool_id: &str,
@@ -26,13 +26,13 @@ pub async fn post_piscis_pool_notice(
         let db = state.db.lock().await;
         db.insert_pool_message_ext(
             pool_id,
-            "piscis",
+            "xiaoheng",
             content,
             "status_update",
-            r#"{"event":"piscis_status","controlled_by":"mention_ack"}"#,
+            r#"{"event":"coordinator_status","controlled_by":"mention_ack"}"#,
             None,
             None,
-            Some("piscis_status"),
+            Some("coordinator_status"),
         )
         .map_err(|e| e.to_string())?
     };

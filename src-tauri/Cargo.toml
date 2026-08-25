@@ -35,11 +35,11 @@ anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-# Shared agent runtime 鈥?pin rev across openpiscis, AgentZ, agent-workbench (v0.8.58).
+# Shared desktop automation dependencies.
 
 [package]
 name = "xiaoheng-workbuddy"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 autobins = false
 default-run = "xiaoheng-workbuddy"
 description = "Harmony Xiaoheng AI desktop workbench"
@@ -54,11 +54,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "xiaoheng-workbuddy"
 path = "src/main.rs"
-
-# NOTE: the bench-only `piscis_compact_one` CLI used to live here as a target of
-# this crate, which made Tauri's bundler try to ship it. It now lives in the
-# `bench/` workspace member (crate `piscis-bench`) so it is never bundled.
-# Build it with: cargo build -p piscis-bench --release
 
 [features]
 default = []
@@ -187,7 +182,6 @@ opt-level = "s"
 panic = "abort"
 strip = true
 
-# Monorepo sibling checkout 鈥?uncomment to override git RobotZ with local crates:
-# [patch."https://github.com/njbinbin-piscis/RobotZ.git"]
+# Monorepo sibling checkout - uncomment to override git RobotZ with local crates:
 # robotz-automation = { path = "../../RobotZ/crates/robotz-automation" }
 # robotz-browser = { path = "../../RobotZ/crates/robotz-browser" }

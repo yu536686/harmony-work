@@ -1,3 +1,6 @@
+use crate::agent_core::project_state::{
+    assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
+};
 /// Collaboration Trial — spawn real Koi agents with LLM to test multi-agent cooperation.
 ///
 /// - Creates real Koi agents in the production DB
@@ -8,9 +11,6 @@
 /// The user can observe the full collaboration in the Pond UI.
 use crate::pool::bridge;
 use crate::store::AppState;
-use crate::agent_core::project_state::{
-    assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -79,7 +79,7 @@ fn default_trial_scenario() -> TrialScenario {
         goal: "Test multi-agent collaboration by designing and reviewing a simple utility module."
             .into(),
         kickoff_phase: "lead".into(),
-        kickoff_detail: "Piscis starts the collaboration by assigning the first specialist."
+        kickoff_detail: "Xiaoheng starts the collaboration by assigning the first specialist."
             .into(),
         kickoff_message: "@!Architect Design a small \"string utility\" module with 3 functions: \
              1) reverse_words(s) - reverses word order in a sentence \
@@ -89,10 +89,10 @@ fn default_trial_scenario() -> TrialScenario {
              Follow your coordination protocol to hand off to Coder when the spec is ready."
             .into(),
         workflow: vec![
-            "Piscis assigns the initial design task to Architect.".into(),
+            "Xiaoheng assigns the initial design task to Architect.".into(),
             "Architect produces a specification, then hands off implementation to Coder.".into(),
             "Coder implements based on the specification, then hands off to @!Reviewer.".into(),
-            "Reviewer requests follow-up work or signals `[ProjectStatus] ready_for_piscis_review` for Piscis to assess."
+            "Reviewer requests follow-up work or signals `[ProjectStatus] ready_for_xiaoheng_review` for Xiaoheng to assess."
                 .into(),
         ],
         success_criteria: vec![
@@ -100,7 +100,7 @@ fn default_trial_scenario() -> TrialScenario {
             "Communication flows through the pool chat.".into(),
             "If more work is needed, agents clearly signal `[ProjectStatus] follow_up_needed`."
                 .into(),
-            "When the project may be ready for Piscis review, an agent signals `[ProjectStatus] ready_for_piscis_review` and the trial records that snapshot."
+            "When the project may be ready for Xiaoheng review, an agent signals `[ProjectStatus] ready_for_xiaoheng_review` and the trial records that snapshot."
                 .into(),
         ],
         lead: TrialKoiSpec {
@@ -129,7 +129,7 @@ fn default_trial_scenario() -> TrialScenario {
                  Focus on correctness, actionable detail, and clear handoff notes. \
                  When implementation is ready for review, hand off to Reviewer with `[ProjectStatus] follow_up_needed` and an explicit @!mention. \
                  If more work is needed first, signal `[ProjectStatus] follow_up_needed` and @!mention the next actor. \
-                 Only use `[ProjectStatus] ready_for_piscis_review` after reviewer-level verification is truly complete."
+                 Only use `[ProjectStatus] ready_for_xiaoheng_review` after reviewer-level verification is truly complete."
                     .into(),
             description: "Implementation, coding, development".into(),
             max_iterations: 0,
@@ -145,7 +145,7 @@ fn default_trial_scenario() -> TrialScenario {
                 "You are a reviewer collaborating inside a multi-agent project. Given prior work, provide constructive feedback, identify risks, and state clearly whether follow-up is needed. \
                  Be specific and actionable. \
                  If more work is needed, signal `[ProjectStatus] follow_up_needed` and @!mention the responsible specialist. \
-                 If the work looks acceptable, you MUST post a pool_chat message containing the exact text `[ProjectStatus] ready_for_piscis_review @piscis` before completing your review todo. Do not merely say \"ready for review\" in prose, and do not declare the project finished yourself."
+                 If the work looks acceptable, you MUST post a project message containing the exact text `[ProjectStatus] ready_for_xiaoheng_review @xiaoheng` before completing your review todo. Do not merely say \"ready for review\" in prose, and do not declare the project finished yourself."
                     .into(),
             description: "Review, quality assurance, feedback".into(),
             max_iterations: 0,
@@ -161,10 +161,10 @@ fn default_trial_scenario() -> TrialScenario {
 pub use crate::agent_core::trial::effective_trial_koi_status;
 
 fn load_trial_scenario() -> Result<TrialScenario, String> {
-    match std::env::var("PISCIS_COLLAB_TRIAL_SPEC_JSON") {
+    match std::env::var("WORKBUDDY_COLLAB_TRIAL_SPEC_JSON") {
         Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
             format!(
-                "Failed to parse PISCIS_COLLAB_TRIAL_SPEC_JSON as TrialScenario JSON: {}",
+                "Failed to parse WORKBUDDY_COLLAB_TRIAL_SPEC_JSON as TrialScenario JSON: {}",
                 e
             )
         }),
@@ -173,7 +173,7 @@ fn load_trial_scenario() -> Result<TrialScenario, String> {
 }
 
 fn keep_trial_artifacts() -> bool {
-    std::env::var("PISCIS_COLLAB_TRIAL_KEEP_ARTIFACTS")
+    std::env::var("WORKBUDDY_COLLAB_TRIAL_KEEP_ARTIFACTS")
         .ok()
         .as_deref()
         == Some("1")
@@ -452,7 +452,7 @@ pub async fn run_collaboration_trial_with_state(
         // Post the project kickoff to the pool
         db.insert_pool_message(
             &pool.id,
-            "piscis",
+            "xiaoheng",
             &format!(
                 "🚀 **{} started**\n\n\
                  Team: {} {}, {} {}, {} {}\n\
@@ -491,20 +491,20 @@ pub async fn run_collaboration_trial_with_state(
         third.id
     );
 
-    // ─── Phase 2: Piscis posts the initial @!mention in pool chat (natural communication) ──
+    // ─── Phase 2: Xiaoheng posts the initial delegated mention ──
     // The entire workflow is driven by delegated @!mention cascading:
-    //   Piscis @!lead → lead hands off to @!second → second hands off to @!third
+    //   Xiaoheng @!lead -> lead hands off to @!second -> second hands off to @!third
     // No direct assign_koi calls — everything flows through pool_chat @mentions.
     status.phase = scenario.kickoff_phase.clone();
     emit(&scenario.kickoff_phase, &scenario.kickoff_detail);
 
     let task_message = scenario.kickoff_message.clone();
 
-    // Post the message to pool chat (just like Piscis would via pool_chat tool)
+    // Post the kickoff message to the shared project timeline.
     {
         let db = state.db.lock().await;
         let msg = db
-            .insert_pool_message(&pool.id, "piscis", &task_message, "mention", "{}")
+            .insert_pool_message(&pool.id, "xiaoheng", &task_message, "mention", "{}")
             .map_err(|e| e.to_string())?;
         let _ = app_handle.emit(
             &format!("pool_message_{}", pool.id),
@@ -515,7 +515,7 @@ pub async fn run_collaboration_trial_with_state(
     // Wake the lead specialist via @!mention — the agent reads the pool and decides autonomously.
     let chain_start = std::time::Instant::now();
     let lead_results =
-        bridge::handle_mention(&app_handle, state, "piscis", &pool.id, &task_message).await;
+        bridge::handle_mention(&app_handle, state, "xiaoheng", &pool.id, &task_message).await;
 
     let kickoff_preview = match &lead_results {
         Ok(()) => format!(
@@ -528,7 +528,7 @@ pub async fn run_collaboration_trial_with_state(
     push_trial_observation(
         &mut status,
         "kickoff_dispatch",
-        "Piscis",
+        "Xiaoheng",
         format!("Kick off collaboration with @!{}", lead.name),
         lead_results.is_ok(),
         kickoff_preview.clone(),
@@ -546,13 +546,13 @@ pub async fn run_collaboration_trial_with_state(
         return Ok(status);
     }
 
-    // ─── Phase 3 & 4: Wait for the collaboration chain to settle, then let Piscis judge readiness ───
+    // ─── Phase 3 & 4: Wait for the collaboration chain, then let Xiaoheng judge readiness ───
     // The trial no longer ends just because a fixed role completed. Instead, it watches the pool until
-    // work is either clearly still in progress or looks ready for Piscis review.
+    // work is either clearly still in progress or looks ready for Xiaoheng review.
     status.phase = "chain".into();
     emit(
         "chain",
-        "Waiting for collaboration to settle so Piscis can assess project state...",
+        "Waiting for collaboration to settle so Xiaoheng can assess project state...",
     );
 
     let chain_timeout = std::time::Duration::from_secs(scenario.chain_timeout_secs);
@@ -569,7 +569,7 @@ pub async fn run_collaboration_trial_with_state(
         task_failed_count: 0,
         follow_up_signal_count: 0,
         ready_signal_count: 0,
-        explicit_piscis_handoff_count: 0,
+        explicit_coordinator_handoff_count: 0,
         integration_ready_count: 0,
         dependency_blocked_count: 0,
         attention_reasons: vec![],
@@ -653,7 +653,7 @@ pub async fn run_collaboration_trial_with_state(
             .filter(|msg| msg.event_type.as_deref() == Some("coordination_signal"))
             .count();
         let phase_detail = format!(
-            "{}: {} | {}: {} | {}: {} | checkpoints: [{}, {}, {}] | pool_messages: {} | coordination_signals: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_piscis: {}",
+            "{}: {} | {}: {} | {}: {} | checkpoints: [{}, {}, {}] | pool_messages: {} | coordination_signals: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_xiaoheng: {}",
             lead.name,
             lead_effective_status,
             second.name,
@@ -669,7 +669,7 @@ pub async fn run_collaboration_trial_with_state(
             final_assessment.blocked_todo_count,
             final_assessment.follow_up_signal_count,
             final_assessment.ready_signal_count,
-            final_assessment.explicit_piscis_handoff_count,
+            final_assessment.explicit_coordinator_handoff_count,
         );
         if phase_detail != last_phase_detail {
             emit("chain", &phase_detail);
@@ -729,11 +729,11 @@ pub async fn run_collaboration_trial_with_state(
         }
 
         let trial_quiet = quiet_polls >= scenario.quiet_polls_needed;
-        if trial_quiet && final_assessment.decision == TrialDecision::ReadyForPiscisReview {
-            status.phase = "piscis_review".into();
-            emit("piscis_review", &final_assessment.summary);
+        if trial_quiet && final_assessment.decision == TrialDecision::ReadyForCoordinatorReview {
+            status.phase = "xiaoheng_review".into();
+            emit("xiaoheng_review", &final_assessment.summary);
             break (
-                "ready_for_piscis_review".to_string(),
+                "ready_for_xiaoheng_review".to_string(),
                 final_assessment.summary.clone(),
             );
         }
@@ -793,7 +793,7 @@ pub async fn run_collaboration_trial_with_state(
             break (
                 "supervisor_decision_required".to_string(),
                 format!(
-                    "Worker-visible work reached a locally terminal snapshot, but the next global decision belongs to Piscis. {}",
+                    "Worker-visible work reached a locally terminal snapshot, but the next global decision belongs to Xiaoheng. {}",
                     final_assessment.summary
                 ),
             );
@@ -819,7 +819,7 @@ pub async fn run_collaboration_trial_with_state(
             break (
                 "idle_quiet_snapshot".to_string(),
                 format!(
-                    "All trial agents became idle without reaching a final Piscis-review handoff. {}",
+                    "All trial agents became idle without reaching a final Xiaoheng-review handoff. {}",
                     final_assessment.summary
                 ),
             );
@@ -828,18 +828,18 @@ pub async fn run_collaboration_trial_with_state(
 
     push_trial_observation(
         &mut status,
-        "piscis_assess",
-        "Piscis",
+        "xiaoheng_assess",
+        "Xiaoheng",
         "Observe whether the project reached a ready-for-review snapshot",
-        final_assessment.decision == TrialDecision::ReadyForPiscisReview,
+        final_assessment.decision == TrialDecision::ReadyForCoordinatorReview,
         final_assessment.summary.clone(),
         chain_start.elapsed().as_millis() as u64,
     );
 
     // ─── Phase 5: Summary ───────────────────────────────────────
     status.phase = "completed".into();
-    status.completed =
-        final_assessment.decision == TrialDecision::ReadyForPiscisReview && status.error.is_none();
+    status.completed = final_assessment.decision == TrialDecision::ReadyForCoordinatorReview
+        && status.error.is_none();
 
     // Post summary to pool
     {
@@ -885,7 +885,7 @@ pub async fn run_collaboration_trial_with_state(
             final_assessment.task_failed_count,
             total_ms,
         );
-        let _ = db.insert_pool_message(&pool.id, "piscis", &summary, "text", "{}");
+        let _ = db.insert_pool_message(&pool.id, "xiaoheng", &summary, "text", "{}");
     }
 
     emit(
@@ -979,14 +979,14 @@ mod tests {
             "Coder prompt must preserve delegated handoff guidance for Reviewer"
         );
         assert!(
-            scenario.third.system_prompt.contains("@piscis"),
-            "Reviewer should return readiness to Piscis without waking a peer Koi"
+            scenario.third.system_prompt.contains("@xiaoheng"),
+            "Reviewer should return readiness to Xiaoheng without waking a peer specialist"
         );
         assert!(
             scenario
                 .third
                 .system_prompt
-                .contains("[ProjectStatus] ready_for_piscis_review @piscis"),
+                .contains("[ProjectStatus] ready_for_xiaoheng_review @xiaoheng"),
             "Reviewer prompt must require the exact terminal handoff signal used by project-state assessment"
         );
     }

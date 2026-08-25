@@ -145,7 +145,7 @@ impl Tool for BrowserTool {
                 },
                 "save_path": {
                     "type": "string",
-                    "description": "For screenshot: optional absolute file path to persist the captured image to disk (e.g. '<workspace>/.piscis/screenshots/browser_<timestamp>.jpg'). The file is written BEFORE the tool returns, so the caller can immediately reference it via `app_control(action=\"artifact_submit\", path=save_path, artifact_type=\"image\")`. If omitted, no file is written and the image is returned only as base64. (Also used by download_file to set the target location.)"
+                    "description": "For screenshot: optional absolute file path to persist the captured image to disk (e.g. '<workspace>/.xiaoheng/screenshots/browser_<timestamp>.jpg'). The file is written before the tool returns. If omitted, no file is written and the image is returned only as base64. Also used by download_file to set the target location."
                 },
                 "wait_condition": {
                     "type": "string",
@@ -818,7 +818,7 @@ impl BrowserTool {
         // Inject a temporary canvas overlay with numbered element boxes
         let inject_js = r#"
         (function() {
-            const existing = document.getElementById('__piscis_som_overlay__');
+            const existing = document.getElementById('__xiaoheng_som_overlay__');
             if (existing) existing.remove();
 
             const SELECTORS = [
@@ -832,7 +832,7 @@ impl BrowserTool {
 
             const W = window.innerWidth, H = window.innerHeight;
             const canvas = document.createElement('canvas');
-            canvas.id = '__piscis_som_overlay__';
+            canvas.id = '__xiaoheng_som_overlay__';
             canvas.width  = W; canvas.height = H;
             canvas.style.cssText = `
                 position:fixed;top:0;left:0;
@@ -916,7 +916,7 @@ impl BrowserTool {
 
         // Remove overlay immediately
         let _ = page
-            .evaluate("document.getElementById('__piscis_som_overlay__')?.remove()")
+            .evaluate("document.getElementById('__xiaoheng_som_overlay__')?.remove()")
             .await;
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&img_bytes);

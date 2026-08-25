@@ -165,6 +165,20 @@ async fn execute_todo(
     }
 }
 
+/// Dispatch one StaffDeck task created through the WorkBuddy MCP Host.
+pub async fn dispatch_todo_by_id(
+    app: &AppHandle,
+    state: &AppState,
+    todo_id: &str,
+) -> anyhow::Result<KoiExecResult> {
+    let todo = {
+        let db = state.db.lock().await;
+        db.get_koi_todo(todo_id)?
+            .ok_or_else(|| anyhow::anyhow!("找不到待办：{todo_id}"))?
+    };
+    execute_todo(app, state, todo).await
+}
+
 fn mention_targets(content: &str) -> Vec<String> {
     content
         .split_whitespace()

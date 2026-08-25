@@ -106,8 +106,8 @@ export interface Settings {
   summary_model?: string | null;
   project_instruction_budget_chars: number;
   enable_project_instructions: boolean;
-  /** Personal prompt applied only to Piscis chat, heartbeat, pool coordination, and scheduled tasks. */
-  piscis_personal_prompt: string;
+  /** Personal prompt applied to Xiaoheng chat, heartbeat, coordination, and scheduled tasks. */
+  xiaoheng_personal_prompt: string;
   llm_read_timeout_secs: number;
   koi_timeout_secs: number;
   heartbeat_enabled: boolean;

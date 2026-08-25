@@ -2,7 +2,7 @@
 //!
 //! Extracted from the old monolithic `desktop_app.rs`. Entrypoint is
 //! [`run_cli_headless_request`] which binds an already-built `AppState`
-//! to one of the two CLI modes (`Piscis` single-agent or `Pool`
+//! to one of the two CLI modes (`Codex` single-agent or `Pool`
 //! coordinator), wires up tool overrides, and optionally blocks until
 //! the pool's todos converge. Result serialization + error-file writing
 //! is handled by [`persist_headless_cli_result`] so the bootstrap layer
@@ -91,7 +91,7 @@ fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
         }
     }
     match request.mode {
-        HeadlessCliMode::Piscis => {
+        HeadlessCliMode::Codex => {
             lines.push(
                 "- Stay single-agent. Do not create or manage collaborative pool work in this run."
                     .to_string(),
@@ -99,11 +99,11 @@ fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
         }
         HeadlessCliMode::Pool => {
             lines.push(
-                "- You are coordinating a project pool. Use pool_org + pool_chat for visible collaboration."
+                "- You are coordinating a StaffDeck project. Use staff_project_list, staff_task_list, staff_list, staff_task_create, staff_task_update and staff_status_set."
                     .to_string(),
             );
             lines.push(
-                "- When integration_ready branches appear on the board, merge incrementally with pool_org(action=\"merge_branches\", branch=...) after review. Use depends_on on assign_koi/create_todo for org_spec waves. Koi completion alone is not final delivery."
+                "- Create only concrete, non-duplicate tasks. A staff_task_create call is executed by the Codex StaffDeck dispatcher; review its reported artifacts before marking work done."
                     .to_string(),
             );
             lines.push(
@@ -286,7 +286,7 @@ pub async fn run_cli_headless_request(
     let disabled_tools = cli_disabled_tools(request.mode);
 
     let (session_id, pool_id) = match request.mode {
-        HeadlessCliMode::Piscis => (
+        HeadlessCliMode::Codex => (
             request
                 .session_id
                 .clone()
@@ -309,11 +309,11 @@ pub async fn run_cli_headless_request(
         .session_title
         .clone()
         .unwrap_or_else(|| match request.mode {
-            HeadlessCliMode::Piscis => "Headless CLI Task".to_string(),
+            HeadlessCliMode::Codex => "Headless CLI Task".to_string(),
             HeadlessCliMode::Pool => "Headless Pool Coordinator".to_string(),
         });
     let session_source = match request.mode {
-        HeadlessCliMode::Piscis => "codex_cli".to_string(),
+        HeadlessCliMode::Codex => "codex_cli".to_string(),
         HeadlessCliMode::Pool => "codex_staffdeck".to_string(),
     };
     let channel = request.channel.clone().unwrap_or_else(|| "cli".to_string());

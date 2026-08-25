@@ -6,11 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Configuration for an MCP (Model Context Protocol) server.
 ///
-/// This lives in the kernel's settings module (rather than the desktop
-/// `tools/mcp.rs`) so that the serialized shape of [`Settings`] has no
-/// dependency on tool implementation crates. Desktop code that actually
-/// runs an MCP server still lives in `src/tools/mcp.rs` and re-uses this
-/// struct via `piscis_kernel::store::settings::McpServerConfig`.
+/// Persisted MCP server configuration shared by the UI and Codex runtime.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpServerConfig {
     /// Display name for this server
@@ -302,8 +298,7 @@ pub struct Settings {
 
     // ── IM Gateway ──────────────────────────────────────────────────────────
     //
-    // Layered architecture (see `piscis-core::scene::SceneKind::IMHeadless`
-    // and `crate::tools::mcp`):
+    // Layered IM architecture:
     //   * Credential layer  — `*_app_id` / `*_bot_id` / `*_app_secret` are
     //     the application-level credentials shared by the IM channel and
     //     by any enterprise-capability MCP that uses the same platform.
@@ -512,15 +507,15 @@ pub struct Settings {
     /// Maximum characters from project instruction files injected into the system prompt.
     #[serde(default = "default_project_instruction_budget_chars")]
     pub project_instruction_budget_chars: u32,
-    /// Whether project-level instruction files (PISCIS.md, .piscis/instructions.md, etc.)
+    /// Whether project-level instruction files (XIAOHENG.md, AGENTS.md, etc.)
     /// should be discovered and injected into the system prompt.
     #[serde(default = "default_true")]
     pub enable_project_instructions: bool,
-    /// Personal Piscis-only prompt appended to Piscis-owned sessions.
-    /// This is guidance context for Piscis chat, heartbeat, pool coordination,
+    /// Personal Xiaoheng-only prompt appended to WorkBuddy-owned sessions.
+    /// This is guidance context for chat, heartbeat, pool coordination,
     /// and scheduled tasks; it must not be injected into Koi or Fish prompts.
-    #[serde(default)]
-    pub piscis_personal_prompt: String,
+    #[serde(default, alias = "piscis_personal_prompt")]
+    pub xiaoheng_personal_prompt: String,
     /// LLM read timeout in seconds (default 120). Increase for slow models.
     #[serde(default = "default_llm_read_timeout_secs")]
     pub llm_read_timeout_secs: u32,
@@ -692,31 +687,13 @@ fn default_heartbeat_enabled() -> bool {
     true
 }
 pub fn default_heartbeat_prompt() -> String {
-    "这是你的例行心跳巡查。你的职责是**监督项目是否按 org_spec 收敛**，而不是只扫一眼任务板有没有未完成任务。\n\n\
-     ## 0. 硬性门禁（未通过不得回复 HEARTBEAT_OK）\n\
-     对每个 active 项目池，你必须按顺序完成：\n\
-     1) pool_org(action=\"read\", pool_id=...) — **完整阅读** org_spec；\n\
-     2) pool_org(action=\"get_todos\", pool_id=...) + pool_org(action=\"get_messages\", pool_id=...)；\n\
-     3) 用你自己的推理对照 org_spec：当前交付物、任务分解、消息记录是否已满足规约中的**全部**要求（含多阶段/多里程碑/角色分工/验收标准等，以 org_spec 原文为准，不要臆测阶段编号）。\n\n\
-     **禁止**在以下任一情况仅回复 HEARTBEAT_OK 或“无需干预”：\n\
-     - 未对该池执行过 pool_org(read)；\n\
-     - 任务板看似“全 done”但 org_spec 中仍有未覆盖的工作项、后续阶段、未分配角色或未验收交付物；\n\
-     - 仅完成了规约中的早期步骤，后续步骤在 org_spec 中有描述但板上无对应 todo/无进展消息；\n\
-     - 存在 needs_review / blocked / task_failed 未处理。\n\n\
-     若 org_spec 未收敛：必须 pool_org(action=\"post_status\") 写明差距与下一步，并用 pool_org(action=\"create_todo\") 或 pool_org(action=\"assign_koi\") **落实**后续工作；不得只提醒不派活。\n\n\
-     ## 1. 活跃项目巡查\n\
-     用 pool_org(action=\"list\") 列出所有 active 池，对每个池完成 §0 后按板面行动：\n\
-     - needs_review：审查产物后合并分支、返工（resume/replace/assign_koi）或 post_status 说明需人工决策；\n\
-     - blocked：解除阻塞或改派；\n\
-     - 无活跃 todo 但 org_spec 未收敛（常见：只做完了第一阶段）：按 org_spec 拆下一批 todo 并 assign_koi，禁止把项目晾在那里；\n\
-     - 无活跃 todo 且 org_spec 已收敛：post_status 说明收敛与待用户确认归档，**勿**自动 archive；\n\
-     - Koi 空转：post_status 定方向或 assign_koi。\n\n\
-     ⚠️ 心跳中**禁止** pool_org(action=\"create\") 新建项目池；追加工作只在现有池 create_todo / assign_koi。\n\n\
-     ## 2. Koi 状态\n\
-     长时间 busy 且无活跃 todo：post_status 或 assign_koi。\n\n\
-     ## 3. 定时任务\n\
-     app_control(action=\"list_scheduled_tasks\")，按需处理。\n\n\
-     仅当：§0 对每个 active 池均已执行且 needs_review/blocked/失败/规约缺口均已处理或已派活后，才可回复 HEARTBEAT_OK。"
+    "这是小亨的例行项目巡查。当前唯一 Agent 运行时是 Codex，项目与人员调度只使用 WorkBuddy MCP Host 的 staff_* 工具。\n\n\
+     1. 调用 staff_project_list 读取所有 active 项目及其 orgSpec。\n\
+     2. 对每个 active 项目调用 staff_task_list(project_id=...)，核对全部阶段、交付物和验收条件。\n\
+     3. 需要继续执行时，先用 staff_list 选择合适人员，再用 staff_task_create 创建一项具体、可验收的任务；创建后由 Codex StaffDeck dispatcher 自动执行。\n\
+     4. needs_review 任务应审查后用 staff_task_update 标记 done、blocked 或 in_progress；blocked 任务必须写明 blocked_reason。\n\
+     5. 人员状态异常时用 staff_status_set 修正。不要创建重复任务，不要仅重复更新计划，也不要自动归档项目。\n\n\
+     只有在所有 active 项目均已核对，且没有需要新建、返工或升级给用户的事项时，才回复 HEARTBEAT_OK。"
         .into()
 }
 
@@ -837,7 +814,7 @@ impl Default for Settings {
             summary_model: None,
             project_instruction_budget_chars: default_project_instruction_budget_chars(),
             enable_project_instructions: true,
-            piscis_personal_prompt: String::new(),
+            xiaoheng_personal_prompt: String::new(),
             llm_read_timeout_secs: default_llm_read_timeout_secs(),
             koi_timeout_secs: default_koi_timeout_secs(),
             heartbeat_enabled: default_heartbeat_enabled(),
@@ -1032,13 +1009,13 @@ impl Settings {
 
     /// Returns the default config file path used by the app before Tauri's AppHandle is available.
     /// Mirrors the path that `AppState::new_sync` computes via `app.path().app_data_dir()`.
-    /// On Windows this is `%APPDATA%\com.piscis.desktop\config.json`.
+    /// On Windows this is `%APPDATA%\com.harmony.xiaoheng-workbuddy\config.json`.
     pub fn default_config_path() -> PathBuf {
         // Tauri v2 uses `<data_dir>/<bundle_identifier>` on Windows (APPDATA\<id>).
-        // The bundle identifier is "com.piscis.desktop" (from tauri.conf.json).
+        // Keep this identifier synchronized with tauri.conf.json.
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.piscis.desktop")
+            .join("com.harmony.xiaoheng-workbuddy")
             .join("config.json")
     }
 }

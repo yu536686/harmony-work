@@ -1,5 +1,5 @@
-use crate::store::{AppState, Settings};
 use crate::process::std_command;
+use crate::store::{AppState, Settings};
 use robotz_browser::download;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

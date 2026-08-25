@@ -3,21 +3,20 @@
 // lib.rs — Tauri application library entry point.
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
-pub mod app;
 pub mod agent_core;
+pub mod app;
 pub mod codex_runtime;
 mod commands;
-mod fish;
+mod coordination;
 mod file_journal;
+mod fish;
 mod gateway;
 mod harmony_cut;
 pub mod headless_cli;
 pub mod lsp;
 pub mod notify;
-mod piscis;
 pub mod pool;
 pub mod process;
-pub mod runtime;
 pub mod scheduler;
 mod skills;
 pub mod store;

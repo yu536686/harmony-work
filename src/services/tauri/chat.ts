@@ -238,7 +238,7 @@ export const codexChatApi = {
 
 // ---------------------------------------------------------------------------
 // File journal — per-turn pre-edit snapshots powering "Undo All".
-// Backed by the shared piscis-kernel FileJournal (same impl AgentZ uses).
+// Backed by the WorkBuddy file journal.
 // ---------------------------------------------------------------------------
 
 export interface JournalChange {
