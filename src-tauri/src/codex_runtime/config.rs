@@ -55,14 +55,21 @@ pub struct WorkBuddyMcpProfile {
     executable: PathBuf,
     app_data_dir: PathBuf,
     skills_roots: Vec<PathBuf>,
+    marketing_base_url: String,
 }
 
 impl WorkBuddyMcpProfile {
-    pub fn new(executable: &Path, app_data_dir: &Path, skills_roots: &[&Path]) -> Self {
+    pub fn new(
+        executable: &Path,
+        app_data_dir: &Path,
+        skills_roots: &[&Path],
+        marketing_base_url: &str,
+    ) -> Self {
         Self {
             executable: executable.to_path_buf(),
             app_data_dir: app_data_dir.to_path_buf(),
             skills_roots: skills_roots.iter().map(|path| path.to_path_buf()).collect(),
+            marketing_base_url: marketing_base_url.trim_end_matches('/').to_string(),
         }
     }
 
@@ -78,11 +85,12 @@ impl WorkBuddyMcpProfile {
                     .join(if cfg!(windows) { ";" } else { ":" })
             });
         format!(
-            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {} }}\n",
+            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {}, WORKBUDDY_MARKETING_URL = {} }}\n",
             toml_string(&self.executable.display().to_string()),
             toml_string(&self.app_data_dir.display().to_string()),
             toml_string(&database_path.display().to_string()),
             toml_string(&skills),
+            toml_string(&self.marketing_base_url),
         )
     }
 }
@@ -144,6 +152,7 @@ mod tests {
             Path::new("C:/Program Files/Xiaoheng/workbuddy-mcp-host.exe"),
             Path::new("C:/Users/test/AppData/Roaming/WorkBuddy"),
             &[Path::new("C:/Users/test/AppData/Roaming/WorkBuddy/skills")],
+            "https://www.harmonywatch.cn:8090",
         )
         .render_toml();
 
@@ -151,6 +160,8 @@ mod tests {
         assert!(rendered.contains("workbuddy-mcp-host.exe"));
         assert!(rendered.contains("WORKBUDDY_DATABASE_PATH"));
         assert!(rendered.contains("workbuddy.db"));
+        assert!(rendered.contains("WORKBUDDY_MARKETING_URL"));
+        assert!(rendered.contains("https://www.harmonywatch.cn:8090"));
         assert!(!rendered.contains("piscis"));
     }
 

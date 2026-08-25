@@ -55,6 +55,15 @@ struct CodexTurnTranscript {
     plan_items: Vec<WorkBuddyPlanItem>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexArtifactCandidate {
+    name: String,
+    artifact_type: String,
+    uri: String,
+    summary: String,
+    metadata_json: Option<String>,
+}
+
 impl CodexTurnTranscript {
     fn observe(&mut self, event: &WorkBuddyEvent) {
         match event {
@@ -129,6 +138,95 @@ impl CodexTurnTranscript {
     }
 }
 
+fn extract_artifact_candidates(result: &str) -> Vec<CodexArtifactCandidate> {
+    let Ok(value) = serde_json::from_str::<Value>(result) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    collect_artifact_candidates(&value, &mut candidates);
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|candidate| seen.insert(candidate.uri.clone()));
+    candidates
+}
+
+fn collect_artifact_candidates(value: &Value, candidates: &mut Vec<CodexArtifactCandidate>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_artifact_candidates(item, candidates);
+            }
+        }
+        Value::Object(object) => {
+            let resource_link = object.get("type").and_then(Value::as_str) == Some("resource_link");
+            let uri = object
+                .get("localPath")
+                .or_else(|| object.get("uri"))
+                .or_else(|| object.get("path"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let has_artifact_shape = resource_link
+                || object.contains_key("artifactType")
+                || object.contains_key("artifact_type")
+                || object.contains_key("localPath");
+            if has_artifact_shape {
+                if let Some(uri) = uri {
+                    let name = object
+                        .get("name")
+                        .or_else(|| object.get("fileName"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            Path::new(uri)
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| "WorkBuddy 产物".to_string());
+                    let media_type = object
+                        .get("mediaType")
+                        .or_else(|| object.get("mimeType"))
+                        .and_then(Value::as_str);
+                    let artifact_type = object
+                        .get("artifactType")
+                        .or_else(|| object.get("artifact_type"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| artifact_type_from_media(media_type));
+                    candidates.push(CodexArtifactCandidate {
+                        name,
+                        artifact_type,
+                        uri: uri.to_string(),
+                        summary: "由 WorkBuddy MCP Host 生成并验证".to_string(),
+                        metadata_json: serde_json::to_string(object).ok(),
+                    });
+                }
+            }
+            for nested in object.values() {
+                collect_artifact_candidates(nested, candidates);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn artifact_type_from_media(media_type: Option<&str>) -> String {
+    match media_type.unwrap_or_default() {
+        value if value.starts_with("image/") => "image",
+        value if value.starts_with("audio/") => "audio",
+        value if value.starts_with("video/") => "video",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            "presentation"
+        }
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "spreadsheet",
+        _ => "file",
+    }
+    .to_string()
+}
+
 #[derive(Clone)]
 pub struct CodexRuntimeState {
     process: Arc<Mutex<Option<Arc<CodexProcess>>>>,
@@ -201,10 +299,16 @@ impl CodexRuntimeState {
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
         let installed_skill_root = app_data_dir.join("installed-skills");
+        let marketing_base_url = std::env::var("WORKBUDDY_MARKETING_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "http://61.150.31.150:8090".to_string());
         let mcp_profile = WorkBuddyMcpProfile::new(
             &mcp_host,
             app_data_dir,
             &[skill_root.as_path(), installed_skill_root.as_path()],
+            &marketing_base_url,
         );
         let merged_config = merge_managed_mcp_config(&existing_config, &mcp_profile.render_toml());
         if merged_config != existing_config {
@@ -914,6 +1018,34 @@ pub async fn codex_chat_send(
         let mut transcript = CodexTurnTranscript::default();
         while let Some(event) = events.recv().await {
             transcript.observe(&event);
+            if let WorkBuddyEvent::ToolEnd {
+                id,
+                name: _,
+                result,
+                is_error: false,
+            } = &event
+            {
+                for candidate in extract_artifact_candidates(result) {
+                    let artifact = {
+                        let db = app_state.db.lock().await;
+                        db.add_session_artifact(
+                            &session_id,
+                            &candidate.name,
+                            &candidate.artifact_type,
+                            Some(candidate.uri.as_str()),
+                            &candidate.summary,
+                            Some("workbuddy_mcp"),
+                            Some(id),
+                            candidate.metadata_json.as_deref(),
+                        )
+                        .ok()
+                    };
+                    if let Some(artifact) = artifact {
+                        let _ =
+                            app.emit(&format!("session_artifacts_updated_{session_id}"), artifact);
+                    }
+                }
+            }
             let terminal = is_terminal_event(&event);
             if terminal {
                 {
@@ -1018,6 +1150,32 @@ mod tests {
         assert!(calls.contains("plan_todo"));
         assert!(results.contains("/work"));
         assert_eq!(transcript.assistant_text, "已完成");
+    }
+
+    #[test]
+    fn extracts_office_and_harvis_artifacts_from_codex_mcp_results() {
+        let result = serde_json::json!({
+            "type":"mcpToolCall",
+            "result":{
+                "structuredContent":{
+                    "artifacts":[
+                        {"name":"report.docx","artifactType":"document","uri":"C:/Harmony/report.docx"},
+                        {"fileName":"poster.png","mediaType":"image/png","localPath":"C:/Harmony/marketing-assets/poster.png"}
+                    ]
+                },
+                "content":[
+                    {"type":"resource_link","name":"report.docx","uri":"C:/Harmony/report.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+                ]
+            }
+        })
+        .to_string();
+
+        let artifacts = extract_artifact_candidates(&result);
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].name, "report.docx");
+        assert_eq!(artifacts[0].artifact_type, "document");
+        assert_eq!(artifacts[1].name, "poster.png");
+        assert_eq!(artifacts[1].artifact_type, "image");
     }
 
     #[test]

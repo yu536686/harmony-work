@@ -1,7 +1,8 @@
 use std::io::{self, BufRead, Write};
 use workbuddy_mcp_host::{context_from_environment, handle_request};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let context = context_from_environment();
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -17,7 +18,7 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
         };
-        if let Some(response) = handle_request(&context, &request) {
+        if let Some(response) = handle_request(&context, &request).await {
             serde_json::to_writer(&mut stdout, &response)?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;

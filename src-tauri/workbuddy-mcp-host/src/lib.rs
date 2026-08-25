@@ -6,18 +6,34 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+mod harvis;
+mod office;
+
 #[derive(Debug, Clone)]
 pub struct HostContext {
+    pub app_data_dir: PathBuf,
     pub database_path: PathBuf,
     pub skills_roots: Vec<PathBuf>,
+    pub marketing_base_url: String,
 }
 
 impl HostContext {
-    pub fn new(database_path: PathBuf, skills_roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        app_data_dir: PathBuf,
+        database_path: PathBuf,
+        skills_roots: Vec<PathBuf>,
+        marketing_base_url: String,
+    ) -> Self {
         Self {
+            app_data_dir,
             database_path,
             skills_roots,
+            marketing_base_url,
         }
+    }
+
+    pub(crate) fn marketing_cookie_path(&self) -> PathBuf {
+        self.app_data_dir.join("marketing.session.cookie")
     }
 }
 
@@ -47,14 +63,14 @@ struct SkillFrontmatter {
     description: String,
 }
 
-pub fn handle_request(context: &HostContext, request: &Value) -> Option<Value> {
+pub async fn handle_request(context: &HostContext, request: &Value) -> Option<Value> {
     let id = request.get("id")?.clone();
     let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let result = match method {
         "initialize" => Ok(initialize_result(request)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tool_definitions()})),
-        "tools/call" => call_tool(context, request.get("params").unwrap_or(&Value::Null)),
+        "tools/call" => call_tool(context, request.get("params").unwrap_or(&Value::Null)).await,
         _ => {
             return Some(json!({
                 "jsonrpc": "2.0",
@@ -89,7 +105,7 @@ fn initialize_result(request: &Value) -> Value {
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         json!({
             "name": "memory_search",
             "description": "Search Xiaoheng long-term memory by keyword. Returns matching memory IDs, categories, content, and timestamps. Use before appending to avoid duplicates.",
@@ -133,10 +149,13 @@ fn tool_definitions() -> Vec<Value> {
                 "additionalProperties":false
             }
         }),
-    ]
+    ];
+    tools.extend(office::tool_definitions());
+    tools.extend(harvis::tool_definitions());
+    tools
 }
 
-fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
+async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -174,6 +193,8 @@ fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
                 .collect::<Vec<_>>();
             tool_success(&matches)
         }
+        _ if office::handles(name) => office::call(name, arguments).await,
+        _ if harvis::handles(name) => harvis::call(context, name, arguments).await,
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
     }
 }
@@ -347,7 +368,12 @@ pub fn context_from_environment() -> HostContext {
     let skills_roots = std::env::var_os("WORKBUDDY_SKILLS_DIRS")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);
-    HostContext::new(database_path, skills_roots)
+    let marketing_base_url = std::env::var("WORKBUDDY_MARKETING_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http://61.150.31.150:8090".to_string());
+    HostContext::new(app_data, database_path, skills_roots, marketing_base_url)
 }
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -365,7 +391,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("workbuddy-mcp-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create test root");
         (
-            HostContext::new(root.join("workbuddy.db"), vec![root.join("skills")]),
+            HostContext::new(
+                root.clone(),
+                root.join("workbuddy.db"),
+                vec![root.join("skills")],
+                "http://127.0.0.1:9".to_string(),
+            ),
             root,
         )
     }
@@ -374,20 +405,22 @@ mod tests {
         json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params})
     }
 
-    #[test]
-    fn initializes_and_lists_workbuddy_domain_tools() {
+    #[tokio::test]
+    async fn initializes_and_lists_workbuddy_domain_tools() {
         let (context, root) = test_context();
         let initialized = handle_request(
             &context,
             &request(1, "initialize", json!({"protocolVersion":"2025-06-18"})),
         )
+        .await
         .expect("initialize response");
         assert_eq!(
             initialized["result"]["serverInfo"]["name"],
             "workbuddy-mcp-host"
         );
-        let listed =
-            handle_request(&context, &request(2, "tools/list", json!({}))).expect("tools response");
+        let listed = handle_request(&context, &request(2, "tools/list", json!({})))
+            .await
+            .expect("tools response");
         let names = listed["result"]["tools"]
             .as_array()
             .expect("tool list")
@@ -398,13 +431,20 @@ mod tests {
         assert!(names.contains(&"memory_append"));
         assert!(names.contains(&"skill_list"));
         assert!(names.contains(&"skill_search"));
+        assert!(names.contains(&"document_artifact"));
+        assert!(names.contains(&"presentation_artifact"));
+        assert!(names.contains(&"spreadsheet_artifact"));
+        assert!(names.contains(&"harvis_image_generate"));
+        assert!(names.contains(&"harvis_music_generate"));
+        assert!(names.contains(&"harvis_job_status"));
+        assert!(names.contains(&"harvis_save_result"));
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
-    #[test]
-    fn appends_and_searches_memory_without_piscis_store() {
+    #[tokio::test]
+    async fn appends_and_searches_memory_without_piscis_store() {
         let (context, root) = test_context();
-        let appended = handle_request(&context, &request(1, "tools/call", json!({"name":"memory_append","arguments":{"content":"用户偏好简洁汇报","category":"preference"}}))).expect("append response");
+        let appended = handle_request(&context, &request(1, "tools/call", json!({"name":"memory_append","arguments":{"content":"用户偏好简洁汇报","category":"preference"}}))).await.expect("append response");
         assert_eq!(appended["result"]["isError"], false);
         let searched = handle_request(
             &context,
@@ -414,6 +454,7 @@ mod tests {
                 json!({"name":"memory_search","arguments":{"query":"简洁","limit":5}}),
             ),
         )
+        .await
         .expect("search response");
         assert!(searched["result"]["content"][0]["text"]
             .as_str()
@@ -422,8 +463,8 @@ mod tests {
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
-    #[test]
-    fn lists_skills_from_unified_skill_roots() {
+    #[tokio::test]
+    async fn lists_skills_from_unified_skill_roots() {
         let (context, root) = test_context();
         let skill_dir = root.join("skills").join("harvis-creative");
         std::fs::create_dir_all(&skill_dir).expect("create skill dir");
@@ -436,6 +477,7 @@ mod tests {
             &context,
             &request(1, "tools/call", json!({"name":"skill_list","arguments":{}})),
         )
+        .await
         .expect("skill list response");
         assert!(listed["result"]["content"][0]["text"]
             .as_str()
