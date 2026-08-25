@@ -1,18 +1,22 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod harvis;
 mod office;
+mod skills;
+mod staffdeck;
 
 #[derive(Debug, Clone)]
 pub struct HostContext {
     pub app_data_dir: PathBuf,
     pub database_path: PathBuf,
+    pub legacy_database_path: Option<PathBuf>,
     pub skills_roots: Vec<PathBuf>,
     pub marketing_base_url: String,
 }
@@ -21,12 +25,14 @@ impl HostContext {
     pub fn new(
         app_data_dir: PathBuf,
         database_path: PathBuf,
+        legacy_database_path: Option<PathBuf>,
         skills_roots: Vec<PathBuf>,
         marketing_base_url: String,
     ) -> Self {
         Self {
             app_data_dir,
             database_path,
+            legacy_database_path,
             skills_roots,
             marketing_base_url,
         }
@@ -152,6 +158,8 @@ fn tool_definitions() -> Vec<Value> {
     ];
     tools.extend(office::tool_definitions());
     tools.extend(harvis::tool_definitions());
+    tools.extend(skills::tool_definitions());
+    tools.extend(staffdeck::tool_definitions());
     tools
 }
 
@@ -195,6 +203,8 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
         }
         _ if office::handles(name) => office::call(name, arguments).await,
         _ if harvis::handles(name) => harvis::call(context, name, arguments).await,
+        _ if skills::handles(name) => skills::call(context, name, arguments).await,
+        _ if staffdeck::handles(name) => staffdeck::call(context, name, arguments),
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
     }
 }
@@ -248,7 +258,70 @@ fn open_database(context: &HostContext) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_memories_owner_created
             ON memories(owner_id, created_at DESC);",
     )?;
+    migrate_legacy_memories(context, &connection)?;
     Ok(connection)
+}
+
+fn migrate_legacy_memories(context: &HostContext, target: &Connection) -> Result<()> {
+    let Some(path) = context
+        .legacy_database_path
+        .as_ref()
+        .filter(|path| path.is_file())
+    else {
+        return Ok(());
+    };
+    if path == &context.database_path {
+        return Ok(());
+    }
+    let legacy = Connection::open(path)?;
+    let has_memories = legacy
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or_default()
+        != 0;
+    if !has_memories {
+        return Ok(());
+    }
+    let columns = table_columns(&legacy, "memories")?;
+    if !["id", "content", "category", "created_at"]
+        .iter()
+        .all(|column| columns.contains(*column))
+    {
+        return Ok(());
+    }
+    let owner_expression = if columns.contains("owner_id") {
+        "COALESCE(owner_id, 'piscis')"
+    } else {
+        "'piscis'"
+    };
+    let mut statement = legacy.prepare(&format!(
+        "SELECT id, content, category, {owner_expression}, created_at FROM memories"
+    ))?;
+    let records = statement.query_map([], |row| {
+        let owner: String = row.get(3)?;
+        Ok(MemoryRecord {
+            id: row.get(0)?,
+            content: row.get(1)?,
+            category: row.get(2)?,
+            owner_id: if owner == "piscis" {
+                "xiaoheng".to_string()
+            } else {
+                owner
+            },
+            created_at: row.get(4)?,
+        })
+    })?;
+    for record in records {
+        let record = record?;
+        target.execute(
+            "INSERT OR IGNORE INTO memories (id, owner_id, content, category, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![record.id, record.owner_id, record.content, record.category, record.created_at],
+        )?;
+    }
+    Ok(())
 }
 
 fn append_memory(
@@ -268,7 +341,66 @@ fn append_memory(
         "INSERT INTO memories (id, owner_id, content, category, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![record.id, record.owner_id, record.content, record.category, record.created_at],
     )?;
+    append_legacy_memory(context, &record)?;
     Ok(record)
+}
+
+fn append_legacy_memory(context: &HostContext, record: &MemoryRecord) -> Result<()> {
+    let Some(path) = context
+        .legacy_database_path
+        .as_ref()
+        .filter(|path| path.is_file())
+    else {
+        return Ok(());
+    };
+    let legacy = Connection::open(path)?;
+    let columns = table_columns(&legacy, "memories")?;
+    if columns.is_empty()
+        || !["id", "content", "category", "created_at"]
+            .iter()
+            .all(|column| columns.contains(*column))
+    {
+        return Ok(());
+    }
+    let candidates = [
+        ("id", SqlValue::Text(record.id.clone())),
+        ("content", SqlValue::Text(record.content.clone())),
+        ("category", SqlValue::Text(record.category.clone())),
+        ("confidence", SqlValue::Real(0.8)),
+        ("owner_id", SqlValue::Text(record.owner_id.clone())),
+        ("scope_type", SqlValue::Text("private".to_string())),
+        ("scope_id", SqlValue::Text(record.owner_id.clone())),
+        ("kind", SqlValue::Text("fact".to_string())),
+        ("last_seen_at", SqlValue::Text(record.created_at.clone())),
+        ("created_at", SqlValue::Text(record.created_at.clone())),
+        ("updated_at", SqlValue::Text(record.created_at.clone())),
+    ];
+    let selected = candidates
+        .into_iter()
+        .filter(|(column, _)| columns.contains(*column))
+        .collect::<Vec<_>>();
+    let names = selected
+        .iter()
+        .map(|(column, _)| *column)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = (1..=selected.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    legacy.execute(
+        &format!("INSERT OR IGNORE INTO memories ({names}) VALUES ({placeholders})"),
+        params_from_iter(selected.into_iter().map(|(_, value)| value)),
+    )?;
+    Ok(())
+}
+
+fn table_columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    columns
+        .collect::<rusqlite::Result<BTreeSet<_>>>()
+        .map_err(Into::into)
 }
 
 fn search_memories(
@@ -365,6 +497,9 @@ pub fn context_from_environment() -> HostContext {
     let database_path = std::env::var_os("WORKBUDDY_DATABASE_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| app_data.join("workbuddy.db"));
+    let legacy_database_path = std::env::var_os("WORKBUDDY_LEGACY_DATABASE_PATH")
+        .map(PathBuf::from)
+        .or_else(|| Some(app_data.join("piscis.db")));
     let skills_roots = std::env::var_os("WORKBUDDY_SKILLS_DIRS")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);
@@ -373,7 +508,13 @@ pub fn context_from_environment() -> HostContext {
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "http://61.150.31.150:8090".to_string());
-    HostContext::new(app_data, database_path, skills_roots, marketing_base_url)
+    HostContext::new(
+        app_data,
+        database_path,
+        legacy_database_path,
+        skills_roots,
+        marketing_base_url,
+    )
 }
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -394,6 +535,7 @@ mod tests {
             HostContext::new(
                 root.clone(),
                 root.join("workbuddy.db"),
+                None,
                 vec![root.join("skills")],
                 "http://127.0.0.1:9".to_string(),
             ),
@@ -438,6 +580,13 @@ mod tests {
         assert!(names.contains(&"harvis_music_generate"));
         assert!(names.contains(&"harvis_job_status"));
         assert!(names.contains(&"harvis_save_result"));
+        assert!(names.contains(&"skill_market_search"));
+        assert!(names.contains(&"skill_install"));
+        assert!(names.contains(&"skill_set_enabled"));
+        assert!(names.contains(&"skill_uninstall"));
+        assert!(names.contains(&"staff_list"));
+        assert!(names.contains(&"staff_task_create"));
+        assert!(names.contains(&"staff_task_update"));
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
@@ -483,6 +632,106 @@ mod tests {
             .as_str()
             .expect("text")
             .contains("harvis-creative"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn migrates_legacy_memories_and_preserves_xiaoheng_identity() {
+        let (mut context, root) = test_context();
+        let legacy_path = root.join("piscis.db");
+        let legacy = Connection::open(&legacy_path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "CREATE TABLE memories (
+                id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL,
+                confidence REAL, source_session_id TEXT, owner_id TEXT,
+                scope_type TEXT, scope_id TEXT, project_scope_id TEXT, kind TEXT,
+                evidence_session_id TEXT, evidence_tool_use_id TEXT, last_seen_at TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            INSERT INTO memories VALUES (
+                'legacy-1','用户偏好简洁汇报','preference',0.9,NULL,'piscis',
+                'private','piscis',NULL,'preference',NULL,NULL,'2026-08-25T00:00:00Z',
+                '2026-08-25T00:00:00Z','2026-08-25T00:00:00Z'
+            );",
+            )
+            .expect("legacy schema");
+        drop(legacy);
+        context.legacy_database_path = Some(legacy_path);
+
+        let searched = handle_request(
+            &context,
+            &request(
+                1,
+                "tools/call",
+                json!({"name":"memory_search","arguments":{"query":"简洁","owner_id":"xiaoheng"}}),
+            ),
+        )
+        .await
+        .expect("search response");
+        assert!(searched["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("用户偏好简洁汇报"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn migrates_and_dual_writes_minimal_legacy_memory_schema() {
+        let (mut context, root) = test_context();
+        let legacy_path = root.join("piscis.db");
+        let legacy = Connection::open(&legacy_path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "CREATE TABLE memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO memories VALUES (
+                    'legacy-minimal','早期版本记忆','fact','2026-06-23T00:00:00Z'
+                );",
+            )
+            .expect("minimal legacy schema");
+        drop(legacy);
+        context.legacy_database_path = Some(legacy_path.clone());
+
+        let searched = handle_request(
+            &context,
+            &request(
+                1,
+                "tools/call",
+                json!({"name":"memory_search","arguments":{"query":"早期版本","owner_id":"xiaoheng"}}),
+            ),
+        )
+        .await
+        .expect("search response");
+        assert!(searched["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("早期版本记忆"));
+
+        let appended = handle_request(
+            &context,
+            &request(
+                2,
+                "tools/call",
+                json!({"name":"memory_append","arguments":{"content":"升级后记忆","category":"fact"}}),
+            ),
+        )
+        .await
+        .expect("append response");
+        assert_eq!(appended["result"]["isError"], false);
+        let legacy = Connection::open(legacy_path).expect("reopen legacy database");
+        let count: i64 = legacy
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE content='升级后记忆'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("dual write count");
+        assert_eq!(count, 1);
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 }

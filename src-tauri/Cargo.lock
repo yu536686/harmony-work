@@ -9017,6 +9017,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]

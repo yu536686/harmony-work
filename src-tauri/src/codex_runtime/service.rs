@@ -1020,7 +1020,7 @@ pub async fn codex_chat_send(
             transcript.observe(&event);
             if let WorkBuddyEvent::ToolEnd {
                 id,
-                name: _,
+                name,
                 result,
                 is_error: false,
             } = &event
@@ -1044,6 +1044,19 @@ pub async fn codex_chat_send(
                         let _ =
                             app.emit(&format!("session_artifacts_updated_{session_id}"), artifact);
                     }
+                }
+                match name.as_str() {
+                    "skill_install" | "skill_set_enabled" | "skill_uninstall" => {
+                        let _ = app.emit("skills_changed", ());
+                    }
+                    "staff_status_set" => {
+                        let _ = app.emit("koi_status_changed", serde_json::json!({}));
+                        let _ = app.emit("koi_updated", serde_json::json!({}));
+                    }
+                    "staff_task_create" | "staff_task_update" => {
+                        let _ = app.emit("koi_todo_updated", serde_json::json!({}));
+                    }
+                    _ => {}
                 }
             }
             let terminal = is_terminal_event(&event);
