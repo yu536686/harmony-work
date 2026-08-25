@@ -19,3 +19,15 @@ test("uses Cargo target directories for explicit cross targets", () => {
     /target\/x86_64-pc-windows-msvc\/release\/workbuddy-mcp-host\.exe$/,
   );
 });
+
+test("uses a configured Cargo target directory", () => {
+  const paths = mcpHostPaths({
+    platform: "win32",
+    targetTriple: null,
+    cargoTargetDirectory: "E:/xiaoheng-cargo-target",
+  });
+  assert.match(
+    paths.source,
+    /xiaoheng-cargo-target\/release\/workbuddy-mcp-host\.exe$/,
+  );
+});

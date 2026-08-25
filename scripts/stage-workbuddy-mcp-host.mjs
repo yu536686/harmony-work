@@ -12,11 +12,15 @@ export function mcpHostBinaryName(platform = process.platform) {
 export function mcpHostPaths({
   platform = process.platform,
   targetTriple = process.env.TAURI_ENV_TARGET_TRIPLE || null,
+  cargoTargetDirectory = process.env.CARGO_TARGET_DIR || null,
 } = {}) {
   const binary = mcpHostBinaryName(platform);
+  const cargoTargetRoot = cargoTargetDirectory
+    ? resolve(root, cargoTargetDirectory)
+    : resolve(root, "src-tauri", "target");
   const targetDirectory = targetTriple
-    ? resolve(root, "src-tauri", "target", targetTriple, "release")
-    : resolve(root, "src-tauri", "target", "release");
+    ? resolve(cargoTargetRoot, targetTriple, "release")
+    : resolve(cargoTargetRoot, "release");
   return {
     source: resolve(targetDirectory, binary),
     destination: resolve(
