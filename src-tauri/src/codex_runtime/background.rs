@@ -28,6 +28,59 @@ pub struct CodexBackgroundOutput {
     pub events: Vec<Value>,
 }
 
+/// Run a one-shot Codex prompt without creating a WorkBuddy chat session.
+///
+/// This is used by internal assistants such as skill curation and prompt
+/// composition. Codex still creates an ephemeral thread internally, so remove
+/// its WorkBuddy mapping as soon as the turn finishes.
+pub async fn run_codex_transient(
+    state: &AppState,
+    prompt: &str,
+    extra_context: Option<&str>,
+) -> Result<CodexBackgroundOutput, String> {
+    let codex = state
+        .app_handle
+        .try_state::<CodexRuntimeState>()
+        .ok_or_else(|| "Codex runtime is not initialized".to_string())?;
+    let settings = state.settings.lock().await.clone();
+    codex.configure_credentials(&settings).await;
+    let (provider, model) = resolve_model_selection(&settings, None, None, None)?;
+    let workspace_root = PathBuf::from(&settings.workspace_root);
+    std::fs::create_dir_all(&workspace_root).map_err(|error| {
+        format!(
+            "failed to prepare transient Codex workspace '{}': {error}",
+            workspace_root.display()
+        )
+    })?;
+    let transient_id = format!("transient_{}", uuid::Uuid::new_v4());
+    let result = codex
+        .execute_headless(
+            &transient_id,
+            CodexExecOptions {
+                workspace_root,
+                provider,
+                model,
+                prompt: compose_background_prompt(prompt, "internal", &[], extra_context),
+                permission_mode: CodexPermissionMode::Restricted,
+                attachments: Vec::new(),
+                thread_id: None,
+            },
+        )
+        .await;
+    let _ = codex.sessions().remove(&transient_id);
+    let result = result.map_err(|error| error.to_string())?;
+    let final_message = result.final_message.trim().to_string();
+    if final_message.is_empty() {
+        return Err("Codex did not return text content".to_string());
+    }
+    Ok(CodexBackgroundOutput {
+        final_message,
+        thread_id: result.thread_id,
+        usage: result.usage,
+        events: result.events,
+    })
+}
+
 pub async fn run_codex_background(
     state: &AppState,
     session_id: &str,

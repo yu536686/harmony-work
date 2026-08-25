@@ -1,10 +1,10 @@
 //! Autonomous skill library maintenance (stale/archive + LLM merge + backup/rollback).
 
+use crate::codex_runtime::background::run_codex_transient;
 use crate::skills::provenance;
 use crate::skills::service;
 use crate::store::AppState;
 use chrono::{DateTime, Duration, Utc};
-use piscis_kernel::llm::{build_client_with_timeout, LlmMessage, LlmRequest, MessageContent};
 use piscis_kernel::store::SkillEvolutionSettings;
 use serde::Deserialize;
 use std::path::Path;
@@ -16,7 +16,7 @@ fn skills_root(state: &AppState) -> std::path::PathBuf {
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"));
+        .unwrap_or_else(|_| std::path::PathBuf::from(".workbuddy"));
     service::skills_root_from_app_data(&app_dir)
 }
 
@@ -280,21 +280,6 @@ async fn llm_merge_duplicates(
         return Ok((0, 0));
     }
 
-    let (provider, api_key, base_url, model, max_tokens) = {
-        let s = state.settings.lock().await;
-        (
-            s.provider.clone(),
-            s.active_api_key().to_string(),
-            s.custom_base_url.clone(),
-            s.model.clone(),
-            s.max_tokens,
-        )
-    };
-    if api_key.is_empty() {
-        warn!("curator LLM merge skipped: no API key");
-        return Ok((0, 0));
-    }
-
     let root = skills_root(state);
     let catalog = {
         let db = state.db.lock().await;
@@ -320,7 +305,7 @@ async fn llm_merge_duplicates(
         .join("\n");
 
     let prompt = format!(
-        r#"You are the Pisci skill curator. Review agent-created draft/learned skills and output ONLY valid JSON:
+        r#"You are the WorkBuddy skill curator. Review agent-created draft/learned skills and output ONLY valid JSON:
 {{
   "merges": [
     {{
@@ -351,33 +336,17 @@ Skills:
         catalog_text
     );
 
-    let client = build_client_with_timeout(
-        &provider,
-        &api_key,
-        if base_url.is_empty() {
-            None
-        } else {
-            Some(base_url.as_str())
-        },
-        120,
-    );
-    let req = LlmRequest {
-        messages: vec![LlmMessage {
-            role: "user".to_string(),
-            content: MessageContent::Text(prompt),
-        }],
-        system: Some("You output only valid JSON for curator skill maintenance.".into()),
-        tools: vec![],
-        model: model.clone(),
-        max_tokens: max_tokens.min(2048),
-        stream: false,
-        vision_override: None,
-    };
-    let Ok(resp) = client.complete(req).await else {
-        warn!("curator LLM merge: completion failed");
+    let Ok(response) = run_codex_transient(
+        state,
+        &prompt,
+        Some("只输出有效 JSON。不要调用工具，不要创建或修改任何文件。"),
+    )
+    .await
+    else {
+        warn!("curator Codex merge: completion failed");
         return Ok((0, 0));
     };
-    let text = resp.content;
+    let text = response.final_message;
     let json_start = text.find('{').unwrap_or(0);
     let json_end = text.rfind('}').map(|i| i + 1).unwrap_or(text.len());
     let Ok(decision) = serde_json::from_str::<CuratorLlmDecision>(&text[json_start..json_end])
@@ -502,7 +471,7 @@ pub async fn run_curator_pass(state: &AppState, dry_run: bool) -> Result<String,
             .app_handle
             .path()
             .app_data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".piscis"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".workbuddy"))
             .join("logs")
             .join("curator")
             .join(Utc::now().format("%Y%m%d-%H%M%S").to_string());

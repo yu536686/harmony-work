@@ -5,9 +5,9 @@
 //! commands proxy authenticated requests from the desktop app so the WebView
 //! does not have to fight CORS or browser cookie rules.
 
+use crate::codex_runtime::background::run_codex_transient;
 use crate::store::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use piscis_kernel::llm::{build_client_with_timeout, LlmMessage, LlmRequest, MessageContent};
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
@@ -447,17 +447,11 @@ pub async fn marketing_creative_compose_music_prompt(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "无，主动选择最贴合的曲风".to_string());
 
-    let (provider, api_key, base_url, model, max_tokens) = {
+    let model = {
         let settings = state.settings.lock().await;
-        (
-            settings.provider.clone(),
-            settings.active_api_key().to_string(),
-            settings.custom_base_url.clone(),
-            settings.model.clone(),
-            settings.max_tokens,
-        )
+        settings.model.clone()
     };
-    if api_key.trim().is_empty() || model.trim().is_empty() {
+    if model.trim().is_empty() {
         return Err("请先在设置中配置并启用默认 AI 提供商和默认模型，再使用提示词助手".to_string());
     }
 
@@ -479,35 +473,19 @@ Use this supplied Suno keyword knowledge base as vocabulary and selection guidan
 {HARVIS_SUNO_KEYWORDS}
 "#
     );
-    let client = build_client_with_timeout(
-        &provider,
-        &api_key,
-        if base_url.trim().is_empty() {
-            None
-        } else {
-            Some(base_url.as_str())
-        },
-        75,
-    );
-    let response = client
-        .complete(LlmRequest {
-            messages: vec![LlmMessage {
-                role: "user".to_string(),
-                content: MessageContent::Text(prompt),
-            }],
-            system: Some(
-                "Return only one English Suno prompt for a luxury watch BGM. Never use tools."
-                    .to_string(),
-            ),
-            tools: vec![],
-            model: model.clone(),
-            max_tokens: max_tokens.min(700).max(240),
-            stream: false,
-            vision_override: None,
-        })
-        .await
-        .map_err(|error| format!("提示词助手调用默认模型失败：{error}"))?;
-    let prompt = response.content.trim().trim_matches('`').trim().to_string();
+    let response = run_codex_transient(
+        &state,
+        &prompt,
+        Some("只返回一条适用于奢侈腕表 BGM 的英文 Suno 提示词。不要调用工具，不要输出解释。"),
+    )
+    .await
+    .map_err(|error| format!("提示词助手调用默认模型失败：{error}"))?;
+    let prompt = response
+        .final_message
+        .trim()
+        .trim_matches('`')
+        .trim()
+        .to_string();
     if prompt.is_empty() {
         return Err("默认模型没有返回可用的音乐提示词".to_string());
     }
@@ -618,7 +596,12 @@ fn save_target_path(target_path: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("保存路径必须是绝对路径".to_string());
     }
-    if path.file_name().and_then(|value| value.to_str()).filter(|value| !value.trim().is_empty()).is_none() {
+    if path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+    {
         return Err("保存路径必须包含文件名".to_string());
     }
     Ok(path)
@@ -679,12 +662,7 @@ pub async fn marketing_save_asset(
     request: MarketingSaveAssetRequest,
 ) -> Result<MarketingPreparedAsset, String> {
     let target_path = save_target_path(&request.target_path)?;
-    save_marketing_asset_to_path(
-        &request.asset_id,
-        request.file_name.as_deref(),
-        target_path,
-    )
-    .await
+    save_marketing_asset_to_path(&request.asset_id, request.file_name.as_deref(), target_path).await
 }
 
 #[tauri::command]
