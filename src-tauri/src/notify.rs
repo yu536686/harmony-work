@@ -10,7 +10,7 @@
 
 use crate::gateway;
 use crate::store::Database;
-pub use piscis_kernel::notify::{
+pub use crate::agent_core::notification::{
     NotificationLevel, NotificationOutcome, NotificationRequest, NotificationTarget,
 };
 use serde_json::json;

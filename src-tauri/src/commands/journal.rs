@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use piscis_kernel::agent::file_journal::{FileJournal, JournalChange};
+use crate::file_journal::{FileJournal, JournalChange};
 use tauri::State;
 
 use crate::commands::chat::resolve_session_workspace_root;

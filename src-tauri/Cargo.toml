@@ -1,7 +1,7 @@
 # WorkBuddy is migrating its runtime contracts into this workspace while the
 # remaining legacy kernel and IDE dependencies are removed incrementally.
 [workspace]
-members = ["bench", "workbuddy-mcp-host"]
+members = ["workbuddy-mcp-host"]
 resolver = "2"
 
 # Workspace-wide lint policy. `cargo clippy --workspace` will treat all of
@@ -36,8 +36,6 @@ thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Shared agent runtime 鈥?pin rev across openpiscis, AgentZ, agent-workbench (v0.8.58).
-piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }
-piscis-ide-tools = { path = "../third_party/piscis-engine/piscis-ide-tools" }
 
 [package]
 name = "xiaoheng-workbuddy"
@@ -69,14 +67,10 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-piscis-kernel = { workspace = true }
-piscis-ide-tools = { workspace = true }
-
-# Desktop-automation + browser capabilities, extracted into the standalone
-# RobotZ toolkit. The `piscis-kernel` feature makes the RobotZ tools implement
-# `piscis_kernel::Tool`, so the desktop host registers them like any other tool.
-robotz-automation = { path = "../third_party/RobotZ/crates/robotz-automation", features = ["piscis-kernel"] }
-robotz-browser = { path = "../third_party/RobotZ/crates/robotz-browser", features = ["piscis-kernel"] }
+# Desktop automation and browser infrastructure. Agent-facing access is exposed
+# through Codex/MCP instead of the former in-process Tool compatibility layer.
+robotz-automation = { path = "../third_party/RobotZ/crates/robotz-automation" }
+robotz-browser = { path = "../third_party/RobotZ/crates/robotz-browser" }
 
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }
@@ -197,10 +191,3 @@ strip = true
 # [patch."https://github.com/njbinbin-piscis/RobotZ.git"]
 # robotz-automation = { path = "../../RobotZ/crates/robotz-automation" }
 # robotz-browser = { path = "../../RobotZ/crates/robotz-browser" }
-
-# Local path override for engine hacking:
-# [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
-# piscis-kernel = { path = "../../piscis-engine/piscis-kernel" }
-
-[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
-piscis-kernel = { path = "../third_party/piscis-engine/piscis-kernel" }

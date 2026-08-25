@@ -5,7 +5,7 @@ pub mod fish;
 pub mod gateway;
 pub mod scheduler;
 
-use crate::store::{db::ChatMessage, db::Session, db::SessionArtifact, db::TaskState, AppState};
+use crate::store::{db::ChatMessage, db::Session, db::SessionArtifact, AppState};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{Emitter, Manager, State};
@@ -14,53 +14,6 @@ use tauri::{Emitter, Manager, State};
 pub struct SessionList {
     pub sessions: Vec<Session>,
     pub total: usize,
-}
-
-fn append_task_spine_list(context: &mut String, label: &str, items: &[String]) {
-    if items.is_empty() {
-        return;
-    }
-    context.push_str(&format!("**{label}:**\n"));
-    for item in items.iter().take(4) {
-        context.push_str(&format!("- {item}\n"));
-    }
-}
-
-pub(crate) fn render_task_state_section(
-    title: &str,
-    progress_label: &str,
-    task_state: &TaskState,
-) -> String {
-    let spine = task_state.to_task_spine();
-    let has_content = !spine.goal.trim().is_empty()
-        || !spine.current_step.trim().is_empty()
-        || !spine.done.is_empty()
-        || !spine.pending.is_empty()
-        || !spine.blockers.is_empty()
-        || !spine.facts.is_empty()
-        || !spine.decisions.is_empty()
-        || !spine.next_questions.is_empty();
-    if !has_content && task_state.summary.trim().is_empty() {
-        return String::new();
-    }
-
-    let mut context = format!("\n\n## {title}\n");
-    if !spine.goal.trim().is_empty() {
-        context.push_str(&format!("**Goal:** {}\n", spine.goal));
-    }
-    if !spine.current_step.trim().is_empty() {
-        context.push_str(&format!("**{progress_label}:** {}\n", spine.current_step));
-    } else if !task_state.summary.trim().is_empty() {
-        context.push_str(&format!("**{progress_label}:** {}\n", task_state.summary));
-    }
-    append_task_spine_list(&mut context, "Done", &spine.done);
-    append_task_spine_list(&mut context, "Pending", &spine.pending);
-    append_task_spine_list(&mut context, "Blockers", &spine.blockers);
-    append_task_spine_list(&mut context, "Facts", &spine.facts);
-    append_task_spine_list(&mut context, "Decisions", &spine.decisions);
-    append_task_spine_list(&mut context, "Next Questions", &spine.next_questions);
-    context.truncate(context.trim_end().len());
-    context
 }
 
 pub(crate) async fn resolve_session_workspace_context(

@@ -8,6 +8,7 @@ pub mod agent_core;
 pub mod codex_runtime;
 mod commands;
 mod fish;
+mod file_journal;
 mod gateway;
 mod harmony_cut;
 pub mod headless_cli;

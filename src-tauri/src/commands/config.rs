@@ -11,7 +11,6 @@
 //! - [`mcp`] — MCP server list / save / test
 //! - [`tools`] — builtin tool listing + manual heartbeat trigger
 //! - [`user_tools`] — user-authored tool plugins (list / install / config)
-//! - [`scene`] — scene-policy helpers + `ScenePolicy` re-exports
 //! - [`audit`] — audit-log listing & clear
 //!
 //! None of these deal with chat turn execution or pool coordination; those
@@ -25,7 +24,6 @@ pub mod enterprise_capability;
 pub mod mcp;
 pub mod memory;
 pub mod openai_skills;
-pub mod scene;
 pub mod settings;
 pub mod skill_evolution;
 pub mod skills;
