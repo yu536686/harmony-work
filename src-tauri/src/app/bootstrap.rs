@@ -14,11 +14,10 @@
 //! changes vs. that file — only the helper functions were moved out to
 //! [`super::logging`], [`super::markers`] and [`super::headless`].
 
+#[cfg(debug_assertions)]
+use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::scheduler;
-use crate::{
-    codex_runtime::background::{run_codex_background, CodexBackgroundOptions},
-    commands, gateway, store,
-};
+use crate::{commands, gateway, store};
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -45,6 +44,7 @@ fn build_new_im_session_id(msg: &gateway::InboundMessage) -> String {
     format!("im_{}_{}", msg.channel, Uuid::new_v4())
 }
 
+#[cfg(debug_assertions)]
 fn runtime_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
