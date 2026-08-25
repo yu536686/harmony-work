@@ -89,6 +89,7 @@ pub struct GatewayManager {
     channels: RwLock<ChannelMap>,
     inbound_tx: mpsc::Sender<InboundMessage>,
     inbound_rx: Mutex<Option<mpsc::Receiver<InboundMessage>>>,
+    lifecycle: Mutex<()>,
 }
 
 impl InboundMessage {
@@ -119,6 +120,7 @@ impl GatewayManager {
             channels: RwLock::new(HashMap::new()),
             inbound_tx: tx,
             inbound_rx: Mutex::new(Some(rx)),
+            lifecycle: Mutex::new(()),
         }
     }
 
@@ -276,6 +278,10 @@ impl GatewayManager {
 
     pub async fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
         self.inbound_rx.lock().await.take()
+    }
+
+    pub async fn lifecycle_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lifecycle.lock().await
     }
 
     pub async fn list_channels(&self) -> Vec<ChannelInfo> {

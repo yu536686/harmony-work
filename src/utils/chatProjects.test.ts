@@ -21,24 +21,24 @@ function session(id: string, source = "chat", workspaceRoot?: string | null): Se
 }
 
 describe("chatProjects", () => {
-  it("shows only IM and CLI projects before the user explicitly registers a project", () => {
+  it("shows only IM and unassigned projects before the user explicitly registers a project", () => {
     const projects = buildChatProjects({
       sessions: [],
       defaultWorkspace: "C:\\Harmony",
       projectDirectories: [],
     });
 
-    expect(projects.map((project) => project.name)).toEqual(["IM 会话", "CLI 会话"]);
+    expect(projects.map((project) => project.name)).toEqual(["IM 会话", "无项目会话"]);
   });
 
-  it("keeps chats without a registered directory in CLI without exposing runtime folder names", () => {
+  it("keeps chats without a registered directory in unassigned without exposing runtime folder names", () => {
     const projects = buildChatProjects({
       sessions: [session("default-session", "chat", "C:\\Harmony\\.piscis")],
       defaultWorkspace: "C:\\Harmony",
       projectDirectories: [],
     });
 
-    expect(projects.map((project) => project.name)).toEqual(["IM 会话", "CLI 会话"]);
+    expect(projects.map((project) => project.name)).toEqual(["IM 会话", "无项目会话"]);
     expect(projects[1].sessions[0].id).toBe("default-session");
   });
 
@@ -53,13 +53,13 @@ describe("chatProjects", () => {
       "七夕项目",
       "新品项目",
       "IM 会话",
-      "CLI 会话",
+      "无项目会话",
     ]);
     expect(projects[0].sessions.map((item) => item.id)).toEqual(["campaign-session"]);
     expect(projects[1].sessions).toEqual([]);
   });
 
-  it("keeps IM and CLI conversations in fixed system projects", () => {
+  it("keeps IM separate and folds legacy CLI conversations into unassigned", () => {
     const projects = buildChatProjects({
       sessions: [
         session("wecom", "im_wecom"),
@@ -70,7 +70,7 @@ describe("chatProjects", () => {
     });
 
     expect(projects.find((project) => project.kind === "im")?.sessions[0].id).toBe("wecom");
-    expect(projects.find((project) => project.kind === "cli")?.sessions[0].id).toBe("cli");
+    expect(projects.find((project) => project.kind === "unassigned")?.sessions[0].id).toBe("cli");
   });
 
   it("deduplicates Windows workspace paths case-insensitively", () => {

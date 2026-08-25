@@ -26,7 +26,7 @@ describe("GlobalSessionRail", () => {
         projects={[
           { id: "workspace:c:/harmony", name: "Harmony", path: "C:\\Harmony", kind: "workspace", system: false, sessions },
           { id: "system:im", name: "IM 会话", path: null, kind: "im", system: true, sessions: [] },
-          { id: "system:cli", name: "CLI 会话", path: null, kind: "cli", system: true, sessions: [] },
+          { id: "system:unassigned", name: "无项目会话", path: null, kind: "unassigned", system: true, sessions: [] },
         ]}
         activeProjectId="workspace:c:/harmony"
         activeSessionId="session-1"

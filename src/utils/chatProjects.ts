@@ -1,7 +1,7 @@
 import type { Session } from "../services/tauri";
 import { classifyMainChatSession, isInternalSession } from "./session";
 
-export type ChatProjectKind = "workspace" | "im" | "cli";
+export type ChatProjectKind = "workspace" | "im" | "unassigned";
 
 export interface ChatProject {
   id: string;
@@ -18,15 +18,13 @@ interface BuildChatProjectsOptions {
   projectDirectories: string[];
   labels?: {
     im: string;
-    cli: string;
     unassigned: string;
   };
 }
 
 const DEFAULT_LABELS = {
   im: "IM 会话",
-  cli: "CLI 会话",
-  unassigned: "未设置工作区",
+  unassigned: "无项目会话",
 };
 
 export function normalizeWorkspacePath(path: string): string {
@@ -96,11 +94,11 @@ export function buildChatProjects({
     system: true,
     sessions: [],
   };
-  const cliProject: ChatProject = {
-    id: "system:cli",
-    name: labels.cli,
+  const unassignedProject: ChatProject = {
+    id: "system:unassigned",
+    name: labels.unassigned,
     path: null,
-    kind: "cli",
+    kind: "unassigned",
     system: true,
     sessions: [],
   };
@@ -111,21 +109,21 @@ export function buildChatProjects({
     if (kind === "im") {
       imProject.sessions.push(item);
     } else if (kind === "cli") {
-      cliProject.sessions.push(item);
+      unassignedProject.sessions.push(item);
     } else {
       const workspace = item.workspace_root?.trim() || defaultWorkspace;
       const registered = workspaceProjects.get(normalizeWorkspacePath(workspace));
       if (registered) {
         registered.sessions.push(item);
       } else {
-        cliProject.sessions.push(item);
+        unassignedProject.sessions.push(item);
       }
     }
   }
 
   for (const project of workspaceProjects.values()) project.sessions.sort(newestFirst);
   imProject.sessions.sort(newestFirst);
-  cliProject.sessions.sort(newestFirst);
+  unassignedProject.sessions.sort(newestFirst);
 
-  return [...workspaceProjects.values(), imProject, cliProject];
+  return [...workspaceProjects.values(), imProject, unassignedProject];
 }

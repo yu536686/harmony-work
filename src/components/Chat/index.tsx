@@ -581,7 +581,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       projectDirectories,
       labels: {
         im: t("chat.imProject"),
-        cli: t("chat.cliProject"),
         unassigned: t("chat.unassignedProject"),
       },
     }),
@@ -592,16 +591,16 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (isDraft) return draftWorkspace ? projectIdForWorkspace(draftWorkspace) : null;
     if (!displaySession) {
       if (sessionFilter === "im") return "system:im";
-      if (sessionFilter === "cli") return "system:cli";
+      if (sessionFilter === "cli") return "system:unassigned";
       return null;
     }
     const kind = classifySession(displaySession);
     if (kind === "im") return "system:im";
-    if (kind === "cli") return "system:cli";
+    if (kind === "cli") return "system:unassigned";
     const workspace = displaySession.workspace_root || globalWorkspace;
     return projectDirectories.some(
       (directory) => normalizeWorkspacePath(directory) === normalizeWorkspacePath(workspace),
-    ) ? projectIdForWorkspace(workspace) : "system:cli";
+    ) ? projectIdForWorkspace(workspace) : "system:unassigned";
   }, [isDraft, draftWorkspace, displaySession, sessionFilter, globalWorkspace, projectDirectories]);
   // History pagination: capacity starts at CHAT_INITIAL_SIZE, grows by CHAT_LAZY_STEP on each lazy-load
   const CHAT_INITIAL_SIZE = 200;
@@ -2337,7 +2336,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             } else {
               const firstSession = project.sessions[0];
               setIsDraft(false);
-              setSessionFilter(firstSession ? classifySession(firstSession) : project.kind === "workspace" ? "chat" : project.kind);
+              setSessionFilter(firstSession ? classifySession(firstSession) : project.kind === "im" ? "im" : "chat");
               dispatch(sessionsActions.setActiveSession(firstSession?.id ?? null));
             }
             onFocusChat?.();

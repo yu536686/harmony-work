@@ -60,6 +60,8 @@ pub enum CodexExecError {
     Io(#[from] std::io::Error),
     #[error("codex exec was cancelled")]
     Cancelled,
+    #[error("codex exec exceeded the 30 minute safety timeout")]
+    Timeout,
     #[error("codex exec returned exit code {code:?}: {stderr}")]
     Failed { code: Option<i32>, stderr: String },
 }
@@ -144,9 +146,11 @@ pub async fn run_codex_exec(
         .kill_on_drop(true)
         .spawn()
         .map_err(CodexExecError::Start)?;
-    let mut stdin = child.stdin.take().ok_or(CodexExecError::MissingStdin)?;
-    stdin.write_all(command.stdin.as_bytes()).await?;
-    stdin.shutdown().await?;
+    {
+        let mut stdin = child.stdin.take().ok_or(CodexExecError::MissingStdin)?;
+        stdin.write_all(command.stdin.as_bytes()).await?;
+        stdin.shutdown().await?;
+    }
     let stdout = child.stdout.take().ok_or(CodexExecError::MissingStdout)?;
     let stderr = child.stderr.take().ok_or(CodexExecError::MissingStderr)?;
     let stderr_task = tokio::spawn(async move {
@@ -166,6 +170,7 @@ pub async fn run_codex_exec(
         Ok::<CodexExecJsonlParser, std::io::Error>(parser)
     });
     let mut cancelled = false;
+    let started_at = tokio::time::Instant::now();
     let status = loop {
         if cancellation
             .as_ref()
@@ -174,6 +179,13 @@ pub async fn run_codex_exec(
             cancelled = true;
             let _ = child.kill().await;
             break child.wait().await?;
+        }
+        if started_at.elapsed() >= std::time::Duration::from_secs(30 * 60) {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(CodexExecError::Timeout);
         }
         if let Some(status) = child.try_wait()? {
             break status;
@@ -350,5 +362,48 @@ mod tests {
         assert_eq!(result.usage.input_tokens, 120);
         assert_eq!(result.usage.output_tokens, 30);
         assert_eq!(result.events.len(), 4);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closes_prompt_stdin_before_waiting_for_exec_to_finish() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = std::env::temp_dir().join(format!(
+            "workbuddy-codex-eof-{}-{}.sh",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"eof-test\"}' '{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"ok\"}}' '{\"type\":\"turn.completed\",\"usage\":{}}'\n",
+        )
+        .expect("write fake codex executable");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).expect("make fake codex executable");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_codex_exec(
+                CodexExecCommand {
+                    executable: script.clone(),
+                    args: Vec::new(),
+                    stdin: "hello".to_string(),
+                },
+                Path::new("/tmp"),
+                &HashMap::new(),
+                None,
+            ),
+        )
+        .await;
+        let _ = std::fs::remove_file(script);
+
+        let output = result
+            .expect("fake exec must observe EOF")
+            .expect("fake exec succeeds");
+        assert_eq!(output.final_message, "ok");
     }
 }

@@ -512,6 +512,13 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key)));
+      try {
+        const gateway = await gatewayApi.connect();
+        setGatewayStatus(gateway.channels);
+        setGatewayMsg(t("settings.channelConnected"));
+      } catch (gatewayError) {
+        setGatewayMsg(t("settings.channelFailed", { error: String(gatewayError) }));
+      }
       // 立即切换语言
       if (updated.language) setLanguage(updated.language as "zh" | "en");
       (["feishu", "wecom", "dingtalk"] as EnterprisePlatformId[]).forEach((platform) => {

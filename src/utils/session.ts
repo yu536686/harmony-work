@@ -43,6 +43,8 @@ export function isInternalSession(session: { source?: string | null; id?: string
   const id = session.id ?? "";
   return session.source === "heartbeat"
     || session.source === "heartbeat_pool"
+    || session.source === "codex_heartbeat_global"
+    || session.source === "codex_heartbeat_pool"
     || session.source === "codex_staffdeck"
     || session.source === "piscis_inbox_global"
     || session.source === "piscis_inbox_pool"
@@ -51,6 +53,7 @@ export function isInternalSession(session: { source?: string | null; id?: string
     || session.source === "piscis_heartbeat_global"
     || session.source === "piscis_heartbeat_pool"
     || session.id === "heartbeat"
+    || session.id === "workbuddy_heartbeat_global"
     || session.id === "piscis_inbox_global"
     || id.startsWith("xiaoheng_pool_")
     || id.startsWith("piscis_pool_")

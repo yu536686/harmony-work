@@ -29,6 +29,11 @@ pub async fn list_gateway_channels(state: State<'_, AppState>) -> Result<Gateway
 /// 每次调用前先 shutdown 所有已有渠道，避免重复监听任务。
 #[tauri::command]
 pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<GatewayStatus, String> {
+    sync_gateway_channels(&state).await
+}
+
+pub(crate) async fn sync_gateway_channels(state: &AppState) -> Result<GatewayStatus, String> {
+    let _lifecycle = state.gateway.lifecycle_guard().await;
     // Stop any existing listeners before re-registering to prevent duplicate tasks
     let _ = state.gateway.stop_all().await;
     state.gateway.clear_channels().await;
@@ -76,6 +81,7 @@ pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<Gate
 /// 断开所有 IM 渠道
 #[tauri::command]
 pub async fn disconnect_gateway_channels(state: State<'_, AppState>) -> Result<(), String> {
+    let _lifecycle = state.gateway.lifecycle_guard().await;
     state.gateway.stop_all().await.map_err(|e| e.to_string())?;
     let _ = state.app_handle.emit(
         GATEWAY_CHANNELS_UPDATED_EVENT,

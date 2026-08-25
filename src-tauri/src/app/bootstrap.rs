@@ -156,10 +156,45 @@ async fn run_im_agent_and_send_reply(
     .await;
 
     if let Err(e) = &response {
-        info!(
-            "codex exec returned error for {}, emitting im_session_done: {}",
-            session_id, e
-        );
+        tracing::warn!("codex exec returned error for {}: {}", session_id, e);
+        let language = state_ref.settings.lock().await.language.clone();
+        let error_summary = e
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .take(280)
+            .collect::<String>();
+        let error_reply = if language == "zh" {
+            format!("小亨暂时无法完成这条消息。原因：{error_summary}")
+        } else {
+            format!("Xiaoheng could not complete this message. Reason: {error_summary}")
+        };
+        let (recipient, routing_state) = resolve_im_outbound_route(
+            &state_ref.db,
+            session_id,
+            &msg.channel,
+            &msg.reply_target,
+            msg.routing_state.clone(),
+        )
+        .await;
+        let outbound = gateway::OutboundMessage {
+            channel: msg.channel.clone(),
+            recipient,
+            content: error_reply.clone(),
+            reply_to: Some(msg.id.clone()),
+            media: None,
+            routing_state,
+        };
+        if let Err(send_error) = gw.send(&outbound).await {
+            tracing::warn!(
+                "Failed to send IM execution error via {}: {}",
+                msg.channel,
+                send_error
+            );
+        }
+        {
+            let db = state_ref.db.lock().await;
+            let _ = db.append_message(session_id, "assistant", &error_reply);
+        }
         let _ = state_ref.app_handle.emit("im_session_done", session_id);
         return;
     }
@@ -691,6 +726,15 @@ fn run_impl() {
                                 });
                             }
                         }
+                    }
+                });
+            }
+
+            {
+                let gateway_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = commands::chat::gateway::sync_gateway_channels(&gateway_state).await {
+                        tracing::warn!("Failed to auto-connect configured IM channels: {}", error);
                     }
                 });
             }
