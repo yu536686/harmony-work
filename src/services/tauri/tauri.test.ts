@@ -65,10 +65,10 @@ describe("sessionsApi", () => {
 // ─── chatApi ──────────────────────────────────────────────────────────────────
 
 describe("chatApi", () => {
-  it("send() calls chat_send with sessionId and content", async () => {
+  it("send() routes the main chat through codex_chat_send", async () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.send("sess1", "hello");
-    expect(mockInvoke).toHaveBeenCalledWith("chat_send", {
+    expect(mockInvoke).toHaveBeenCalledWith("codex_chat_send", {
       sessionId: "sess1",
       content: "hello",
       attachment: null,
@@ -81,10 +81,10 @@ describe("chatApi", () => {
     });
   });
 
-  it("cancel() calls chat_cancel with sessionId", async () => {
+  it("cancel() interrupts the active Codex turn by WorkBuddy session id", async () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.cancel("sess1");
-    expect(mockInvoke).toHaveBeenCalledWith("chat_cancel", { sessionId: "sess1" });
+    expect(mockInvoke).toHaveBeenCalledWith("codex_chat_cancel", { sessionId: "sess1" });
   });
 });
 

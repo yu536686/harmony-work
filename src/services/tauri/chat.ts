@@ -201,7 +201,7 @@ export const chatApi = {
     const attachments =
       options?.attachments ??
       (options?.attachment ? [options.attachment] : undefined);
-    return invoke<void>("chat_send", {
+    return invoke<void>("codex_chat_send", {
       sessionId,
       content,
       attachment: options?.attachment ?? null,
@@ -214,7 +214,7 @@ export const chatApi = {
     });
   },
   cancel: (sessionId: string) =>
-    invoke<void>("chat_cancel", { sessionId }),
+    invoke<void>("codex_chat_cancel", { sessionId }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
     listen<AgentEventType>(`agent_event_${sessionId}`, (e) => handler(e.payload)),
 };

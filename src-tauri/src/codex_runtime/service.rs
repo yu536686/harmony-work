@@ -1,6 +1,8 @@
 use crate::codex_runtime::client::{AppServerError, AppServerEvent};
 use crate::codex_runtime::config::{CodexRuntimeConfig, DeepSeekProfile, PINNED_CODEX_VERSION};
-use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent};
+use crate::codex_runtime::event_adapter::{
+    CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem,
+};
 use crate::codex_runtime::process::{
     AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
 };
@@ -11,13 +13,120 @@ use crate::codex_runtime::runner::{
 use crate::codex_runtime::session_map::{
     CodexSessionMapError, CodexSessionMapStore, NewCodexSessionBinding,
 };
-use serde::Serialize;
+use crate::store::AppState;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveCodexTurn {
+    thread_id: String,
+    turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModelOverride {
+    CurrentProvider { model: String },
+    ExplicitProvider { provider: String, model: String },
+    NamedProvider { provider_id: String, model: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyChatAttachment {
+    #[serde(alias = "media_type")]
+    pub media_type: String,
+    pub path: Option<String>,
+    pub data: Option<String>,
+    pub filename: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct CodexTurnTranscript {
+    assistant_text: String,
+    tool_calls: Vec<Value>,
+    tool_results: Vec<Value>,
+    plan_items: Vec<WorkBuddyPlanItem>,
+}
+
+impl CodexTurnTranscript {
+    fn observe(&mut self, event: &WorkBuddyEvent) {
+        match event {
+            WorkBuddyEvent::TextDelta { delta } => self.assistant_text.push_str(delta),
+            WorkBuddyEvent::ToolStart { id, name, input } => {
+                self.tool_calls.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": id,
+                    "name": name,
+                    "input": input,
+                }));
+            }
+            WorkBuddyEvent::ToolEnd {
+                id,
+                name,
+                result,
+                is_error,
+            } => {
+                self.tool_results.push(serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "tool_name": name,
+                    "content": result,
+                    "is_error": is_error,
+                }));
+            }
+            WorkBuddyEvent::PlanUpdate { items } => self.plan_items.clone_from(items),
+            _ => {}
+        }
+    }
+
+    fn projected_tool_calls(&self) -> Vec<Value> {
+        let mut calls = self.tool_calls.clone();
+        if !self.plan_items.is_empty() {
+            calls.push(serde_json::json!({
+                "type": "tool_use",
+                "id": "codex-plan",
+                "name": "plan_todo",
+                "input": {
+                    "merge": false,
+                    "todos": self.plan_items,
+                },
+            }));
+        }
+        calls
+    }
+
+    fn projected_tool_results(&self) -> Vec<Value> {
+        let mut results = self.tool_results.clone();
+        if !self.plan_items.is_empty() {
+            results.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": "codex-plan",
+                "tool_name": "plan_todo",
+                "content": "Codex 计划已同步",
+                "is_error": false,
+            }));
+        }
+        results
+    }
+
+    fn tool_calls_json(&self) -> Option<String> {
+        let calls = self.projected_tool_calls();
+        (!calls.is_empty())
+            .then(|| serde_json::to_string(&calls).expect("serialize Codex tool calls"))
+    }
+
+    fn tool_results_json(&self) -> Option<String> {
+        let results = self.projected_tool_results();
+        (!results.is_empty())
+            .then(|| serde_json::to_string(&results).expect("serialize Codex tool results"))
+    }
+}
 
 #[derive(Clone)]
 pub struct CodexRuntimeState {
@@ -29,6 +138,7 @@ pub struct CodexRuntimeState {
     subscribers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkBuddyEvent>>>>,
     pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
     event_adapter: Arc<Mutex<CodexEventAdapter>>,
+    active_turns: Arc<Mutex<HashMap<String, ActiveCodexTurn>>>,
 }
 
 pub struct CodexTurnExecution {
@@ -73,6 +183,8 @@ pub enum CodexRuntimeStateError {
     PrepareConfig(#[source] std::io::Error),
     #[error("Codex approval request was not found or expired")]
     ApprovalNotFound,
+    #[error("session already has an active Codex turn")]
+    TurnAlreadyActive,
 }
 
 impl CodexRuntimeState {
@@ -95,23 +207,37 @@ impl CodexRuntimeState {
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             event_adapter: Arc::new(Mutex::new(CodexEventAdapter::default())),
+            active_turns: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub async fn configure_credentials(&self, settings: &crate::store::Settings) {
-        let mut environment = self.environment.lock().await;
-        environment.clear();
+        let mut next_environment = HashMap::new();
         if !settings.openai_api_key.trim().is_empty() {
-            environment.insert(
+            next_environment.insert(
                 "OPENAI_API_KEY".to_string(),
                 settings.openai_api_key.clone(),
             );
         }
         if !settings.deepseek_api_key.trim().is_empty() {
-            environment.insert(
+            next_environment.insert(
                 "DEEPSEEK_API_KEY".to_string(),
                 settings.deepseek_api_key.clone(),
             );
+        }
+        let changed = {
+            let mut environment = self.environment.lock().await;
+            if *environment == next_environment {
+                false
+            } else {
+                *environment = next_environment;
+                true
+            }
+        };
+        if changed {
+            if let Some(process) = self.process.lock().await.take() {
+                let _ = process.shutdown().await;
+            }
         }
     }
 
@@ -147,6 +273,14 @@ impl CodexRuntimeState {
         workbuddy_session_id: &str,
         options: CodexTurnOptions,
     ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
+        if self
+            .active_turns
+            .lock()
+            .await
+            .contains_key(workbuddy_session_id)
+        {
+            return Err(CodexRuntimeStateError::TurnAlreadyActive);
+        }
         let process = self.ensure_started().await?;
         let client = process.client();
         let existing = self.sessions.get(workbuddy_session_id)?;
@@ -205,6 +339,13 @@ impl CodexRuntimeState {
         let turn_id = extract_turn_id(&response)
             .ok_or(CodexRuntimeStateError::MissingResponseId("turn.id"))?
             .to_string();
+        self.active_turns.lock().await.insert(
+            workbuddy_session_id.to_string(),
+            ActiveCodexTurn {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+            },
+        );
         Ok(CodexTurnExecution {
             thread_id,
             turn_id,
@@ -246,6 +387,27 @@ impl CodexRuntimeState {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn interrupt_session_turn(
+        &self,
+        workbuddy_session_id: &str,
+    ) -> Result<(), CodexRuntimeStateError> {
+        let active = self
+            .active_turns
+            .lock()
+            .await
+            .get(workbuddy_session_id)
+            .cloned();
+        if let Some(active) = active {
+            self.interrupt_turn(&active.thread_id, &active.turn_id)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn finish_session_turn(&self, workbuddy_session_id: &str) {
+        self.active_turns.lock().await.remove(workbuddy_session_id);
     }
 
     fn spawn_event_dispatcher(&self, process: Arc<CodexProcess>) {
@@ -384,6 +546,7 @@ impl CodexRuntimeState {
     }
 
     pub async fn shutdown(&self) -> Result<(), CodexRuntimeStateError> {
+        self.active_turns.lock().await.clear();
         let process = self.process.lock().await.take();
         if let Some(process) = process {
             process.shutdown().await?;
@@ -414,6 +577,162 @@ fn parse_permission_mode(value: &str) -> CodexPermissionMode {
     }
 }
 
+fn permission_mode_from_settings(
+    confirm_shell_commands: bool,
+    confirm_file_writes: bool,
+) -> CodexPermissionMode {
+    if confirm_shell_commands || confirm_file_writes {
+        CodexPermissionMode::Approval
+    } else {
+        CodexPermissionMode::FullAccess
+    }
+}
+
+fn parse_model_override(
+    current_provider: &str,
+    current_model: &str,
+    value: Option<&str>,
+) -> ModelOverride {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return ModelOverride::CurrentProvider {
+            model: current_model.to_string(),
+        };
+    };
+    let Some((provider, model)) = value.split_once("::") else {
+        return ModelOverride::CurrentProvider {
+            model: value.to_string(),
+        };
+    };
+    let provider = provider.trim();
+    let model = model.trim().to_string();
+    if provider == "current" || provider == current_provider {
+        ModelOverride::CurrentProvider { model }
+    } else if let Some(provider_id) = provider.strip_prefix("named:") {
+        ModelOverride::NamedProvider {
+            provider_id: provider_id.trim().to_string(),
+            model,
+        }
+    } else {
+        ModelOverride::ExplicitProvider {
+            provider: provider.to_string(),
+            model,
+        }
+    }
+}
+
+fn resolve_model_selection(
+    settings: &crate::store::Settings,
+    provider: Option<String>,
+    model: Option<String>,
+    model_override: Option<&str>,
+) -> Result<(String, String), String> {
+    let current_provider = provider
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| settings.provider.clone());
+    let current_model = model
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| settings.model.clone());
+    let selection = parse_model_override(&current_provider, &current_model, model_override);
+    let (provider, model) = match selection {
+        ModelOverride::CurrentProvider { model } => (current_provider, model),
+        ModelOverride::ExplicitProvider { provider, model } => (provider, model),
+        ModelOverride::NamedProvider { provider_id, model } => {
+            let named = settings.find_llm_provider(&provider_id).ok_or_else(|| {
+                format!("找不到已启用的模型提供商配置：{provider_id}")
+            })?;
+            (named.provider.clone(), model)
+        }
+    };
+    match provider.as_str() {
+        "openai" | "deepseek" => Ok((provider, model)),
+        _ => Err(format!(
+            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI 或 DeepSeek Responses API"
+        )),
+    }
+}
+
+fn safe_attachment_name(filename: Option<&str>, media_type: &str) -> String {
+    let supplied = filename
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty());
+    supplied.unwrap_or_else(|| match media_type {
+        "image/png" => "attachment.png",
+        "image/jpeg" => "attachment.jpg",
+        "application/pdf" => "attachment.pdf",
+        _ => "attachment.bin",
+    })
+    .to_string()
+}
+
+fn decode_attachment_data(value: &str) -> Result<Vec<u8>, String> {
+    let encoded = value
+        .split_once(',')
+        .filter(|(prefix, _)| prefix.starts_with("data:"))
+        .map(|(_, encoded)| encoded)
+        .unwrap_or(value);
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("附件 Base64 解码失败：{error}"))
+}
+
+fn materialize_chat_attachments(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    attachment: Option<LegacyChatAttachment>,
+    attachments: Option<Vec<LegacyChatAttachment>>,
+) -> Result<Vec<CodexAttachment>, String> {
+    let source = attachments
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| attachment.into_iter().collect());
+    let mut resolved = Vec::with_capacity(source.len());
+    for item in source {
+        let name = safe_attachment_name(item.filename.as_deref(), &item.media_type);
+        let path = if let Some(path) = item.path.filter(|path| !path.trim().is_empty()) {
+            PathBuf::from(path)
+        } else if let Some(data) = item.data.as_deref() {
+            let directory = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())?
+                .join("codex-attachments")
+                .join(session_id);
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let path = directory.join(format!("{}-{name}", uuid::Uuid::new_v4()));
+            std::fs::write(&path, decode_attachment_data(data)?)
+                .map_err(|error| format!("附件写入失败：{error}"))?;
+            path
+        } else {
+            return Err(format!("附件“{name}”缺少本地路径或文件数据"));
+        };
+        resolved.push(CodexAttachment {
+            path: path.display().to_string(),
+            name,
+            media_type: item.media_type,
+        });
+    }
+    Ok(resolved)
+}
+
+fn compose_turn_content(
+    content: String,
+    explicit_skills: Option<Vec<String>>,
+    user_context: Option<String>,
+) -> String {
+    let mut sections = Vec::new();
+    if let Some(context) = user_context.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!("<workbuddy_user_context>\n{context}\n</workbuddy_user_context>"));
+    }
+    if let Some(skills) = explicit_skills.filter(|items| !items.is_empty()) {
+        sections.push(format!(
+            "<workbuddy_explicit_skills>\n{}\n</workbuddy_explicit_skills>",
+            skills.join("\n")
+        ));
+    }
+    sections.push(content);
+    sections.join("\n\n")
+}
+
 #[tauri::command]
 pub async fn codex_runtime_diagnostic(
     state: tauri::State<'_, CodexRuntimeState>,
@@ -428,44 +747,146 @@ pub async fn codex_runtime_diagnostic(
 #[tauri::command]
 pub async fn codex_chat_send(
     app: tauri::AppHandle,
-    state: tauri::State<'_, CodexRuntimeState>,
+    codex_state: tauri::State<'_, CodexRuntimeState>,
+    app_state: tauri::State<'_, AppState>,
     session_id: String,
     content: String,
-    workspace_root: String,
-    provider: String,
-    model: String,
+    workspace_root: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
     permission_mode: Option<String>,
-    attachments: Option<Vec<CodexAttachment>>,
+    attachment: Option<LegacyChatAttachment>,
+    attachments: Option<Vec<LegacyChatAttachment>>,
+    explicit_skills: Option<Vec<String>>,
+    persona_koi_id: Option<String>,
+    model_override: Option<String>,
+    user_context: Option<String>,
+    clear_plan: Option<bool>,
 ) -> Result<CodexTurnStarted, String> {
+    let settings = app_state.settings.lock().await.clone();
+    codex_state.configure_credentials(&settings).await;
+    let session_workspace = {
+        let db = app_state.db.lock().await;
+        db.get_session(&session_id)
+            .map_err(|error| error.to_string())?
+            .and_then(|session| session.workspace_root)
+    };
+    let workspace_root = workspace_root
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| session_workspace.filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| settings.workspace_root.clone());
+    let (provider, model) = resolve_model_selection(
+        &settings,
+        provider,
+        model,
+        model_override.as_deref(),
+    )?;
+    let permission_mode = permission_mode
+        .as_deref()
+        .map(parse_permission_mode)
+        .unwrap_or_else(|| {
+            permission_mode_from_settings(
+                settings.confirm_shell_commands,
+                settings.confirm_file_writes,
+            )
+        });
+    let attachments = materialize_chat_attachments(
+        &app,
+        &session_id,
+        attachment,
+        attachments,
+    )?;
+    let content = compose_turn_content(content, explicit_skills, user_context);
+    let mut developer_instructions =
+        "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。使用 Codex 原生工具和 WorkBuddy MCP 能力；不要声称自己是 Piscis，也不要回退到旧 Agent Loop。"
+            .to_string();
+    if let Some(persona) = persona_koi_id.filter(|value| !value.trim().is_empty()) {
+        developer_instructions.push_str(&format!(
+            "\n当前用户选择的人员/角色 ID 是 {persona}。在 WorkBuddy MCP 人员能力可用时读取其职责并按该角色执行。"
+        ));
+    }
+    let _ = clear_plan;
     let options = CodexTurnOptions {
-        content,
+        content: content.clone(),
         workspace_root,
         provider,
         model,
-        permission_mode: parse_permission_mode(permission_mode.as_deref().unwrap_or("approval")),
-        developer_instructions: Some(
-            "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴完成任务。"
-                .to_string(),
-        ),
-        attachments: attachments.unwrap_or_default(),
+        permission_mode,
+        developer_instructions: Some(developer_instructions),
+        attachments,
     };
-    let execution = state
+    {
+        let db = app_state.db.lock().await;
+        db.append_message(&session_id, "user", &content)
+            .map_err(|error| error.to_string())?;
+        db.update_session_status(&session_id, "running")
+            .map_err(|error| error.to_string())?;
+    }
+    let execution = match codex_state
         .start_turn(&session_id, options)
         .await
-        .map_err(|error| error.to_string())?;
+    {
+        Ok(execution) => execution,
+        Err(error) => {
+            let db = app_state.db.lock().await;
+            let _ = db.update_session_status(&session_id, "idle");
+            return Err(error.to_string());
+        }
+    };
     let started = CodexTurnStarted {
         thread_id: execution.thread_id.clone(),
         turn_id: execution.turn_id.clone(),
     };
     let event_name = format!("agent_event_{session_id}");
     let mut events = execution.events;
+    let codex_state = codex_state.inner().clone();
+    let app_state = app_state.inner().clone();
     tauri::async_runtime::spawn(async move {
+        let mut transcript = CodexTurnTranscript::default();
         while let Some(event) = events.recv().await {
+            transcript.observe(&event);
             let terminal = is_terminal_event(&event);
-            let _ = app.emit(&event_name, event);
             if terminal {
+                {
+                    let db = app_state.db.lock().await;
+                    if matches!(&event, WorkBuddyEvent::Done { .. }) {
+                        let tool_calls_json = transcript.tool_calls_json();
+                        let tool_results_json = transcript.tool_results_json();
+                        if let Some(tool_calls_json) = tool_calls_json.as_deref() {
+                            let _ = db.append_message_full(
+                                &session_id,
+                                "assistant",
+                                "",
+                                Some(tool_calls_json),
+                                None,
+                                None,
+                            );
+                        }
+                        if let Some(tool_results_json) = tool_results_json.as_deref() {
+                            let _ = db.append_message_full(
+                                &session_id,
+                                "user",
+                                "",
+                                None,
+                                Some(tool_results_json),
+                                None,
+                            );
+                        }
+                        if !transcript.assistant_text.trim().is_empty() {
+                            let _ = db.append_message(
+                                &session_id,
+                                "assistant",
+                                &transcript.assistant_text,
+                            );
+                        }
+                    }
+                    let _ = db.update_session_status(&session_id, "idle");
+                }
+                codex_state.finish_session_turn(&session_id).await;
+                let _ = app.emit(&event_name, event);
                 break;
             }
+            let _ = app.emit(&event_name, event);
         }
     });
     Ok(started)
@@ -474,18 +895,101 @@ pub async fn codex_chat_send(
 #[tauri::command]
 pub async fn codex_chat_cancel(
     state: tauri::State<'_, CodexRuntimeState>,
-    thread_id: String,
-    turn_id: String,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
 ) -> Result<(), String> {
-    state
-        .interrupt_turn(&thread_id, &turn_id)
-        .await
-        .map_err(|error| error.to_string())
+    if let Some(session_id) = session_id {
+        return state
+            .interrupt_session_turn(&session_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    match (thread_id, turn_id) {
+        (Some(thread_id), Some(turn_id)) => state
+            .interrupt_turn(&thread_id, &turn_id)
+            .await
+            .map_err(|error| error.to_string()),
+        _ => Err("缺少 sessionId 或 threadId/turnId".to_string()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_transcript_projects_tools_and_plan_into_legacy_message_blocks() {
+        let mut transcript = CodexTurnTranscript::default();
+        transcript.observe(&WorkBuddyEvent::ToolStart {
+            id: "tool-1".to_string(),
+            name: "shell".to_string(),
+            input: serde_json::json!({"command":"pwd"}),
+        });
+        transcript.observe(&WorkBuddyEvent::ToolEnd {
+            id: "tool-1".to_string(),
+            name: "shell".to_string(),
+            result: "/work".to_string(),
+            is_error: false,
+        });
+        transcript.observe(&WorkBuddyEvent::PlanUpdate {
+            items: vec![WorkBuddyPlanItem {
+                id: "step-1".to_string(),
+                content: "检查环境".to_string(),
+                status: "completed".to_string(),
+            }],
+        });
+        transcript.observe(&WorkBuddyEvent::TextDelta {
+            delta: "已完成".to_string(),
+        });
+
+        let calls = transcript.tool_calls_json().expect("tool calls");
+        let results = transcript.tool_results_json().expect("tool results");
+        assert!(calls.contains("shell"));
+        assert!(calls.contains("plan_todo"));
+        assert!(results.contains("/work"));
+        assert_eq!(transcript.assistant_text, "已完成");
+    }
+
+    #[test]
+    fn legacy_model_override_keeps_or_replaces_provider_explicitly() {
+        assert_eq!(
+            parse_model_override("deepseek", "deepseek-v4-pro", Some("deepseek-chat")),
+            ModelOverride::CurrentProvider {
+                model: "deepseek-chat".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_model_override("deepseek", "deepseek-v4-pro", Some("openai::gpt-5.4")),
+            ModelOverride::ExplicitProvider {
+                provider: "openai".to_string(),
+                model: "gpt-5.4".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_model_override(
+                "deepseek",
+                "deepseek-v4-pro",
+                Some("named:team-provider::deepseek-reasoner"),
+            ),
+            ModelOverride::NamedProvider {
+                provider_id: "team-provider".to_string(),
+                model: "deepseek-reasoner".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn confirmation_flags_map_to_codex_permission_mode() {
+        assert_eq!(
+            permission_mode_from_settings(true, false),
+            CodexPermissionMode::Approval
+        );
+        assert_eq!(
+            permission_mode_from_settings(false, false),
+            CodexPermissionMode::FullAccess
+        );
+    }
 
     #[tokio::test]
     async fn reports_stopped_runtime_without_launching_process() {
