@@ -1,3 +1,4 @@
+use crate::process::{std_command, tokio_command};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -6,7 +7,6 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 const ARTIFACT_TIMEOUT_SECS: u64 = 180;
@@ -177,7 +177,7 @@ async fn run_artifact_runtime(kind: ArtifactKind, mut input: Value) -> Result<Va
     let spec_path = jobs.join(format!("{}.json", uuid::Uuid::new_v4().simple()));
     std::fs::write(&spec_path, serde_json::to_vec(&input)?)?;
 
-    let mut command = Command::new(find_node()?);
+    let mut command = tokio_command(find_node()?);
     command
         .arg(runtime)
         .arg(kind.runtime_name())
@@ -420,7 +420,14 @@ fn node_candidates() -> Vec<OsString> {
 
 fn find_node() -> Result<OsString> {
     node_candidates().into_iter().find(|candidate| {
-        std::process::Command::new(candidate).arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+        std_command(candidate)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }).ok_or_else(|| anyhow!("Node.js 18 or newer was not found. Open the WorkBuddy initializer and install Node.js, then retry."))
 }
 

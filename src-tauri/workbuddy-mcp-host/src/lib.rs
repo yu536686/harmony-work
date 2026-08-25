@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 mod harvis;
 mod im;
 mod office;
+mod process;
 mod skills;
 mod staffdeck;
 
