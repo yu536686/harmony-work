@@ -617,6 +617,9 @@ pub async fn run_collaboration_trial_with_state(
             .ok()
             .flatten()
             .is_some();
+        let lead_run_active = db.koi_has_in_progress_todo(&lead.id).unwrap_or(false);
+        let second_run_active = db.koi_has_in_progress_todo(&second.id).unwrap_or(false);
+        let third_run_active = db.koi_has_in_progress_todo(&third.id).unwrap_or(false);
         drop(db);
 
         let lead_status = lead_koi
@@ -631,14 +634,6 @@ pub async fn run_collaboration_trial_with_state(
             .as_ref()
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
-        let lead_run_active =
-            crate::tools::call_koi::runtime::is_koi_run_slot_active(&lead.id, Some(&pool.id)).await;
-        let second_run_active =
-            crate::tools::call_koi::runtime::is_koi_run_slot_active(&second.id, Some(&pool.id))
-                .await;
-        let third_run_active =
-            crate::tools::call_koi::runtime::is_koi_run_slot_active(&third.id, Some(&pool.id))
-                .await;
         let lead_effective_status = effective_trial_koi_status(
             lead_status,
             trial_koi_runtime_active(lead_run_active, lead_checkpoint_running),

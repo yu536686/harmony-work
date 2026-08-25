@@ -156,54 +156,6 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn create_draft(
-    db: &Database,
-    root: &Path,
-    name: &str,
-    content: &str,
-    created_by: &str,
-    session_id: Option<&str>,
-) -> Result<String> {
-    provenance::ensure_evolution_dirs(root)?;
-    let skill_id = sanitize_skill_id(name);
-    if provenance::find_skill_md(root, &skill_id).is_some() {
-        anyhow::bail!("skill '{}' already exists", skill_id);
-    }
-    let loader = SkillLoader::new(root);
-    let parsed = loader.parse_skill_from_content(content).ok();
-    let (display_name, description) = parsed
-        .as_ref()
-        .map(|s| (s.name.clone(), s.description.clone()))
-        .unwrap_or_else(|| (name.to_string(), String::new()));
-
-    let meta = SkillConfigMeta::draft(created_by, session_id.map(String::from));
-    register_skill_db(
-        db,
-        &skill_id,
-        &display_name,
-        &description,
-        &meta,
-        Some(created_by),
-    )?;
-
-    let skill_dir = provenance::draft_dir(root).join(&skill_id);
-    std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(skill_dir.join("SKILL.md"), content)?;
-
-    let before_hash: Option<&str> = None;
-    let after_hash = provenance::content_hash(content);
-    db.insert_skill_revision(
-        &skill_id,
-        session_id,
-        created_by,
-        Some("create"),
-        before_hash,
-        Some(&after_hash),
-    )?;
-    db.bump_skill_patch(&skill_id)?;
-    Ok(skill_id)
-}
-
 pub fn patch_skill_content(
     db: &Database,
     root: &Path,
@@ -399,25 +351,3 @@ pub fn restore_archived(db: &Database, root: &Path, skill_id: &str) -> Result<()
     db.set_skill_usage_state(skill_id, "active")?;
     Ok(())
 }
-
-pub const SKILL_TEMPLATE: &str = r#"---
-name: {name}
-description: {description}
-version: 1.0.0
----
-
-# {title}
-
-## When to Use
-Describe when this skill applies.
-
-## Procedure
-1. Step one
-2. Step two
-
-## Pitfalls
-- Known failure modes and fixes
-
-## Verification
-How to confirm the task succeeded.
-"#;

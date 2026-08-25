@@ -5,7 +5,7 @@
 //! settings — strip it on startup so the MCP tools page only lists external
 //! servers the user configured.
 
-use piscis_kernel::store::settings::Settings;
+use crate::store::settings::Settings;
 
 /// Stable settings key used by legacy bundled MCP registration.
 pub const ROBOTZ_MCP_SERVER_NAME: &str = "robotz";
@@ -28,7 +28,7 @@ pub fn strip_legacy_robotz_mcp_server(settings: &mut Settings) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use piscis_kernel::store::settings::McpServerConfig;
+    use crate::store::settings::McpServerConfig;
 
     #[test]
     fn strips_robotz_entry() {

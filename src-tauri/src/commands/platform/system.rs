@@ -1,4 +1,3 @@
-use crate::host::DesktopHostTools;
 use crate::store::{AppState, Settings};
 use piscis_kernel::proc::std_command;
 use robotz_browser::download;
@@ -1572,17 +1571,31 @@ pub async fn get_runtime_capabilities(
     let vm = get_vm_status().await?;
 
     let settings = state.settings.lock().await.clone();
-    let registry = DesktopHostTools {
-        browser: Some(state.browser.clone()),
-        builtin_tool_enabled: Some(settings.builtin_tool_enabled.clone()),
-        ..Default::default()
-    }
-    .build_registry();
-    let tools = registry
-        .all()
-        .iter()
-        .map(|t| t.name().to_string())
-        .collect::<Vec<_>>();
+    let tools = [
+        "codex.exec",
+        "harvis_image_generate",
+        "harvis_music_generate",
+        "harvis_job_status",
+        "harvis_save_result",
+        "document_artifact",
+        "presentation_artifact",
+        "spreadsheet_artifact",
+        "memory_search",
+        "memory_append",
+        "skill_list",
+        "skill_install",
+        "skill_set_enabled",
+        "skill_uninstall",
+        "im_channel_list",
+        "im_send_message",
+        "staff_list",
+        "staff_status_set",
+        "staff_task_create",
+        "staff_task_update",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
 
     let channels = state
         .gateway

@@ -6,10 +6,8 @@ pub mod gateway;
 pub mod scheduler;
 
 use crate::store::{db::ChatMessage, db::Session, db::SessionArtifact, db::TaskState, AppState};
-use piscis_kernel::agent::plan::PlanTodoItem;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
 
 #[derive(Debug, Serialize)]
@@ -63,36 +61,6 @@ pub(crate) fn render_task_state_section(
     append_task_spine_list(&mut context, "Next Questions", &spine.next_questions);
     context.truncate(context.trim_end().len());
     context
-}
-
-fn plan_snapshot_label(items: &[PlanTodoItem], fallback: &str) -> String {
-    items
-        .iter()
-        .find(|item| item.status == "in_progress")
-        .or_else(|| items.first())
-        .map(|item| item.content.as_str())
-        .filter(|content| !content.trim().is_empty())
-        .unwrap_or(fallback)
-        .chars()
-        .take(100)
-        .collect()
-}
-
-pub(crate) async fn persist_plan_snapshot_items(
-    db: &Arc<tokio::sync::Mutex<crate::store::Database>>,
-    session_id: &str,
-    items: &[PlanTodoItem],
-    label_hint: &str,
-) {
-    if items.is_empty() {
-        return;
-    }
-    let items_json = serde_json::to_string(items).unwrap_or_else(|_| "[]".into());
-    let label = plan_snapshot_label(items, label_hint);
-    let db = db.lock().await;
-    if let Err(error) = db.insert_plan_snapshot(session_id, &label, &items_json) {
-        tracing::warn!("failed to persist plan snapshot for {session_id}: {error}");
-    }
 }
 
 pub(crate) async fn resolve_session_workspace_context(

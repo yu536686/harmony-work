@@ -12,13 +12,13 @@ use piscis_core::host::{PoolEvent, PoolEventSink, TodoChangeAction, TodoSnapshot
 use serde::Deserialize;
 use tauri::State;
 
-use crate::host::DesktopEventSink;
 use crate::pool::bridge;
+use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::KoiTodo;
 use crate::store::AppState;
 
-fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopEventSink> {
-    Arc::new(DesktopEventSink::new(app.clone()))
+fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopPoolEventSink> {
+    Arc::new(DesktopPoolEventSink::new(app.clone()))
 }
 
 fn emit_todo(app: &tauri::AppHandle, action: TodoChangeAction, todo: &KoiTodo) {

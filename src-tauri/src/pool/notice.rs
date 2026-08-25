@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use crate::host::DesktopEventSink;
+use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::PoolMessage;
 use crate::store::AppState;
 use piscis_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot};
 
 fn emit_message(app: &tauri::AppHandle, msg: &PoolMessage) {
-    let sink = Arc::new(DesktopEventSink::new(app.clone()));
+    let sink = Arc::new(DesktopPoolEventSink::new(app.clone()));
     sink.emit_pool(&PoolEvent::MessageAppended {
         pool_id: msg.pool_session_id.clone(),
         message: PoolMessageSnapshot::from(msg),

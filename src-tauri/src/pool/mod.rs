@@ -16,6 +16,7 @@
 //! `runtime` and `event_bus` submodules.
 
 pub mod bridge;
+pub mod events;
 pub mod notice;
 
 pub use piscis_core::models::{

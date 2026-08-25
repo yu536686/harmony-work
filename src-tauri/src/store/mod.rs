@@ -1,8 +1,10 @@
-// The low-level storage primitives (`Database`, `Settings`) now live in
-// `piscis-kernel::store`. We re-export them here so existing call sites that
-// reference `crate::store::db::...` / `crate::store::settings::...` /
-// `crate::store::{Database, Settings}` keep compiling unchanged.
-pub use piscis_kernel::store::{db, settings, Database, Settings};
+pub mod db;
+pub mod secrets;
+pub mod settings;
+mod vector;
+
+pub use db::Database;
+pub use settings::{Settings, SkillEvolutionSettings};
 
 use anyhow::Result;
 use rusqlite::{params, Connection};

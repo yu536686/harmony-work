@@ -10,8 +10,8 @@ pub mod koi;
 
 use std::sync::Arc;
 
-use crate::host::DesktopEventSink;
 use crate::pool::bridge;
+use crate::pool::events::DesktopPoolEventSink;
 use crate::pool::{PoolMessage, PoolSession};
 use crate::store::AppState;
 use piscis_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
@@ -19,8 +19,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tauri::State;
 
-fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopEventSink> {
-    Arc::new(DesktopEventSink::new(app.clone()))
+fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopPoolEventSink> {
+    Arc::new(DesktopPoolEventSink::new(app.clone()))
 }
 
 fn emit_message(app: &tauri::AppHandle, msg: &PoolMessage) {

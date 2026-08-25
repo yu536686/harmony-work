@@ -293,9 +293,6 @@ impl FishRegistry {
         &self.fish
     }
 
-    pub fn get(&self, id: &str) -> Option<&FishDefinition> {
-        self.fish.iter().find(|f| f.id == id)
-    }
 }
 
 /// Scan a directory for FISH.toml files and parse them.
