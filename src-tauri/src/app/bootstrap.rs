@@ -14,8 +14,11 @@
 //! changes vs. that file — only the helper functions were moved out to
 //! [`super::logging`], [`super::markers`] and [`super::headless`].
 
-use crate::{commands, gateway, store};
-use piscis_kernel::scheduler;
+use crate::scheduler;
+use crate::{
+    codex_runtime::background::{run_codex_background, CodexBackgroundOptions},
+    commands, gateway, store,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -40,6 +43,19 @@ fn build_im_session_title(msg: &gateway::InboundMessage) -> String {
 
 fn build_new_im_session_id(msg: &gateway::InboundMessage) -> String {
     format!("im_{}_{}", msg.channel, Uuid::new_v4())
+}
+
+fn runtime_env(primary: &str, legacy: &str) -> Option<String> {
+    std::env::var(primary)
+        .ok()
+        .or_else(|| std::env::var(legacy).ok())
+}
+
+async fn interrupt_codex_background(app: &tauri::AppHandle, session_id: &str) -> bool {
+    match app.try_state::<crate::codex_runtime::service::CodexRuntimeState>() {
+        Some(runtime) => runtime.interrupt_headless(session_id).await,
+        None => false,
+    }
 }
 
 async fn resolve_or_create_im_binding(
@@ -123,73 +139,65 @@ async fn run_im_agent_and_send_reply(
     session_id: &str,
     msg: &gateway::InboundMessage,
 ) {
-    let response = commands::chat::run_agent_headless(
+    let response = crate::codex_runtime::background::run_codex_background(
         state_ref,
         session_id,
         &msg.content,
         msg.media.clone(),
         &msg.channel,
-        None,
+        crate::codex_runtime::background::CodexBackgroundOptions {
+            session_title: msg.sender_name.clone(),
+            session_source: Some(format!("im:{}", msg.channel)),
+            extra_context: Some(format!(
+                "这是来自 {} 的 IM 入站消息。直接处理用户目标；需要回传文件时，在最终回复中保留 SEND_FILE:绝对路径 标记。",
+                msg.channel
+            )),
+            ..Default::default()
+        },
     )
     .await;
 
     if let Err(e) = &response {
         info!(
-            "run_agent_headless returned error for {}, emitting im_session_done: {}",
+            "codex exec returned error for {}, emitting im_session_done: {}",
             session_id, e
         );
         let _ = state_ref.app_handle.emit("im_session_done", session_id);
         return;
     }
 
-    let (reply_text, reply_image, reply_image_mime) = match response {
-        Ok((text, img, mime)) => {
-            let t = if text.is_empty() && img.is_none() {
-                "（Agent 未返回内容）".to_string()
-            } else {
-                text
-            };
-            (t, img, mime)
-        }
+    let reply_text = match response {
+        Ok(output) => output.final_message,
         Err(_) => unreachable!("handled above"),
     };
 
     let (clean_text, file_path) = extract_send_marker(&reply_text);
 
-    let media = file_path
-        .and_then(|p| match std::fs::read(&p) {
-            Ok(data) => {
-                let mime = guess_mime_from_path(&p);
-                let filename = std::path::Path::new(&p)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "file".to_string());
-                info!(
-                    "extract_send_marker: read {} bytes from '{}', mime={}",
-                    data.len(),
-                    p,
-                    mime
-                );
-                Some(gateway::MediaAttachment {
-                    media_type: mime,
-                    url: None,
-                    data: Some(data),
-                    filename: Some(filename),
-                })
-            }
-            Err(e) => {
-                tracing::warn!("extract_send_marker: failed to read file '{}': {}", p, e);
-                None
-            }
-        })
-        .or_else(|| {
-            reply_image.map(|data| gateway::MediaAttachment {
-                media_type: reply_image_mime.unwrap_or_else(|| "image/jpeg".to_string()),
+    let media = file_path.and_then(|p| match std::fs::read(&p) {
+        Ok(data) => {
+            let mime = guess_mime_from_path(&p);
+            let filename = std::path::Path::new(&p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".to_string());
+            info!(
+                "extract_send_marker: read {} bytes from '{}', mime={}",
+                data.len(),
+                p,
+                mime
+            );
+            Some(gateway::MediaAttachment {
+                media_type: mime,
                 url: None,
                 data: Some(data),
-                filename: Some("image.jpg".to_string()),
+                filename: Some(filename),
             })
-        });
+        }
+        Err(e) => {
+            tracing::warn!("extract_send_marker: failed to read file '{}': {}", p, e);
+            None
+        }
+    });
 
     let (recipient, routing_state) = resolve_im_outbound_route(
         &state_ref.db,
@@ -314,7 +322,7 @@ fn run_impl() {
             let codex_runtime = crate::codex_runtime::service::CodexRuntimeState::new(&app_data_dir)?;
 
             let state = tauri::async_runtime::block_on(async {
-                let scheduler = scheduler::cron::CronScheduler::new().await?;
+                let scheduler = scheduler::CronScheduler::new().await?;
                 scheduler.start().await?;
                 store::AppState::new_sync(&app_handle, scheduler)
             })?;
@@ -325,6 +333,10 @@ fn run_impl() {
             app.manage(codex_runtime);
             let managed = state.clone();
             app.manage(managed);
+            crate::codex_runtime::im_bridge::spawn_im_bridge_worker(
+                state.clone(),
+                app_data_dir.clone(),
+            );
 
             // Warm the UIA-click calibration cache as early as possible so the
             // very first `uia.click` after launch (e.g. via the headless agent)
@@ -489,6 +501,7 @@ fn run_impl() {
                                             );
                                             flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
+                                        let _ = interrupt_codex_background(&app_h, &session_id).await;
                                         {
                                             let mut queues = im_message_queues.lock().await;
                                             queues.remove(&session_id);
@@ -645,6 +658,7 @@ fn run_impl() {
                                         flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                     }
                                 }
+                                let _ = interrupt_codex_background(&app_h, &session_id).await;
 
                                 let state_ref = store::AppState {
                                     db: db.clone(),
@@ -666,118 +680,16 @@ fn run_impl() {
                                 };
 
                                 let gw = gateway.clone();
-                                let inbound_media = msg.media.clone();
-                                let msg_channel = msg.channel.clone();
                                 tokio::spawn(async move {
                                     let _session_guard = session_lock.lock().await;
                                     info!("IM session lock acquired for {}", session_id);
-
-                                    let response = commands::chat::run_agent_headless(
+                                    run_im_agent_and_send_reply(
                                         &state_ref,
+                                        &gw,
                                         &session_id,
-                                        &msg.content,
-                                        inbound_media,
-                                        &msg_channel,
-                                        None,
+                                        &msg,
                                     )
                                     .await;
-
-                                    if let Err(e) = &response {
-                                        info!(
-                                            "run_agent_headless returned error for {}, emitting im_session_done: {}",
-                                            session_id, e
-                                        );
-                                        let _ = state_ref.app_handle.emit("im_session_done", &session_id);
-                                        return;
-                                    }
-
-                                    let (reply_text, reply_image, reply_image_mime) = match response {
-                                        Ok((text, img, mime)) => {
-                                            let t = if text.is_empty() && img.is_none() {
-                                                "（Agent 未返回内容）".to_string()
-                                            } else {
-                                                text
-                                            };
-                                            (t, img, mime)
-                                        }
-                                        Err(_) => unreachable!("handled above"),
-                                    };
-
-                                    let (clean_text, file_path) = extract_send_marker(&reply_text);
-
-                                    let media = file_path
-                                        .and_then(|p| match std::fs::read(&p) {
-                                            Ok(data) => {
-                                                let mime = guess_mime_from_path(&p);
-                                                let filename = std::path::Path::new(&p)
-                                                    .file_name()
-                                                    .map(|n| n.to_string_lossy().into_owned())
-                                                    .unwrap_or_else(|| "file".to_string());
-                                                info!(
-                                                    "extract_send_marker: read {} bytes from '{}', mime={}",
-                                                    data.len(),
-                                                    p,
-                                                    mime
-                                                );
-                                                Some(gateway::MediaAttachment {
-                                                    media_type: mime,
-                                                    url: None,
-                                                    data: Some(data),
-                                                    filename: Some(filename),
-                                                })
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(
-                                                    "extract_send_marker: failed to read file '{}': {}",
-                                                    p,
-                                                    e
-                                                );
-                                                None
-                                            }
-                                        })
-                                        .or_else(|| {
-                                            reply_image.map(|data| gateway::MediaAttachment {
-                                                media_type: reply_image_mime
-                                                    .unwrap_or_else(|| "image/jpeg".to_string()),
-                                                url: None,
-                                                data: Some(data),
-                                                filename: Some("image.jpg".to_string()),
-                                            })
-                                        });
-
-                                    let (recipient, routing_state) = resolve_im_outbound_route(
-                                        &state_ref.db,
-                                        &session_id,
-                                        &msg.channel,
-                                        &msg.reply_target,
-                                        msg.routing_state.clone(),
-                                    )
-                                    .await;
-
-                                    let outbound = gateway::OutboundMessage {
-                                        channel: msg.channel.clone(),
-                                        recipient: recipient.clone(),
-                                        content: clean_text,
-                                        reply_to: Some(msg.id.clone()),
-                                        media,
-                                        routing_state,
-                                    };
-                                    info!(
-                                        "Sending IM reply via channel={} recipient={} len={}",
-                                        msg.channel,
-                                        recipient,
-                                        outbound.content.len()
-                                    );
-                                    match gw.send(&outbound).await {
-                                        Ok(()) => info!("IM reply sent successfully via {}", msg.channel),
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Failed to send IM reply via {}: {}",
-                                                msg.channel,
-                                                e
-                                            )
-                                        }
-                                    }
                                 });
                             }
                         }
@@ -1132,54 +1044,66 @@ fn run_impl() {
                 let mut startup_trial_state = state.clone();
                 startup_trial_state.app_handle = app_handle.clone();
 
-                if let Ok(prompt) = std::env::var("PISCIS_HEADLESS_PROMPT") {
+                if let Some(prompt) = runtime_env("WORKBUDDY_HEADLESS_PROMPT", "PISCIS_HEADLESS_PROMPT") {
                     if !prompt.trim().is_empty() {
                         let state_ref = startup_headless_state;
                         let app_for_headless = app_handle.clone();
-                        let exit_after =
-                            std::env::var("PISCIS_EXIT_AFTER_HEADLESS_PROMPT").ok().as_deref()
-                                == Some("1");
-                        let session_id = std::env::var("PISCIS_HEADLESS_SESSION_ID")
-                            .unwrap_or_else(|_| "startup_headless".to_string());
-                        let session_title = std::env::var("PISCIS_HEADLESS_SESSION_TITLE")
-                            .unwrap_or_else(|_| "Startup Headless Task".to_string());
-                        let channel = std::env::var("PISCIS_HEADLESS_CHANNEL")
-                            .unwrap_or_else(|_| "startup".to_string());
-                        let extra_system_context =
-                            std::env::var("PISCIS_HEADLESS_EXTRA_SYSTEM_CONTEXT").ok();
+                        let exit_after = runtime_env(
+                            "WORKBUDDY_EXIT_AFTER_HEADLESS_PROMPT",
+                            "PISCIS_EXIT_AFTER_HEADLESS_PROMPT",
+                        )
+                        .as_deref()
+                            == Some("1");
+                        let session_id = runtime_env(
+                            "WORKBUDDY_HEADLESS_SESSION_ID",
+                            "PISCIS_HEADLESS_SESSION_ID",
+                        )
+                            .unwrap_or_else(|| "startup_headless".to_string());
+                        let session_title = runtime_env(
+                            "WORKBUDDY_HEADLESS_SESSION_TITLE",
+                            "PISCIS_HEADLESS_SESSION_TITLE",
+                        )
+                            .unwrap_or_else(|| "Startup Headless Task".to_string());
+                        let channel = runtime_env(
+                            "WORKBUDDY_HEADLESS_CHANNEL",
+                            "PISCIS_HEADLESS_CHANNEL",
+                        )
+                            .unwrap_or_else(|| "startup".to_string());
+                        let extra_system_context = runtime_env(
+                            "WORKBUDDY_HEADLESS_EXTRA_SYSTEM_CONTEXT",
+                            "PISCIS_HEADLESS_EXTRA_SYSTEM_CONTEXT",
+                        );
                         tauri::async_runtime::spawn(async move {
                             tracing::info!(
-                                "Startup hook: running headless Piscis task session_id={}",
+                                "Startup hook: running headless Codex task session_id={}",
                                 session_id
                             );
-                            match commands::chat::run_agent_headless(
+                            match run_codex_background(
                                 &state_ref,
                                 &session_id,
                                 &prompt,
                                 None,
                                 &channel,
-                                Some(commands::chat::HeadlessRunOptions {
-                                    pool_session_id: None,
-                                    extra_system_context,
+                                CodexBackgroundOptions {
+                                    extra_context: extra_system_context,
                                     session_title: Some(session_title),
                                     session_source: Some("startup_hook".to_string()),
-                                    scene_kind: Some(commands::config::scene::SceneKind::IMHeadless),
-                                    ..commands::chat::HeadlessRunOptions::default()
-                                }),
+                                    ..CodexBackgroundOptions::default()
+                                },
                             )
                             .await
                             {
-                                Ok((text, _, _)) => tracing::info!(
-                                    "Startup hook: headless Piscis task completed, chars={}, preview={}",
-                                    text.chars().count(),
-                                    text.chars().take(400).collect::<String>()
+                                Ok(output) => tracing::info!(
+                                    "Startup hook: headless Codex task completed, chars={}, preview={}",
+                                    output.final_message.chars().count(),
+                                    output.final_message.chars().take(400).collect::<String>()
                                 ),
                                 Err(e) => {
-                                    tracing::error!("Startup hook: headless Piscis task failed: {}", e)
+                                    tracing::error!("Startup hook: headless Codex task failed: {}", e)
                                 }
                             }
                             if exit_after {
-                                tracing::info!("Startup hook: exiting after headless Piscis task");
+                                tracing::info!("Startup hook: exiting after headless Codex task");
                                 app_for_headless.exit(0);
                             }
                         });
@@ -1343,7 +1267,6 @@ fn run_impl() {
             commands::chat::set_session_workspace,
             commands::chat::get_messages,
             commands::chat::list_session_artifacts,
-            commands::chat::chat_send,
             commands::chat::chat_cancel,
             commands::journal::journal_list_changes,
             commands::journal::journal_undo_last,

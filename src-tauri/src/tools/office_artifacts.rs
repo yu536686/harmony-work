@@ -113,11 +113,7 @@ fn resolve_path(path: &str, workspace_root: &Path) -> PathBuf {
     }
 }
 
-fn normalize_embedded_asset_paths(
-    kind: ArtifactKind,
-    input: &mut Value,
-    workspace_root: &Path,
-) {
+fn normalize_embedded_asset_paths(kind: ArtifactKind, input: &mut Value, workspace_root: &Path) {
     let collection = match kind {
         ArtifactKind::Document => "sections",
         ArtifactKind::Presentation => "slides",
@@ -887,10 +883,7 @@ mod tests {
 
     #[test]
     fn generation_artifacts_are_core_tools_but_visual_rendering_stays_deferred() {
-        assert_eq!(
-            DocumentArtifactTool.metadata().exposure,
-            ToolExposure::Core
-        );
+        assert_eq!(DocumentArtifactTool.metadata().exposure, ToolExposure::Core);
         assert_eq!(
             PresentationArtifactTool.metadata().exposure,
             ToolExposure::Core
@@ -930,18 +923,19 @@ mod tests {
         normalize_embedded_asset_paths(ArtifactKind::Document, &mut document, workspace);
         assert_eq!(
             document["sections"][0]["image_path"],
-            Value::String(workspace.join("images/report.png").to_string_lossy().to_string())
+            Value::String(
+                workspace
+                    .join("images/report.png")
+                    .to_string_lossy()
+                    .to_string()
+            )
         );
 
         let absolute = workspace.join("cover.png");
         let mut presentation = json!({
             "slides": [{ "image_path": absolute.to_string_lossy() }]
         });
-        normalize_embedded_asset_paths(
-            ArtifactKind::Presentation,
-            &mut presentation,
-            workspace,
-        );
+        normalize_embedded_asset_paths(ArtifactKind::Presentation, &mut presentation, workspace);
         assert_eq!(
             presentation["slides"][0]["image_path"],
             Value::String(absolute.to_string_lossy().to_string())

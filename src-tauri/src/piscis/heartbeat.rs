@@ -1,5 +1,4 @@
-use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCIS_POOL};
-use crate::commands::config::scene::SceneKind;
+use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::notify::{
     dispatch_notification, NotificationLevel, NotificationRequest, NotificationTarget, NotifierDeps,
 };
@@ -15,9 +14,9 @@ use piscis_core::project_state::contains_delegated_piscis_mention;
 use piscis_core::project_state::ProjectDecision;
 use tracing::warn;
 
-const HEARTBEAT_SOURCE: &str = crate::commands::chat::SESSION_SOURCE_PISCIS_HEARTBEAT_GLOBAL;
-const HEARTBEAT_POOL_SOURCE: &str = SESSION_SOURCE_PISCIS_POOL;
-const HEARTBEAT_GLOBAL_SESSION_ID: &str = "piscis_heartbeat_global";
+const HEARTBEAT_SOURCE: &str = "codex_heartbeat_global";
+const HEARTBEAT_POOL_SOURCE: &str = "codex_staffdeck";
+const HEARTBEAT_GLOBAL_SESSION_ID: &str = "workbuddy_heartbeat_global";
 
 async fn run_mechanical_pool_recovery(state: &AppState) -> Result<Vec<String>, String> {
     let pools = {
@@ -263,7 +262,7 @@ async fn dispatch_single_pool_attention(
     ensure_heartbeat_session(
         state,
         &attention.session_id,
-        &format!("Piscis · {}", attention.pool_name),
+        &format!("小亨 · {}", attention.pool_name),
         HEARTBEAT_POOL_SOURCE,
     )
     .await?;
@@ -289,15 +288,14 @@ async fn dispatch_single_pool_attention(
         ""
     };
     let pool_msg_before = latest_pool_message_id(state, &attention.pool_id).await;
-    let (response_text, _, _) = run_agent_headless(
+    let output = run_codex_background(
         state,
         &attention.session_id,
         &heartbeat_message,
         None,
         channel,
-        Some(HeadlessRunOptions {
-            pool_session_id: Some(attention.pool_id.clone()),
-            extra_system_context: Some(format!(
+        CodexBackgroundOptions {
+            extra_context: Some(format!(
                 "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
                  Assessment: {} | Decision: {:?}\n\
                  {}\
@@ -315,13 +313,13 @@ async fn dispatch_single_pool_attention(
                 mention_reply_rules,
                 attention.pool_id,
             )),
-            session_title: Some(format!("Piscis · {}", attention.pool_name)),
+            session_title: Some(format!("小亨 · {}", attention.pool_name)),
             session_source: Some(HEARTBEAT_POOL_SOURCE.into()),
-            scene_kind: Some(SceneKind::HeartbeatSupervisor),
-            ..HeadlessRunOptions::default()
-        }),
+            ..CodexBackgroundOptions::default()
+        },
     )
     .await?;
+    let response_text = output.final_message;
 
     let coordinated = piscis_pool_activity_since(state, &attention.pool_id, pool_msg_before).await;
     let needs_follow_up = !coordinated
@@ -367,11 +365,11 @@ pub async fn dispatch_heartbeat(
         ensure_heartbeat_session(
             state,
             HEARTBEAT_GLOBAL_SESSION_ID,
-            "Piscis Heartbeat",
+            "小亨后台巡检",
             HEARTBEAT_SOURCE,
         )
         .await?;
-        run_agent_headless(
+        run_codex_background(
             state,
             HEARTBEAT_GLOBAL_SESSION_ID,
             &if recovery_notes.is_empty() {
@@ -389,12 +387,11 @@ pub async fn dispatch_heartbeat(
             },
             None,
             channel,
-            Some(HeadlessRunOptions {
-                session_title: Some("Piscis Heartbeat".into()),
+            CodexBackgroundOptions {
+                session_title: Some("小亨后台巡检".into()),
                 session_source: Some(HEARTBEAT_SOURCE.into()),
-                scene_kind: Some(SceneKind::HeartbeatSupervisor),
-                ..HeadlessRunOptions::default()
-            }),
+                ..CodexBackgroundOptions::default()
+            },
         )
         .await
         .map(|_| ())

@@ -3,9 +3,7 @@ use crate::host::DesktopHostTools;
 use crate::skills::loader::SkillLoader;
 use crate::store::{Database, Settings};
 use piscis_core::scene::RegistryProfile;
-pub use piscis_core::scene::{
-    HistorySliceMode, MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
-};
+pub use piscis_core::scene::{MemorySliceMode, SceneKind, ScenePolicy};
 use piscis_kernel::agent::tool::ToolRegistry;
 use piscis_kernel::tools::register_mcp_tools;
 use robotz_browser::SharedBrowserManager;

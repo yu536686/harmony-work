@@ -9,12 +9,13 @@
 //! stays out of the JSON plumbing.
 
 use crate::{
+    codex_runtime::background::{run_codex_background, CodexBackgroundOptions},
     commands,
     headless_cli::{
-        disabled_tools_for_mode, tool_profile, DisabledToolInfo, HeadlessCliMode,
-        HeadlessCliRequest, HeadlessCliResponse, PoolWaitSummary,
+        disabled_tools_for_mode, DisabledToolInfo, HeadlessCliMode, HeadlessCliRequest,
+        HeadlessCliResponse, PoolWaitSummary,
     },
-    store, tools,
+    store,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -274,32 +275,22 @@ pub async fn run_cli_headless_request(
     app_handle: tauri::AppHandle,
     request: HeadlessCliRequest,
 ) -> Result<HeadlessCliResponse, String> {
-    let (builtin_tool_overrides, workspace_override) = {
-        let settings = state.settings.lock().await;
-        (
-            tools::apply_runtime_tool_profile(
-                &settings.builtin_tool_enabled,
-                tool_profile(request.mode),
-            ),
-            request
-                .workspace
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(ToString::to_string),
-        )
-    };
+    let workspace_override = request
+        .workspace
+        .as_deref()
+        .map(str::trim)
+        .filter(|workspace| !workspace.is_empty())
+        .map(std::path::PathBuf::from);
 
     let extra_context = cli_extra_system_context(&request);
     let disabled_tools = cli_disabled_tools(request.mode);
 
-    let (session_id, scene_kind, pool_id) = match request.mode {
+    let (session_id, pool_id) = match request.mode {
         HeadlessCliMode::Piscis => (
             request
                 .session_id
                 .clone()
                 .unwrap_or_else(|| format!("headless_cli_{}", chrono::Utc::now().timestamp())),
-            commands::config::scene::SceneKind::IMHeadless,
             None,
         ),
         HeadlessCliMode::Pool => {
@@ -308,8 +299,7 @@ pub async fn run_cli_headless_request(
                 request
                     .session_id
                     .clone()
-                    .unwrap_or_else(|| commands::chat::pool_piscis_session_id(&pool.id)),
-                commands::config::scene::SceneKind::PoolCoordinator,
+                    .unwrap_or_else(|| commands::chat::pool_coordinator_session_id(&pool.id)),
                 Some(pool.id),
             )
         }
@@ -322,31 +312,25 @@ pub async fn run_cli_headless_request(
             HeadlessCliMode::Piscis => "Headless CLI Task".to_string(),
             HeadlessCliMode::Pool => "Headless Pool Coordinator".to_string(),
         });
-    let session_source = Some(match request.mode {
-        HeadlessCliMode::Piscis => "headless_cli".to_string(),
-        HeadlessCliMode::Pool => commands::chat::SESSION_SOURCE_PISCIS_POOL.to_string(),
-    });
+    let session_source = match request.mode {
+        HeadlessCliMode::Piscis => "codex_cli".to_string(),
+        HeadlessCliMode::Pool => "codex_staffdeck".to_string(),
+    };
     let channel = request.channel.clone().unwrap_or_else(|| "cli".to_string());
 
-    let options = commands::chat::HeadlessRunOptions {
-        pool_session_id: pool_id.clone(),
-        extra_system_context: Some(extra_context),
-        session_title: Some(session_title),
-        session_source,
-        scene_kind: Some(scene_kind),
-        workspace_root_override: workspace_override,
-        builtin_tool_overrides,
-        context_toggles: request.context_toggles.clone(),
-        ..commands::chat::HeadlessRunOptions::default()
-    };
-
-    let (response_text, _, _) = commands::chat::run_agent_headless(
+    let output = run_codex_background(
         &state,
         &session_id,
         &request.prompt,
         None,
         &channel,
-        Some(options),
+        CodexBackgroundOptions {
+            session_title: Some(session_title),
+            session_source: Some(session_source),
+            workspace_root: workspace_override,
+            extra_context: Some(extra_context),
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -373,7 +357,7 @@ pub async fn run_cli_headless_request(
         mode: request.mode.as_str().to_string(),
         session_id,
         pool_id,
-        response_text,
+        response_text: output.final_message,
         disabled_tools,
         pool_wait,
     })

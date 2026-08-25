@@ -1,8 +1,6 @@
 /// Koi (锦鲤) commands — CRUD for persistent independent Agents.
-use crate::commands::chat::{
-    pool_piscis_session_id, run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCIS_POOL,
-};
-use crate::commands::config::scene::SceneKind;
+use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
+use crate::commands::chat::pool_coordinator_session_id;
 use crate::piscis::heartbeat::ensure_heartbeat_session;
 use crate::pool::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::store::AppState;
@@ -278,7 +276,7 @@ pub async fn update_koi(
 
         // Trigger Piscis in the first affected pool's inbox session
         let (first_pool_id, first_pool_name) = &affected_pools[0];
-        let session_id = pool_piscis_session_id(first_pool_id);
+        let session_id = pool_coordinator_session_id(first_pool_id);
         let app_clone = app.clone();
         let session_id_clone = session_id.clone();
         let pool_name_clone = first_pool_name.clone();
@@ -289,27 +287,24 @@ pub async fn update_koi(
             let _ = ensure_heartbeat_session(
                 &st,
                 &session_id_clone,
-                &format!("Piscis · {}", pool_name_clone),
-                SESSION_SOURCE_PISCIS_POOL,
+                &format!("小亨 · {}", pool_name_clone),
+                "codex_staffdeck",
             )
             .await;
-            let _ = run_agent_headless(
+            let _ = run_codex_background(
                 &st,
                 &session_id_clone,
                 &piscis_prompt_clone,
                 None,
                 "heartbeat",
-                Some(HeadlessRunOptions {
-                    pool_session_id: Some(pool_id_clone),
-                    extra_system_context: Some(
-                        "用户手动调整了团队成员配置，请根据当前项目状态决定是否需要重新协调工作。"
-                            .to_string(),
-                    ),
-                    session_title: Some(format!("Piscis · {}", pool_name_clone)),
-                    session_source: Some(SESSION_SOURCE_PISCIS_POOL.to_string()),
-                    scene_kind: Some(SceneKind::PoolCoordinator),
-                    ..HeadlessRunOptions::default()
-                }),
+                CodexBackgroundOptions {
+                    extra_context: Some(format!(
+                        "用户手动调整了团队成员配置，请根据当前项目状态决定是否需要重新协调工作。项目 ID: {pool_id_clone}"
+                    )),
+                    session_title: Some(format!("小亨 · {}", pool_name_clone)),
+                    session_source: Some("codex_staffdeck".to_string()),
+                    ..CodexBackgroundOptions::default()
+                },
             )
             .await;
         });
@@ -421,7 +416,7 @@ pub async fn delete_koi(
         );
 
         let (first_pool_id, first_pool_name) = &affected_pools[0];
-        let session_id = pool_piscis_session_id(first_pool_id);
+        let session_id = pool_coordinator_session_id(first_pool_id);
         let app_clone = app.clone();
         let session_id_clone = session_id.clone();
         let pool_name_clone = first_pool_name.clone();
@@ -431,27 +426,24 @@ pub async fn delete_koi(
             let _ = ensure_heartbeat_session(
                 &st,
                 &session_id_clone,
-                &format!("Piscis · {}", pool_name_clone),
-                SESSION_SOURCE_PISCIS_POOL,
+                &format!("小亨 · {}", pool_name_clone),
+                "codex_staffdeck",
             )
             .await;
-            let _ = run_agent_headless(
+            let _ = run_codex_background(
                 &st,
                 &session_id_clone,
                 &piscis_prompt,
                 None,
                 "heartbeat",
-                Some(HeadlessRunOptions {
-                    pool_session_id: Some(pool_id_clone),
-                    extra_system_context: Some(
-                        "用户解雇了一名团队成员，请根据当前项目状态决定是否需要重新分配工作。"
-                            .to_string(),
-                    ),
-                    session_title: Some(format!("Piscis · {}", pool_name_clone)),
-                    session_source: Some(SESSION_SOURCE_PISCIS_POOL.to_string()),
-                    scene_kind: Some(SceneKind::PoolCoordinator),
-                    ..HeadlessRunOptions::default()
-                }),
+                CodexBackgroundOptions {
+                    extra_context: Some(format!(
+                        "用户解雇了一名团队成员，请根据当前项目状态决定是否需要重新分配工作。项目 ID: {pool_id_clone}"
+                    )),
+                    session_title: Some(format!("小亨 · {}", pool_name_clone)),
+                    session_source: Some("codex_staffdeck".to_string()),
+                    ..CodexBackgroundOptions::default()
+                },
             )
             .await;
         });
@@ -548,7 +540,7 @@ pub async fn set_koi_active(
                 koi_name
             );
             let (first_pool_id, first_pool_name) = &affected_pools[0];
-            let session_id = pool_piscis_session_id(first_pool_id);
+            let session_id = pool_coordinator_session_id(first_pool_id);
             let app_clone = app.clone();
             let session_id_clone = session_id.clone();
             let pool_name_clone = first_pool_name.clone();
@@ -558,26 +550,24 @@ pub async fn set_koi_active(
                 let _ = ensure_heartbeat_session(
                     &st,
                     &session_id_clone,
-                    &format!("Piscis · {}", pool_name_clone),
-                    SESSION_SOURCE_PISCIS_POOL,
+                    &format!("小亨 · {}", pool_name_clone),
+                    "codex_staffdeck",
                 )
                 .await;
-                let _ = run_agent_headless(
+                let _ = run_codex_background(
                     &st,
                     &session_id_clone,
                     &piscis_prompt,
                     None,
                     "heartbeat",
-                    Some(HeadlessRunOptions {
-                        pool_session_id: Some(pool_id_clone),
-                        extra_system_context: Some(
-                            "团队成员回归上班，请检查是否有工作需要重新安排。".to_string(),
-                        ),
-                        session_title: Some(format!("Piscis · {}", pool_name_clone)),
-                        session_source: Some(SESSION_SOURCE_PISCIS_POOL.to_string()),
-                        scene_kind: Some(SceneKind::PoolCoordinator),
-                        ..HeadlessRunOptions::default()
-                    }),
+                    CodexBackgroundOptions {
+                        extra_context: Some(format!(
+                            "团队成员回归上班，请检查是否有工作需要重新安排。项目 ID: {pool_id_clone}"
+                        )),
+                        session_title: Some(format!("小亨 · {}", pool_name_clone)),
+                        session_source: Some("codex_staffdeck".to_string()),
+                        ..CodexBackgroundOptions::default()
+                    },
                 )
                 .await;
             });
@@ -660,7 +650,7 @@ pub async fn set_koi_active(
                 pool_names.join("、")
             );
             let (first_pool_id, first_pool_name) = &affected_pools[0];
-            let session_id = pool_piscis_session_id(first_pool_id);
+            let session_id = pool_coordinator_session_id(first_pool_id);
             let app_clone = app.clone();
             let session_id_clone = session_id.clone();
             let pool_name_clone = first_pool_name.clone();
@@ -671,27 +661,24 @@ pub async fn set_koi_active(
                 let _ = ensure_heartbeat_session(
                     &st,
                     &session_id_clone,
-                    &format!("Piscis · {}", pool_name_clone),
-                    SESSION_SOURCE_PISCIS_POOL,
+                    &format!("小亨 · {}", pool_name_clone),
+                    "codex_staffdeck",
                 )
                 .await;
-                let _ = run_agent_headless(
+                let _ = run_codex_background(
                     &st,
                     &session_id_clone,
                     &piscis_prompt,
                     None,
                     "heartbeat",
-                    Some(HeadlessRunOptions {
-                        pool_session_id: Some(pool_id_clone),
-                        extra_system_context: Some(
-                            "团队成员进入休假，请根据当前项目状态决定是否需要重新分配工作。"
-                                .to_string(),
-                        ),
-                        session_title: Some(format!("Piscis · {}", pool_name_clone)),
-                        session_source: Some(SESSION_SOURCE_PISCIS_POOL.to_string()),
-                        scene_kind: Some(SceneKind::PoolCoordinator),
-                        ..HeadlessRunOptions::default()
-                    }),
+                    CodexBackgroundOptions {
+                        extra_context: Some(format!(
+                            "团队成员进入休假，请根据当前项目状态决定是否需要重新分配工作。项目 ID: {pool_id_clone}"
+                        )),
+                        session_title: Some(format!("小亨 · {}", pool_name_clone)),
+                        session_source: Some("codex_staffdeck".to_string()),
+                        ..CodexBackgroundOptions::default()
+                    },
                 )
                 .await;
             });

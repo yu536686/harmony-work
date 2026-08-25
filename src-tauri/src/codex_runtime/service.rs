@@ -4,8 +4,11 @@ use crate::codex_runtime::config::{
     PINNED_CODEX_VERSION,
 };
 use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
+use crate::codex_runtime::headless::{
+    build_exec_command, run_codex_exec, CodexExecError, CodexExecOptions, CodexExecResult,
+};
 use crate::codex_runtime::process::{
-    AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
+    resolve_codex_executable, AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
 };
 use crate::codex_runtime::runner::{
     approval_result, extract_thread_id, extract_turn_id, thread_resume_params, thread_start_params,
@@ -21,6 +24,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 
@@ -238,6 +242,7 @@ pub struct CodexRuntimeState {
     pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
     event_adapter: Arc<Mutex<CodexEventAdapter>>,
     active_turns: Arc<Mutex<HashMap<String, ActiveCodexTurn>>>,
+    active_execs: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 pub struct CodexTurnExecution {
@@ -274,6 +279,8 @@ pub enum CodexRuntimeStateError {
     Process(#[from] CodexProcessError),
     #[error(transparent)]
     SessionMap(#[from] CodexSessionMapError),
+    #[error(transparent)]
+    Exec(#[from] CodexExecError),
     #[error("Codex app-server request failed: {0}")]
     AppServer(#[from] AppServerError),
     #[error("Codex app-server response did not include {0}")]
@@ -327,6 +334,7 @@ impl CodexRuntimeState {
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             event_adapter: Arc::new(Mutex::new(CodexEventAdapter::default())),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
+            active_execs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -362,6 +370,66 @@ impl CodexRuntimeState {
 
     pub fn sessions(&self) -> Arc<CodexSessionMapStore> {
         Arc::clone(&self.sessions)
+    }
+
+    pub async fn execute_headless(
+        &self,
+        workbuddy_session_id: &str,
+        mut options: CodexExecOptions,
+    ) -> Result<CodexExecResult, CodexRuntimeStateError> {
+        if options.thread_id.is_none() {
+            options.thread_id = self
+                .sessions
+                .get(workbuddy_session_id)?
+                .map(|binding| binding.codex_thread_id);
+        }
+        let executable = resolve_codex_executable(self.executable_override.clone())?;
+        let command = build_exec_command(&executable, &options);
+        let environment = self.environment.lock().await.clone();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        if let Some(previous) = self
+            .active_execs
+            .lock()
+            .await
+            .insert(workbuddy_session_id.to_string(), cancellation.clone())
+        {
+            previous.store(true, Ordering::Relaxed);
+        }
+        let result = run_codex_exec(
+            command,
+            &self.codex_home,
+            &environment,
+            Some(cancellation),
+        )
+        .await;
+        self.active_execs.lock().await.remove(workbuddy_session_id);
+        let result = result?;
+        if let Some(thread_id) = result.thread_id.as_deref() {
+            let workspace_root = options.workspace_root.display().to_string();
+            self.sessions.bind(NewCodexSessionBinding {
+                workbuddy_session_id,
+                codex_thread_id: thread_id,
+                workspace_root: &workspace_root,
+                provider: &options.provider,
+                model: &options.model,
+            })?;
+        }
+        Ok(result)
+    }
+
+    pub async fn interrupt_headless(&self, workbuddy_session_id: &str) -> bool {
+        let active = self
+            .active_execs
+            .lock()
+            .await
+            .get(workbuddy_session_id)
+            .cloned();
+        if let Some(active) = active {
+            active.store(true, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     pub async fn ensure_started(&self) -> Result<Arc<CodexProcess>, CodexRuntimeStateError> {
@@ -759,7 +827,7 @@ fn parse_permission_mode(value: &str) -> CodexPermissionMode {
     }
 }
 
-fn permission_mode_from_settings(
+pub(crate) fn permission_mode_from_settings(
     confirm_shell_commands: bool,
     confirm_file_writes: bool,
 ) -> CodexPermissionMode {
@@ -802,7 +870,7 @@ fn parse_model_override(
     }
 }
 
-fn resolve_model_selection(
+pub(crate) fn resolve_model_selection(
     settings: &crate::store::Settings,
     provider: Option<String>,
     model: Option<String>,
@@ -1259,6 +1327,27 @@ mod tests {
         assert_eq!(diagnostic.display_version, "b1.0.0");
         assert_eq!(diagnostic.target_codex_version, "0.149.0");
         assert_eq!(diagnostic.mapped_sessions, 0);
+
+        drop(state);
+        std::fs::remove_dir_all(directory).expect("remove state dir");
+    }
+
+    #[tokio::test]
+    async fn interrupts_active_headless_session() {
+        let directory =
+            std::env::temp_dir().join(format!("codex-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).expect("create state dir");
+        let state = CodexRuntimeState::new(&directory).expect("state");
+        let flag = Arc::new(AtomicBool::new(false));
+        state
+            .active_execs
+            .lock()
+            .await
+            .insert("session-1".to_string(), flag.clone());
+
+        assert!(state.interrupt_headless("session-1").await);
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(!state.interrupt_headless("missing").await);
 
         drop(state);
         std::fs::remove_dir_all(directory).expect("remove state dir");

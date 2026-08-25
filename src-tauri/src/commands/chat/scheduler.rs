@@ -1,12 +1,5 @@
-use crate::commands::chat::{persist_task_spine_from_plan_state, render_task_state_section};
-use crate::host::DesktopHostTools;
+use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::store::{db::ScheduledTask, AppState, Database, Settings};
-use piscis_kernel::agent::harness::HarnessConfig;
-use piscis_kernel::agent::messages::AgentEvent;
-use piscis_kernel::agent::tool::ToolContext;
-use piscis_kernel::llm::{build_client, LlmMessage, MessageContent};
-use piscis_kernel::policy::PolicyGate;
-use piscis_kernel::project_context::render_project_instruction_context;
 use robotz_browser::SharedBrowserManager;
 use serde::Serialize;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -14,7 +7,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-const TASK_MAX_RETRIES: usize = 3;
 const MEMORY_CONSOLIDATION_TASK_NAME: &str = "Memory Consolidation";
 const MEMORY_CONSOLIDATION_MARKER: &str = "[template:memory_consolidation]";
 const MEMORY_CONSOLIDATION_DEFAULT_CRON: &str = "0 4 * * *";
@@ -45,19 +37,10 @@ fn build_scheduler_session_title(task_name: Option<&str>, task_id: &str) -> Stri
     format!("[定时] {}", title)
 }
 
-fn render_piscis_personal_prompt(prompt: &str) -> String {
-    let trimmed = prompt.trim();
-    if trimmed.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n## Personal Piscis Prompt\n{}\n", trimmed)
-    }
-}
-
 fn build_memory_consolidation_template() -> String {
     format!(
         "{marker}\n\
-         You are running Piscis's background memory consolidation pass.\n\
+         You are running WorkBuddy's background memory consolidation pass.\n\
          Review the supplied snapshot of recent sessions, task spines, and stored memories.\n\
          Your job is to preserve only high-signal, durable information.\n\n\
          Rules:\n\
@@ -78,7 +61,7 @@ fn is_memory_consolidation_prompt(task_prompt: &str) -> bool {
 fn build_memory_consolidation_snapshot(db: &Database) -> String {
     let sessions = db.list_sessions(8, 0).unwrap_or_default();
     let task_states = db.list_recent_task_states(8).unwrap_or_default();
-    let memories = db.list_memories_for_owner("piscis").unwrap_or_default();
+    let memories = db.list_memories_for_owner("xiaoheng").unwrap_or_default();
 
     let session_lines = if sessions.is_empty() {
         "- No recent sessions".to_string()
@@ -176,7 +159,7 @@ fn resolve_memory_consolidation_prompt(task_prompt: &str, db: &Database) -> Stri
 fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> String {
     let session = db.get_session(session_id).ok().flatten();
     let task_states = db.list_recent_task_states(4).unwrap_or_default();
-    let memories = db.list_memories_for_owner("piscis").unwrap_or_default();
+    let memories = db.list_memories_for_owner("xiaoheng").unwrap_or_default();
 
     let session_line = match session {
         Some(s) => {
@@ -650,376 +633,83 @@ pub async fn trigger_task_by_event(
     ))
 }
 
-/// Core task execution: runs the task_prompt through the Agent loop.
-/// Emits agent events on the "scheduler_task_{task_id}" Tauri event channel.
+/// Core task execution through Codex exec.
+/// Emits progress on the "scheduler_task_{task_id}" Tauri event channel.
 pub async fn execute_task(
     app: AppHandle,
     task_id: String,
     task_prompt: String,
     db: Arc<Mutex<Database>>,
-    settings: Arc<Mutex<Settings>>,
-    browser: SharedBrowserManager,
-    cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+    _settings: Arc<Mutex<Settings>>,
+    _browser: SharedBrowserManager,
+    _cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
 ) {
-    info!("Executing scheduled task: {}", task_id);
+    info!("Executing scheduled task with codex exec: {}", task_id);
     let task_name = {
         let db = db.lock().await;
+        let _ = db.record_task_run(&task_id);
         db.get_task(&task_id).ok().flatten().map(|task| task.name)
     };
     let session_title = build_scheduler_session_title(task_name.as_deref(), &task_id);
+    let effective_task_prompt = {
+        let db = db.lock().await;
+        resolve_memory_consolidation_prompt(&task_prompt, &db)
+    };
+    let notify_context = {
+        let db = db.lock().await;
+        db.get_scheduled_task_notify_targets(&task_id)
+            .ok()
+            .flatten()
+            .filter(|targets| !targets.trim().is_empty())
+            .map(|targets| {
+                format!(
+                    "本任务配置的通知目标为：{targets}。需要发送结果时，使用 WorkBuddy MCP 的 IM 工具解析并投递，不要猜测收件人。"
+                )
+            })
+            .unwrap_or_default()
+    };
+    let scope_id = format!("sched_{task_id}");
     {
         let db = db.lock().await;
-        let _ = db.record_task_run(&task_id);
-    }
-
-    let (
-        provider,
-        model,
-        api_key,
-        base_url,
-        workspace_root,
-        max_tokens,
-        policy_mode,
-        tool_rate_limit_per_minute,
-        tool_settings,
-        max_iterations,
-        builtin_tool_enabled,
-        allow_outside_workspace,
-        project_instruction_budget_chars,
-        enable_project_instructions,
-        piscis_personal_prompt,
-    ) = {
-        let s = settings.lock().await;
-        (
-            s.provider.clone(),
-            s.model.clone(),
-            s.active_api_key().to_string(),
-            s.custom_base_url.clone(),
-            s.workspace_root.clone(),
-            s.max_tokens,
-            s.policy_mode.clone(),
-            s.tool_rate_limit_per_minute,
-            std::sync::Arc::new(piscis_kernel::agent::tool::ToolSettings::from_settings(&s)),
-            s.max_iterations,
-            s.builtin_tool_enabled.clone(),
-            s.allow_outside_workspace,
-            s.project_instruction_budget_chars,
-            s.enable_project_instructions,
-            s.piscis_personal_prompt.clone(),
-        )
-    };
-    let effective_task_prompt = {
-        let db_lock = db.lock().await;
-        resolve_memory_consolidation_prompt(&task_prompt, &db_lock)
-    };
-    let task_notify_targets_section = {
-        let db_lock = db.lock().await;
-        match db_lock.get_scheduled_task_notify_targets(&task_id) {
-            Ok(Some(raw)) if !raw.trim().is_empty() => match serde_json::from_str::<Vec<String>>(&raw)
-            {
-                Ok(tokens) if !tokens.is_empty() => format!(
-                    "\n\nConfigured notify targets for this task: {:?}.\nPrefer using app_control(action=\"notify_user\", message=..., targets=<that exact target list>) for the default delivery path.\nIf you need raw IM output instead, use an im_binding target's binding_key with im_send_message.\nOnly fall back to im_channel_binding_lookup(task_id=...) when this configured target list is empty or insufficient.",
-                    tokens
-                ),
-                _ => String::new(),
-            },
-            _ => String::new(),
-        }
-    };
-
-    if api_key.is_empty() {
-        warn!(
-            "Scheduled task {}: API key not configured, skipping",
-            task_id
-        );
-        let db_lock = db.lock().await;
-        let _ = db_lock.update_task_run_status(&task_id, "error");
-        let _ = app.emit(
-            &format!("task_status_{}", task_id),
-            serde_json::json!({ "status": "error", "error": "API key not configured" }),
-        );
-        return;
-    }
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut flags = cancel_flags.lock().await;
-        flags.insert(format!("sched_{}", task_id), cancel.clone());
-    }
-
-    let client = build_client(
-        &provider,
-        &api_key,
-        if base_url.is_empty() {
-            None
-        } else {
-            Some(&base_url)
-        },
-    );
-    let user_tools_dir: Option<std::path::PathBuf> =
-        app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
-    let app_data_dir_s = app.path().app_data_dir().ok();
-    let registry = Arc::new(
-        DesktopHostTools {
-            browser: Some(browser),
-            db: Some(db.clone()),
-            settings: Some(settings.clone()),
-            app_handle: Some(app.clone()),
-            app_data_dir: app_data_dir_s,
-            skill_loader: None,
-            builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
-            user_tools_dir,
-            ..DesktopHostTools::default()
-        }
-        .fill_pool_defaults()
-        .build_registry(),
-    );
-    let policy = Arc::new(PolicyGate::with_profile_and_flags(
-        &workspace_root,
-        &policy_mode,
-        tool_rate_limit_per_minute,
-        allow_outside_workspace,
-    ));
-
-    // Inject task state for scheduled tasks (cross-run continuity)
-    let task_state_section = {
-        let db_lock = db.lock().await;
-        let scope_id = format!("sched_{}", task_id);
-        match db_lock.load_task_state("scheduled_task", &scope_id) {
-            Ok(Some(ts))
-                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
-            {
-                render_task_state_section("Previous Task State", "Progress from last run", &ts)
-            }
-            _ => String::new(),
-        }
-    };
-
-    let personal_prompt_section = render_piscis_personal_prompt(&piscis_personal_prompt);
-    let project_instruction_section = if enable_project_instructions {
-        match render_project_instruction_context(
-            std::path::Path::new(&workspace_root),
-            project_instruction_budget_chars as usize,
-        ) {
-            Ok(content) => content,
-            Err(error) => {
-                warn!(
-                    "Scheduled task {} failed to load project instructions: {}",
-                    task_id, error
-                );
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    let system_prompt = format!(
-        "You are Piscis, a Windows AI Agent running a scheduled task.\n\
-         Task ID: {}\n\
-         Today's date: {}\n\
-         IM routing rule: if this task needs to notify a user through WeChat / WeCom / Feishu / other IM, do NOT guess a binding_key. First use `im_channel_list` to see which channel names are configured and connected. If the desired channel is configured but disconnected, use `im_channel_connect`. Then prefer `im_channel_binding_list(channel=..., task_id=...)` to list candidate tokens for that named channel; use `im_channel_binding_lookup(task_id=...)` or `im_channel_binding_lookup(session_id=...)` only when you already know the exact runtime context you want.\n\
-         Example sequence for scheduled tasks:\n\
-         1. `im_channel_list()`\n\
-         2. if the required channel is disconnected: `im_channel_connect(channel=\"wechat\")`\n\
-         3. `im_channel_binding_list(channel=\"wechat\", task_id=\"{0}\")`\n\
-         4. `im_send_message(binding_key=\"<resolved binding_key>\", text=\"<short result summary>\")`\n\
-         If step 3 returns no candidates, state that there is no bound IM target for that channel instead of pretending the message was delivered.{}{}{}{}",
-        task_id,
-        chrono::Utc::now().format("%Y-%m-%d (%A) %H:%M:%S UTC"),
-        personal_prompt_section,
-        project_instruction_section,
-        task_notify_targets_section,
-        task_state_section
-    );
-    let scheduler_compaction_settings = {
-        let s = settings.lock().await;
-        piscis_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
-    };
-    let agent = HarnessConfig::for_scheduler(
-        model,
-        vec![],
-        registry,
-        policy,
-        system_prompt,
-        max_tokens,
-        0,
-        None,
-        100_000,
-        scheduler_compaction_settings,
-        db.clone(),
-    )
-    .into_agent_loop(client, None, None);
-
-    let ctx = ToolContext {
-        session_id: format!("sched_{}", task_id),
-        workspace_root: std::path::PathBuf::from(&workspace_root),
-        bypass_permissions: false,
-        settings: tool_settings,
-        max_iterations: Some(max_iterations),
-        memory_owner_id: "piscis".to_string(),
-        pool_session_id: None,
-        tool_use_id: None,
-        cancel: cancel.clone(),
-        loop_halt: None,
-    };
-
-    let messages = vec![LlmMessage {
-        role: "user".into(),
-        content: MessageContent::text(&effective_task_prompt),
-    }];
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
-
-    let app_clone = app.clone();
-    let task_id_clone = task_id.clone();
-    let forward_handle = tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let payload = serde_json::to_value(&event).unwrap_or_default();
-            let _ = app_clone.emit(&format!("scheduler_task_{}", task_id_clone), payload);
-        }
-    });
-
-    // Mark as running
-    {
-        let db_lock = db.lock().await;
-        let _ = db_lock.update_task_run_status(&task_id, "running");
+        let _ = db.update_task_run_status(&task_id, "running");
     }
     let _ = app.emit(
-        &format!("task_status_{}", task_id),
+        &format!("task_status_{task_id}"),
         serde_json::json!({ "status": "running" }),
     );
-
-    let mut attempt = 0usize;
-    let run_success;
-    let mut final_messages: Vec<LlmMessage> = Vec::new();
-    loop {
-        match agent
-            .run(
-                messages.clone(),
-                event_tx.clone(),
-                cancel.clone(),
-                ctx.clone(),
-            )
-            .await
-        {
-            Ok((msgs, _input_tokens, _output_tokens)) => {
-                final_messages = msgs;
-                run_success = true;
-                break;
-            }
-            Err(e) => {
-                attempt += 1;
-                warn!(
-                    "Scheduled task {} failed (attempt {}/{}): {}",
-                    task_id, attempt, TASK_MAX_RETRIES, e
-                );
-                if attempt >= TASK_MAX_RETRIES {
-                    run_success = false;
-                    let db_lock = db.lock().await;
-                    let _ = db_lock.update_task(&task_id, None, None, None, None, Some("error"));
-                    break;
-                }
-                let backoff = std::time::Duration::from_secs(1 << (attempt - 1));
-                tokio::time::sleep(backoff).await;
-            }
-        }
-    }
-
-    // Persist the agent conversation to the DB so the user can inspect
-    // what actually happened (e.g. whether im_send_message was called,
-    // whether it succeeded, and what the LLM said).
-    let scope_id = format!("sched_{}", task_id);
-    {
-        let db_lock = db.lock().await;
-        // Ensure a session exists for this scheduled task run.
-        let _ = db_lock.ensure_fixed_session(&scope_id, &session_title, "scheduled_task");
-        let _ = db_lock.rename_session(&scope_id, &session_title);
-        // Append the full conversation (user prompt + agent replies).
-        for msg in &final_messages {
-            let text = match &msg.content {
-                piscis_kernel::llm::MessageContent::Text(t) => t.clone(),
-                piscis_kernel::llm::MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let piscis_kernel::llm::ContentBlock::Text { text } = b {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            };
-            if !text.is_empty() {
-                let _ = db_lock.append_message(&scope_id, &msg.role, &text);
-            }
-        }
-    }
-
-    // Write final run status
-    let scope_id = format!("sched_{}", task_id);
-
-    // Log a summary of what the agent actually produced — this helps diagnose
-    // silent failures where the agent ran but did not call im_send_message.
-    let last_assistant_text = final_messages
-        .iter()
-        .rev()
-        .filter(|m| m.role == "assistant")
-        .find_map(|m| {
-            let t = match &m.content {
-                piscis_kernel::llm::MessageContent::Text(t) => Some(t.as_str()),
-                piscis_kernel::llm::MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let piscis_kernel::llm::ContentBlock::Text { text } = b {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .next(),
-            };
-            t.filter(|s| !s.trim().is_empty())
-        });
-    if let Some(summary) = last_assistant_text {
-        let preview: String = summary.chars().take(200).collect();
-        info!("Scheduled task {} final agent output: {}", task_id, preview);
-    } else {
-        warn!(
-            "Scheduled task {} produced no assistant text output — the agent may have failed silently or only used tools",
-            task_id
-        );
-    }
-    persist_task_spine_from_plan_state(
-        &app,
-        &db,
-        &scope_id,
-        "scheduled_task",
+    let state = app.state::<AppState>();
+    let result = run_codex_background(
+        &state,
         &scope_id,
         &effective_task_prompt,
+        None,
+        "scheduler",
+        CodexBackgroundOptions {
+            session_title: Some(session_title),
+            session_source: Some("scheduled_task".to_string()),
+            extra_context: Some(format!(
+                "这是 WorkBuddy 定时任务。任务 ID：{task_id}。{notify_context}"
+            )),
+            event_channel: Some(format!("scheduler_task_{task_id}")),
+            ..Default::default()
+        },
     )
     .await;
-
+    let final_status = if result.is_ok() { "success" } else { "failed" };
     {
-        let db_lock = db.lock().await;
-        let final_status = if run_success { "success" } else { "failed" };
-        let _ = db_lock.update_task_run_status(&task_id, final_status);
-        let _ = app.emit(
-            &format!("task_status_{}", task_id),
-            serde_json::json!({ "status": final_status }),
-        );
+        let db = db.lock().await;
+        let _ = db.update_task_run_status(&task_id, final_status);
     }
-
-    let _ = forward_handle.await;
-
-    {
-        let mut flags = cancel_flags.lock().await;
-        flags.remove(&format!("sched_{}", task_id));
-    }
-
+    let _ = app.emit(
+        &format!("task_status_{task_id}"),
+        serde_json::json!({
+            "status": final_status,
+            "error": result.as_ref().err(),
+        }),
+    );
     info!(
-        "Scheduled task {} completed (success={})",
-        task_id, run_success
+        "Scheduled task {} completed through codex exec (success={})",
+        task_id,
+        result.is_ok()
     );
 }

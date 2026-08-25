@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod harvis;
+mod im;
 mod office;
 mod skills;
 mod staffdeck;
@@ -158,6 +159,7 @@ fn tool_definitions() -> Vec<Value> {
     ];
     tools.extend(office::tool_definitions());
     tools.extend(harvis::tool_definitions());
+    tools.extend(im::tool_definitions());
     tools.extend(skills::tool_definitions());
     tools.extend(staffdeck::tool_definitions());
     tools
@@ -203,6 +205,7 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
         }
         _ if office::handles(name) => office::call(name, arguments).await,
         _ if harvis::handles(name) => harvis::call(context, name, arguments).await,
+        _ if im::handles(name) => im::call(context, name, arguments).await,
         _ if skills::handles(name) => skills::call(context, name, arguments).await,
         _ if staffdeck::handles(name) => staffdeck::call(context, name, arguments),
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
@@ -497,9 +500,7 @@ pub fn context_from_environment() -> HostContext {
     let database_path = std::env::var_os("WORKBUDDY_DATABASE_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| app_data.join("workbuddy.db"));
-    let legacy_database_path = std::env::var_os("WORKBUDDY_LEGACY_DATABASE_PATH")
-        .map(PathBuf::from)
-        .or_else(|| Some(app_data.join("piscis.db")));
+    let legacy_database_path = Some(database_path.clone());
     let skills_roots = std::env::var_os("WORKBUDDY_SKILLS_DIRS")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);

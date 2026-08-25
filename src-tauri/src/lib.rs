@@ -19,6 +19,7 @@ pub mod notify;
 mod piscis;
 pub mod pool;
 pub mod runtime;
+pub mod scheduler;
 mod skills;
 pub mod store;
 mod tools;

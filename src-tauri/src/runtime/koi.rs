@@ -19,9 +19,7 @@ use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
-use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCIS_POOL};
-use crate::commands::config::scene::SceneKind;
-use crate::headless_cli::HeadlessContextToggles;
+use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::runtime::koi_prompt::assemble_koi_task_system_prompt;
 use crate::store::AppState;
 
@@ -92,6 +90,13 @@ impl SubagentRuntime for DesktopInProcessSubagentRuntime {
             let flags = state.cancel_flags.lock().await;
             if let Some(flag) = flags.get(&turn.session_id) {
                 flag.store(true, Ordering::SeqCst);
+            }
+            drop(flags);
+            if let Some(runtime) = self
+                .app
+                .try_state::<crate::codex_runtime::service::CodexRuntimeState>()
+            {
+                let _ = runtime.interrupt_headless(&turn.session_id).await;
             }
         }
         Ok(())
@@ -197,29 +202,25 @@ async fn run_in_process_koi_turn(
         (prompt, session_title)
     };
 
-    let options = HeadlessRunOptions {
-        pool_session_id: pool_session_id.map(|s| s.to_string()),
-        extra_system_context: Some(koi_system_prompt),
+    let options = CodexBackgroundOptions {
+        extra_context: Some(koi_system_prompt),
         session_title,
-        session_source: Some(SESSION_SOURCE_PISCIS_POOL.to_string()),
-        scene_kind: Some(SceneKind::KoiTask),
-        memory_owner_id: Some(request.koi_id.clone()),
-        workspace_root_override: request.workspace.clone(),
-        builtin_tool_overrides: HashMap::new(),
-        context_toggles: HeadlessContextToggles::default(),
+        session_source: Some("codex_staffdeck".to_string()),
+        workspace_root: request.workspace.clone().map(Into::into),
+        ..CodexBackgroundOptions::default()
     };
 
-    match run_agent_headless(
+    match run_codex_background(
         &state,
         &request.session_id,
         &request.user_prompt,
         None,
         "internal",
-        Some(options),
+        options,
     )
     .await
     {
-        Ok((response_text, _, _)) => {
+        Ok(output) => {
             let was_cancelled = cancel.load(Ordering::SeqCst);
             Ok(KoiTurnOutcome {
                 handle,
@@ -228,7 +229,7 @@ async fn run_in_process_koi_turn(
                 } else {
                     KoiTurnExit::Completed
                 },
-                response_text,
+                response_text: output.final_message,
                 error: if was_cancelled {
                     Some("cancelled".into())
                 } else {

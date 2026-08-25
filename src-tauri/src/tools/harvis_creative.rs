@@ -13,7 +13,11 @@ pub struct HarvisMusicGenerateTool;
 pub struct HarvisJobStatusTool;
 pub struct HarvisSaveResultTool;
 
-fn metadata(risk: ToolRisk, execution: ToolExecutionMode, produces_artifacts: bool) -> ToolMetadata {
+fn metadata(
+    risk: ToolRisk,
+    execution: ToolExecutionMode,
+    produces_artifacts: bool,
+) -> ToolMetadata {
     ToolMetadata {
         category: "harvis_creative",
         exposure: ToolExposure::Deferred,
@@ -306,9 +310,28 @@ impl Tool for HarvisImageGenerateTool {
             .filter(|items| !items.is_empty())
             .cloned();
         let request = compact_object([
-            ("mode", Some(Value::String(if references.is_some() { "image" } else { "text" }.into()))),
+            (
+                "mode",
+                Some(Value::String(
+                    if references.is_some() {
+                        "image"
+                    } else {
+                        "text"
+                    }
+                    .into(),
+                )),
+            ),
             ("prompt", Some(Value::String(prompt.to_string()))),
-            ("canvasPreset", Some(Value::String(input.get("canvas_preset").and_then(Value::as_str).unwrap_or("vertical").to_string()))),
+            (
+                "canvasPreset",
+                Some(Value::String(
+                    input
+                        .get("canvas_preset")
+                        .and_then(Value::as_str)
+                        .unwrap_or("vertical")
+                        .to_string(),
+                )),
+            ),
             ("outputWidth", input.get("output_width").cloned()),
             ("outputHeight", input.get("output_height").cloned()),
             ("referenceIds", references.map(Value::Array)),
@@ -366,9 +389,27 @@ impl Tool for HarvisMusicGenerateTool {
         let request = compact_object([
             ("prompt", Some(Value::String(prompt.to_string()))),
             ("tags", Some(Value::String(prompt.to_string()))),
-            ("title", input.get("title").cloned().or_else(|| Some(Value::String("Harvis 背景音乐".into())))),
-            ("duration", input.get("duration").cloned().or_else(|| Some(Value::from(45)))),
-            ("mode", input.get("mode").cloned().or_else(|| Some(Value::String("free".into())))),
+            (
+                "title",
+                input
+                    .get("title")
+                    .cloned()
+                    .or_else(|| Some(Value::String("Harvis 背景音乐".into()))),
+            ),
+            (
+                "duration",
+                input
+                    .get("duration")
+                    .cloned()
+                    .or_else(|| Some(Value::from(45))),
+            ),
+            (
+                "mode",
+                input
+                    .get("mode")
+                    .cloned()
+                    .or_else(|| Some(Value::String("free".into()))),
+            ),
         ]);
         crate::commands::marketing::marketing_creative_create_music(request)
             .await
@@ -508,10 +549,7 @@ mod tests {
             HarvisMusicGenerateTool.metadata().exposure,
             ToolExposure::Deferred
         );
-        assert_eq!(
-            HarvisCreativeTool.metadata().exposure,
-            ToolExposure::Hidden
-        );
+        assert_eq!(HarvisCreativeTool.metadata().exposure, ToolExposure::Hidden);
     }
 
     #[test]

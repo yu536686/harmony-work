@@ -146,27 +146,6 @@ fn disable_tools(
     }
 }
 
-pub fn apply_runtime_tool_profile(
-    base: &HashMap<String, bool>,
-    profile: RuntimeToolProfile,
-) -> HashMap<String, bool> {
-    let mut effective = base.clone();
-    let mut ignored = Vec::new();
-    if !cfg!(target_os = "windows") {
-        disable_tools(&mut effective, WINDOWS_ORIENTED_TOOLS, &mut ignored);
-    }
-    match profile {
-        RuntimeToolProfile::HeadlessPiscis => {
-            disable_tools(&mut effective, HEADLESS_COMMON_DISABLED_TOOLS, &mut ignored);
-            disable_tools(&mut effective, HEADLESS_PISCIS_DISABLED_TOOLS, &mut ignored);
-        }
-        RuntimeToolProfile::HeadlessPool => {
-            disable_tools(&mut effective, HEADLESS_COMMON_DISABLED_TOOLS, &mut ignored);
-        }
-    }
-    effective
-}
-
 pub fn runtime_disabled_tools(profile: RuntimeToolProfile) -> Vec<ToolAvailability> {
     let mut out = Vec::new();
     let mut effective = HashMap::new();

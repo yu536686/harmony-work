@@ -3,6 +3,10 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -14,6 +18,7 @@ pub struct CodexExecOptions {
     pub prompt: String,
     pub permission_mode: CodexPermissionMode,
     pub attachments: Vec<CodexAttachment>,
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +58,8 @@ pub enum CodexExecError {
     MissingStderr,
     #[error("codex exec I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("codex exec was cancelled")]
+    Cancelled,
     #[error("codex exec returned exit code {code:?}: {stderr}")]
     Failed { code: Option<i32>, stderr: String },
 }
@@ -87,7 +94,16 @@ pub fn build_exec_command(executable: &Path, options: &CodexExecOptions) -> Code
             args.extend(["--image".to_string(), attachment.path.clone()]);
         }
     }
-    args.push("-".to_string());
+    if let Some(thread_id) = options
+        .thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())
+    {
+        args.extend(["resume".to_string(), thread_id.to_string(), "-".to_string()]);
+    } else {
+        args.push("-".to_string());
+    }
 
     let file_context = options
         .attachments
@@ -116,6 +132,7 @@ pub async fn run_codex_exec(
     command: CodexExecCommand,
     codex_home: &Path,
     environment: &HashMap<String, String>,
+    cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<CodexExecResult, CodexExecError> {
     let mut child = Command::new(&command.executable)
         .args(&command.args)
@@ -140,15 +157,38 @@ pub async fn run_codex_exec(
         }
         Ok::<String, std::io::Error>(output.join("\n"))
     });
-    let mut parser = CodexExecJsonlParser::default();
-    let mut lines = BufReader::new(stdout).lines();
-    while let Some(line) = lines.next_line().await? {
-        parser.push_line(&line);
-    }
-    let status = child.wait().await?;
+    let stdout_task = tokio::spawn(async move {
+        let mut parser = CodexExecJsonlParser::default();
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(line) = lines.next_line().await? {
+            parser.push_line(&line);
+        }
+        Ok::<CodexExecJsonlParser, std::io::Error>(parser)
+    });
+    let mut cancelled = false;
+    let status = loop {
+        if cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            cancelled = true;
+            let _ = child.kill().await;
+            break child.wait().await?;
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    let parser = stdout_task
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))??;
     let stderr = stderr_task
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))??;
+    if cancelled {
+        return Err(CodexExecError::Cancelled);
+    }
     if !status.success() {
         return Err(CodexExecError::Failed {
             code: status.code(),
@@ -245,6 +285,7 @@ mod tests {
                     media_type: "text/csv".to_string(),
                 },
             ],
+            thread_id: None,
         }
     }
 
@@ -273,6 +314,23 @@ mod tests {
         assert!(command
             .args
             .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
+    fn resumes_the_bound_codex_thread_without_shell_quoting() {
+        let mut options = options(CodexPermissionMode::Approval);
+        options.thread_id = Some("019-thread".to_string());
+        let command = build_exec_command(Path::new("codex"), &options);
+        let resume = command
+            .args
+            .iter()
+            .position(|argument| argument == "resume")
+            .expect("resume subcommand");
+        assert_eq!(
+            command.args.get(resume + 1).map(String::as_str),
+            Some("019-thread")
+        );
+        assert_eq!(command.args.last().map(String::as_str), Some("-"));
     }
 
     #[test]

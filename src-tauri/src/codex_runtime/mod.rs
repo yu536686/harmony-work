@@ -1,7 +1,9 @@
+pub mod background;
 pub mod client;
 pub mod config;
 pub mod event_adapter;
 pub mod headless;
+pub mod im_bridge;
 pub mod process;
 pub mod protocol;
 pub mod runner;
