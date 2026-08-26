@@ -249,7 +249,6 @@ xiaoheng-workbuddy/
 │  └─ workbuddy-mcp-host/            WorkBuddy 业务 MCP Host
 ├─ artifact-runtime/                 Word、PowerPoint、Excel 成果运行时
 ├─ scripts/                          环境准备、Sidecar 暂存与构建脚本
-├─ docs/                             架构、迁移与开发文档
 └─ .github/workflows/                Windows CI 构建流程
 ```
 

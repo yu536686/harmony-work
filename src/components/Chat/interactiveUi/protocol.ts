@@ -1,4 +1,4 @@
-/** Chat UI Protocol v1/v2 — shared types (see docs/chat-ui-protocol.md). */
+/** Chat UI Protocol v1/v2 shared types. */
 
 export const CHAT_UI_PROTOCOL_VERSION = "2";
 

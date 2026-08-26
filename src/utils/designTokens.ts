@@ -1,5 +1,5 @@
 /**
- * UI values shared by the application shell and documented in design.md.
+ * UI values shared by the application shell.
  * Keep this module dependency-free so it can be used by lightweight views.
  */
 export const DESIGN_TOKENS = {

@@ -1,6 +1,6 @@
 /* ============================================================
    WorkBuddy — Design-token entry point
-   Values are documented in the project root design.md.
+   Theme files provide the authoritative semantic token values.
    ============================================================ */
 
 @import "./themes/violet.css";
