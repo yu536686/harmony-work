@@ -1381,7 +1381,7 @@ mod tests {
 
         let diagnostic = state.diagnostic(false).await.expect("diagnostic");
         assert!(!diagnostic.running);
-        assert_eq!(diagnostic.display_version, "b1.0.0");
+        assert_eq!(diagnostic.display_version, "b1.0.5");
         assert_eq!(diagnostic.target_codex_version, "0.149.0");
         assert_eq!(diagnostic.mapped_sessions, 0);
 

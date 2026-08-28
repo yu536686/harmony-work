@@ -5,21 +5,20 @@
 //! commands proxy authenticated requests from the desktop app so the WebView
 //! does not have to fight CORS or browser cookie rules.
 
-use crate::codex_runtime::background::run_codex_transient;
+use crate::harvis_prompt::{compose_harvis_music_prompt, HarvisEvidenceCase, HarvisPromptInput};
 use crate::store::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::State;
 use tokio::sync::Mutex;
 
 const DEFAULT_MARKETING_BASE: &str = "http://61.150.31.150:8090";
-const HARVIS_SUNO_KEYWORDS: &str = include_str!("../../resources/harvis-suno-keywords.md");
-
 static MARKETING_COOKIE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn cookie_store() -> &'static Mutex<Option<String>> {
@@ -255,10 +254,14 @@ pub struct MarketingCreativeMusicPromptRequest {
     business_line: String,
     brand: String,
     watch_collection: String,
+    model: Option<String>,
+    theme: Option<String>,
     watch_style: Option<String>,
     desired_style: Option<String>,
     bpm: Option<u32>,
     duration: u32,
+    #[serde(default)]
+    details: BTreeMap<String, String>,
 }
 
 struct DownloadedMarketingAsset {
@@ -400,6 +403,11 @@ pub async fn marketing_creative_jobs() -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub async fn marketing_creative_music_config() -> Result<Value, String> {
+    marketing_get_json("/api/creative/music/config", Vec::new()).await
+}
+
+#[tauri::command]
 pub async fn marketing_creative_job(job_id: String) -> Result<Value, String> {
     marketing_get_json(
         &format!("/api/creative/jobs/{}", urlencoding::encode(&job_id)),
@@ -429,67 +437,51 @@ pub async fn marketing_creative_compose_music_prompt(
         return Err("业务线、品牌和腕表系列不能为空".to_string());
     }
     let duration = request.duration.clamp(10, 360);
-    let bpm = request
-        .bpm
-        .filter(|value| (40..=220).contains(value))
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "由你根据画面节奏选择合适 BPM".to_string());
-    let watch_style = request
-        .watch_style
-        .as_deref()
-        .map(|value| compact_prompt_field(value, 80))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "由你根据品牌和系列判断".to_string());
-    let desired_style = request
-        .desired_style
-        .as_deref()
-        .map(|value| compact_prompt_field(value, 120))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "无，主动选择最贴合的曲风".to_string());
-
-    let model = {
-        let settings = state.settings.lock().await;
-        settings.model.clone()
-    };
-    if model.trim().is_empty() {
-        return Err("请先在设置中配置并启用默认 AI 提供商和默认模型，再使用提示词助手".to_string());
-    }
-
-    let prompt = format!(
-        r#"You are Xiaoheng's Harvis music prompt assistant. Produce exactly one polished English Suno V5.5 prompt, with no markdown, no explanation, no title, and no quotation marks.
-
-Campaign brief:
-- Business line: {business_line}
-- Watch brand: {brand}
-- Watch collection: {watch_collection}
-- Watch style: {watch_style}
-- Requested direction: {desired_style}
-- Target duration: {duration} seconds
-- BPM: {bpm}
-
-Reason silently about the brand, collection, business line and visual rhythm. Then make one commercially useful prompt. It must state the chosen genre/mood, tempo, 2-4 instruments, a concise arrangement arc that fits the target duration, premium advertising mix, and end with: instrumental only, no vocals, no spoken words. Do not imitate a named artist. Do not output lyrics, slogans or a brand name as a sung phrase.
-
-Use this supplied Suno keyword knowledge base as vocabulary and selection guidance:
-{HARVIS_SUNO_KEYWORDS}
-"#
-    );
-    let response = run_codex_transient(
-        &state,
-        &prompt,
-        Some("只返回一条适用于奢侈腕表 BGM 的英文 Suno 提示词。不要调用工具，不要输出解释。"),
+    let details = request
+        .details
+        .iter()
+        .filter_map(|(key, value)| {
+            let key = compact_prompt_field(key, 48);
+            let value = compact_prompt_field(value, 240);
+            (!key.is_empty() && !value.is_empty()).then_some((key, value))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let context = marketing_post_json(
+        "/api/creative/music/assist-context",
+        json!({
+            "businessLine": business_line,
+            "brand": brand,
+            "collection": watch_collection,
+            "model": request.model.as_deref().map(|value| compact_prompt_field(value, 120)).filter(|value| !value.is_empty()),
+            "theme": request.theme.as_deref().map(|value| compact_prompt_field(value, 180)).filter(|value| !value.is_empty()),
+            "watchStyle": request.watch_style.as_deref().map(|value| compact_prompt_field(value, 80)).filter(|value| !value.is_empty()),
+            "desiredStyle": request.desired_style.as_deref().map(|value| compact_prompt_field(value, 120)).filter(|value| !value.is_empty()),
+            "details": details,
+        }),
     )
-    .await
-    .map_err(|error| format!("提示词助手调用默认模型失败：{error}"))?;
-    let prompt = response
-        .final_message
-        .trim()
-        .trim_matches('`')
-        .trim()
-        .to_string();
-    if prompt.is_empty() {
-        return Err("默认模型没有返回可用的音乐提示词".to_string());
-    }
-    Ok(json!({ "prompt": prompt, "model": model }))
+    .await?;
+    let evidence_cases = context
+        .get("evidenceCases")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<HarvisEvidenceCase>>(value).ok())
+        .unwrap_or_default();
+    let settings = state.settings.lock().await.clone();
+    let result = compose_harvis_music_prompt(
+        &settings,
+        HarvisPromptInput {
+            business_line,
+            brand,
+            watch_collection,
+            watch_style: request.watch_style.map(|value| compact_prompt_field(&value, 80)),
+            desired_style: request.desired_style.map(|value| compact_prompt_field(&value, 120)),
+            bpm: request.bpm.filter(|value| (40..=220).contains(value)),
+            duration,
+            campaign_context: details.iter().map(|(key, value)| format!("{key}: {value}")).collect(),
+            evidence_cases,
+        },
+    )
+    .await?;
+    serde_json::to_value(result).map_err(|error| format!("提示词助手结果序列化失败：{error}"))
 }
 
 #[tauri::command]
@@ -507,6 +499,49 @@ pub async fn marketing_creative_stage_for_chat(job_id: String) -> Result<Value, 
         json!({}),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_adopt_music_artifact(job_id: String, artifact_id: String) -> Result<Value, String> {
+    marketing_post_json(
+        &format!(
+            "/api/creative/music/jobs/{}/adopt",
+            urlencoding::encode(&job_id)
+        ),
+        json!({ "artifactId": artifact_id }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_music_feedback(
+    artifact_id: String,
+    rating: u8,
+    reason_tags: Vec<String>,
+    comment: Option<String>,
+    submit_to_knowledge: bool,
+) -> Result<Value, String> {
+    marketing_post_json(
+        "/api/creative/music/feedback",
+        json!({
+            "artifactId": artifact_id,
+            "rating": rating.clamp(1, 5),
+            "reasonTags": reason_tags,
+            "comment": comment.unwrap_or_default(),
+            "submitToKnowledge": submit_to_knowledge,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_admin_upsert_music_brand(request: Value) -> Result<Value, String> {
+    marketing_post_json("/api/admin/creative/music/brands", request).await
+}
+
+#[tauri::command]
+pub async fn marketing_creative_admin_upsert_music_business_line(request: Value) -> Result<Value, String> {
+    marketing_post_json("/api/admin/creative/music/business-lines", request).await
 }
 
 #[tauri::command]

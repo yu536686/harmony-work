@@ -1,4 +1,4 @@
-pub const DISPLAY_VERSION: &str = "b1.0.0";
+pub const DISPLAY_VERSION: &str = "b1.0.5";
 pub const PINNED_CODEX_VERSION: &str = "0.149.0";
 pub const MANAGED_MCP_BEGIN: &str = "# BEGIN WORKBUDDY MCP";
 pub const MANAGED_MCP_END: &str = "# END WORKBUDDY MCP";
@@ -129,8 +129,8 @@ mod tests {
     fn b1_version_has_semver_and_display_forms() {
         let config = CodexRuntimeConfig::b1_default();
 
-        assert_eq!(config.package_version, "1.0.0-beta.4");
-        assert_eq!(config.display_version, "b1.0.0");
+        assert_eq!(config.package_version, "1.0.0-beta.5");
+        assert_eq!(config.display_version, "b1.0.5");
         assert_eq!(config.codex_version, "0.149.0");
     }
 

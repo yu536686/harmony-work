@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type CreativeKind = "music" | "image";
-export type CreativeStatus = "queued" | "processing" | "succeeded" | "failed" | "expired";
+export type CreativeStatus = "queued" | "submitting" | "submitted" | "processing" | "partial_success" | "succeeded" | "archiving" | "archived" | "failed" | "expired";
 
 export interface CreativeArtifact {
   id: string;
@@ -24,6 +24,7 @@ export interface CreativeJob {
   promptSnapshot: string;
   options: Record<string, unknown>;
   errorMessage: string;
+  adoptedArtifactId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -57,15 +58,48 @@ export interface MusicPromptAssistantRequest {
   businessLine: string;
   brand: string;
   watchCollection: string;
+  model?: string;
+  theme?: string;
   watchStyle?: string;
   desiredStyle?: string;
   bpm?: number;
   duration: number;
+  details?: Record<string, string>;
+}
+
+export interface MusicAssistantField {
+  key: string;
+  label: string;
+  type: "select" | "text" | "number" | "asset";
+  required: boolean;
+  options: string[];
+}
+
+export interface MusicAssistantBusinessLine {
+  id: string;
+  title: string;
+  description: string;
+  fields: MusicAssistantField[];
+}
+
+export interface MusicAssistantConfig {
+  businessLines: MusicAssistantBusinessLine[];
+  brands: Array<{ id: string; name: string; collections: string[] }>;
 }
 
 export interface MusicPromptAssistantResponse {
   prompt: string;
+  promptZh?: string;
   model?: string;
+  analysisZh?: string;
+  confidence?: number;
+  degraded?: boolean;
+  warnings?: string[];
+  evidenceCases?: Array<{
+    id: string;
+    title: string;
+    genre?: string;
+  }>;
 }
 
 export interface CanvasRequest {
@@ -111,12 +145,29 @@ async function encodeFile(file: File) {
 export const creativeApi = {
   listJobs: () => invoke<{ jobs: CreativeJob[] }>("marketing_creative_jobs"),
   getJob: (jobId: string) => invoke<{ job: CreativeJob }>("marketing_creative_job", { jobId }),
+  musicConfig: () => invoke<MusicAssistantConfig>("marketing_creative_music_config"),
   createMusic: (request: MusicJobRequest) =>
     invoke<{ job: CreativeJob }>("marketing_creative_create_music", { request }),
   createImage: (request: ImageJobRequest) =>
     invoke<{ job: CreativeJob }>("marketing_creative_create_image", { request }),
   composeMusicPrompt: (request: MusicPromptAssistantRequest) =>
     invoke<MusicPromptAssistantResponse>("marketing_creative_compose_music_prompt", { request }),
+  adoptMusicArtifact: (jobId: string, artifactId: string) =>
+    invoke<{ jobId: string; artifactId: string }>("marketing_creative_adopt_music_artifact", { jobId, artifactId }),
+  saveMusicFeedback: (artifactId: string, rating: number, reasonTags: string[], comment: string, submitToKnowledge: boolean) =>
+    invoke<{ artifactId: string; rating: number; candidateId: string | null }>("marketing_creative_music_feedback", {
+      artifactId,
+      rating,
+      reasonTags,
+      comment: comment || null,
+      submitToKnowledge
+    }),
+  saveMusicBrand: (name: string, collections: string[]) =>
+    invoke<{ id: string; name: string; collections: string[] }>("marketing_creative_admin_upsert_music_brand", {
+      request: { name, collections }
+    }),
+  saveMusicBusinessLine: (request: { id: string; title: string; description?: string; fields: MusicAssistantField[] }) =>
+    invoke<{ id: string; title: string }>("marketing_creative_admin_upsert_music_business_line", { request }),
   stageForChat: (jobId: string) =>
     invoke<{ job: CreativeJob; assetIds: string[] }>("marketing_creative_stage_for_chat", { jobId }),
   saveToWorkspace: (jobId: string, workspaceRoot?: string | null) =>

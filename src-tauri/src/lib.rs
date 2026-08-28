@@ -12,6 +12,7 @@ mod file_journal;
 mod fish;
 mod gateway;
 mod harmony_cut;
+mod harvis_prompt;
 pub mod headless_cli;
 pub mod lsp;
 pub mod notify;
