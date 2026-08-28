@@ -1,7 +1,8 @@
 use crate::store::Settings;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use tracing::warn;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,15 +219,129 @@ fn json_payload(text: &str) -> &str {
     }
 }
 
-fn parse_raw_harvis_prompt_result(text: &str) -> Result<RawHarvisPromptResult, String> {
-    let value = serde_json::from_str::<Value>(json_payload(text))
-        .map_err(|error| format!("模型结果不是可解析的 JSON：{error}"))?;
-    let value = match value {
-        Value::String(encoded_json) => serde_json::from_str::<Value>(&encoded_json)
-            .map_err(|error| format!("模型结果中的 JSON 字符串无法解析：{error}"))?,
-        value => value,
+fn first_field<'a>(object: &'a Map<String, Value>, names: &[&str]) -> Option<&'a Value> {
+    names.iter().find_map(|name| object.get(*name))
+}
+
+fn scalar_text(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(value) => (!value.trim().is_empty()).then(|| value.trim().to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| scalar_text(Some(value)))
+            .filter(|value| !value.is_empty())
+            .collect(),
+        Some(Value::String(value)) => value
+            .split(|character| matches!(character, ',' | '，' | ';' | '；' | '\n' | '|'))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(value) => scalar_text(Some(value)).into_iter().collect(),
+        None => Vec::new(),
+    }
+}
+
+fn numeric_values(value: &str) -> Vec<u32> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| value.parse::<u32>().ok())
+        .collect()
+}
+
+fn u32_value(value: Option<&Value>) -> Option<u32> {
+    match value? {
+        Value::Number(value) => value.as_u64().and_then(|value| u32::try_from(value).ok()),
+        Value::String(value) => numeric_values(value).into_iter().next(),
+        _ => None,
+    }
+}
+
+fn loose_bpm(value: Option<&Value>) -> HarvisBpm {
+    let values = match value {
+        Some(Value::Object(object)) => {
+            let recommended = u32_value(first_field(object, &["recommended", "value", "bpm"]));
+            let min = u32_value(first_field(object, &["min", "from"]));
+            let max = u32_value(first_field(object, &["max", "to"]));
+            let recommended = recommended.or_else(|| match (min, max) {
+                (Some(min), Some(max)) => Some((min + max) / 2),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            });
+            vec![min, max, recommended]
+        }
+        Some(Value::String(value)) => numeric_values(value).into_iter().map(Some).collect(),
+        Some(Value::Number(_)) => vec![u32_value(value)],
+        _ => Vec::new(),
     };
-    serde_json::from_value(value).map_err(|error| format!("模型结果字段不符合提示词结构：{error}"))
+    let mut numbers = values.into_iter().flatten().collect::<Vec<_>>();
+    let recommended = match numbers.len() {
+        0 => 72,
+        1 => numbers[0],
+        2 => (numbers[0] + numbers[1]) / 2,
+        _ => numbers.pop().unwrap_or(72),
+    }
+    .clamp(40, 220);
+    let min = numbers.first().copied().unwrap_or(recommended.saturating_sub(6)).clamp(40, 220);
+    let max = numbers.get(1).copied().unwrap_or(recommended + 6).clamp(min, 220);
+    HarvisBpm { min, max, recommended: recommended.clamp(min, max) }
+}
+
+fn decode_response_value(text: &str) -> Result<Value, String> {
+    let mut value = serde_json::from_str::<Value>(json_payload(text))
+        .map_err(|error| format!("模型结果不是可解析的 JSON：{error}"))?;
+    for _ in 0..2 {
+        let Value::String(encoded_json) = value else { break };
+        value = serde_json::from_str::<Value>(json_payload(&encoded_json))
+            .map_err(|error| format!("模型结果中的 JSON 字符串无法解析：{error}"))?;
+    }
+    Ok(value)
+}
+
+fn coerce_loose_harvis_prompt_result(value: Value) -> Result<RawHarvisPromptResult, String> {
+    let object = value.as_object().ok_or_else(|| "模型结果 JSON 不是对象".to_string())?;
+    let analysis_zh = scalar_text(first_field(object, &["analysisZh", "analysis", "analysis_zh", "reasoning"]))
+        .ok_or_else(|| "模型结果缺少中文创作分析".to_string())?;
+    let suno_prompt_en = scalar_text(first_field(object, &["sunoPromptEn", "sunoPrompt", "prompt", "promptEn", "suno_prompt_en"]))
+        .ok_or_else(|| "模型结果缺少英文 Suno 提示词".to_string())?;
+    let suno_prompt_zh = scalar_text(first_field(object, &["sunoPromptZh", "promptZh", "prompt_zh", "suno_prompt_zh"]))
+        .unwrap_or_else(|| analysis_zh.clone());
+    let confidence = first_field(object, &["confidence", "score"])
+        .and_then(|value| match value {
+            Value::Number(value) => value.as_f64(),
+            Value::String(value) => value.trim_end_matches('%').parse::<f64>().ok().map(|value| if value > 1.0 { value / 100.0 } else { value }),
+            _ => None,
+        });
+    serde_json::from_value(json!({
+        "analysisZh": analysis_zh,
+        "genre": string_list(first_field(object, &["genre", "genres", "style"])),
+        "mood": string_list(first_field(object, &["mood", "moods"])),
+        "instruments": string_list(first_field(object, &["instruments", "instrument"])),
+        "bpm": loose_bpm(first_field(object, &["bpm", "tempo"])),
+        "durationSeconds": u32_value(first_field(object, &["durationSeconds", "duration", "length"])).unwrap_or(45),
+        "sunoPromptEn": suno_prompt_en,
+        "sunoPromptZh": suno_prompt_zh,
+        "negativeTags": string_list(first_field(object, &["negativeTags", "negative", "exclude"])),
+        "evidenceCaseIds": string_list(first_field(object, &["evidenceCaseIds", "evidence", "caseIds"])),
+        "confidence": confidence,
+        "warnings": string_list(first_field(object, &["warnings", "warning"])),
+    }))
+    .map_err(|error| format!("模型结果兼容归一化失败：{error}"))
+}
+
+fn parse_raw_harvis_prompt_result(text: &str) -> Result<RawHarvisPromptResult, String> {
+    let value = decode_response_value(text)?;
+    serde_json::from_value(value.clone())
+        .or_else(|_| coerce_loose_harvis_prompt_result(value))
+        .map_err(|error| format!("模型结果字段不符合提示词结构：{error}"))
 }
 
 fn compact_validation_reason(reason: &str) -> String {
@@ -342,17 +457,31 @@ pub async fn compose_harvis_music_prompt(settings: &Settings, input: HarvisPromp
     match first_result {
         Ok(result) => Ok(result),
         Err(error) => {
-            let repaired = request_once(&client, endpoint, api_key, request_body(model, &input, Some(&error.to_string()))).await;
-            let result = repaired
-                .ok()
-                .and_then(|response| output_text(&response))
-                .and_then(|text| parse_raw_harvis_prompt_result(&text).ok())
-                .and_then(|raw| normalize_result(raw, &input, model).ok());
-            Ok(result.unwrap_or_else(|| fallback_result(
-                &input,
-                model,
-                &format!("模型结构化输出异常，已使用可编辑模板降级：{}", compact_validation_reason(&error)),
-            )))
+            let repaired_result = request_once(&client, endpoint, api_key, request_body(model, &input, Some(&error))).await
+                .and_then(|response| output_text(&response).ok_or_else(|| "修复请求没有返回文本内容".to_string()))
+                .and_then(|text| parse_raw_harvis_prompt_result(&text))
+                .and_then(|raw| normalize_result(raw, &input, model));
+            match repaired_result {
+                Ok(result) => Ok(result),
+                Err(repair_error) => {
+                    warn!(
+                        provider = %provider,
+                        model = %model,
+                        first_error = %compact_validation_reason(&error),
+                        repair_error = %compact_validation_reason(&repair_error),
+                        "Harvis music prompt remained degraded after structured-output repair"
+                    );
+                    Ok(fallback_result(
+                        &input,
+                        model,
+                        &format!(
+                            "模型结构化输出异常，已使用可编辑模板降级：首次 {}；修复请求 {}",
+                            compact_validation_reason(&error),
+                            compact_validation_reason(&repair_error),
+                        ),
+                    ))
+                }
+            }
         }
     }
 }
@@ -390,6 +519,27 @@ mod tests {
         .expect("double-encoded JSON should not force a fallback");
 
         assert_eq!(raw.bpm.recommended, 72);
+    }
+
+    #[test]
+    fn recovers_a_usable_prompt_from_a_common_loose_model_shape() {
+        let raw = parse_raw_harvis_prompt_result(
+            r#"{
+              "analysis": "以偏心陀飞轮的机械细节为重点，采用克制的高级感配乐衬托镜头节奏。",
+              "genres": "neo-classical, luxury instrumental",
+              "moods": ["elegant", "restrained"],
+              "instruments": "grand piano, harp, subtle strings",
+              "bpm": "70-78 BPM",
+              "duration": "45 seconds",
+              "prompt": "Instrumental only luxury watch campaign, neo-classical, 74 BPM, grand piano, harp and subtle strings, restrained elegant build, premium advertising mix, no vocals, no spoken words.",
+              "promptZh": "高端腕表广告纯音乐，以钢琴、竖琴和克制弦乐建立优雅递进，不使用任何人声。"
+            }"#,
+        )
+        .expect("a usable loose model shape should not force fallback");
+
+        assert_eq!(raw.duration_seconds, 45);
+        assert_eq!(raw.bpm.recommended, 74);
+        assert_eq!(raw.genre, vec!["neo-classical", "luxury instrumental"]);
     }
 
     #[test]
