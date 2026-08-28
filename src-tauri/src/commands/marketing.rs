@@ -425,6 +425,13 @@ fn compact_prompt_field(value: &str, max_chars: usize) -> String {
     value.trim().chars().take(max_chars).collect()
 }
 
+fn omit_null_object_fields(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|_, field| !field.is_null());
+    }
+    value
+}
+
 #[tauri::command]
 pub async fn marketing_creative_compose_music_prompt(
     state: State<'_, AppState>,
@@ -448,7 +455,7 @@ pub async fn marketing_creative_compose_music_prompt(
         .collect::<BTreeMap<_, _>>();
     let context = marketing_post_json(
         "/api/creative/music/assist-context",
-        json!({
+        omit_null_object_fields(json!({
             "businessLine": business_line,
             "brand": brand,
             "collection": watch_collection,
@@ -457,7 +464,7 @@ pub async fn marketing_creative_compose_music_prompt(
             "watchStyle": request.watch_style.as_deref().map(|value| compact_prompt_field(value, 80)).filter(|value| !value.is_empty()),
             "desiredStyle": request.desired_style.as_deref().map(|value| compact_prompt_field(value, 120)).filter(|value| !value.is_empty()),
             "details": details,
-        }),
+        })),
     )
     .await?;
     let evidence_cases = context
@@ -771,7 +778,8 @@ pub async fn marketing_creative_save_to_workspace(
 
 #[cfg(test)]
 mod tests {
-    use super::save_target_path;
+    use super::{omit_null_object_fields, save_target_path};
+    use serde_json::{json, Value};
 
     #[test]
     fn accepts_an_absolute_user_selected_save_target() {
@@ -786,5 +794,16 @@ mod tests {
     #[test]
     fn rejects_a_relative_save_target() {
         assert!(save_target_path("Harvis 成品.mp3").is_err());
+    }
+
+    #[test]
+    fn omits_null_optional_fields_from_marketing_payloads() {
+        let payload = omit_null_object_fields(json!({
+            "businessLine": "腕表如诗",
+            "model": null,
+            "theme": "节日礼赠"
+        }));
+        assert_eq!(payload.get("model"), None);
+        assert_eq!(payload.get("theme").and_then(Value::as_str), Some("节日礼赠"));
     }
 }
