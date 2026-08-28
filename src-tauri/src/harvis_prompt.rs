@@ -72,9 +72,13 @@ struct RawHarvisPromptResult {
     duration_seconds: u32,
     suno_prompt_en: String,
     suno_prompt_zh: String,
+    #[serde(default)]
     negative_tags: Vec<String>,
+    #[serde(default)]
     evidence_case_ids: Vec<String>,
-    confidence: f64,
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
     warnings: Vec<String>,
 }
 
@@ -172,7 +176,7 @@ fn request_body(model: &str, input: &HarvisPromptInput, repair: Option<&str>) ->
                 "schema": assistant_schema()
             }
         },
-        "max_output_tokens": 1100,
+        "max_output_tokens": 1600,
         "temperature": 0.45
     })
 }
@@ -194,6 +198,40 @@ fn output_text(response: &Value) -> Option<String> {
                 .or_else(|| content.get("output_text").and_then(Value::as_str))
                 .map(str::to_string)
         })
+}
+
+fn json_payload(text: &str) -> &str {
+    let trimmed = text.trim().trim_start_matches('\u{feff}').trim();
+    if let Some(fenced) = trimmed.strip_prefix("```") {
+        let body = fenced
+            .split_once('\n')
+            .map(|(_, body)| body)
+            .unwrap_or(fenced);
+        return body.rsplit_once("```").map(|(body, _)| body.trim()).unwrap_or(body.trim());
+    }
+    if trimmed.starts_with('"') {
+        return trimmed;
+    }
+    match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &trimmed[start..=end],
+        _ => trimmed,
+    }
+}
+
+fn parse_raw_harvis_prompt_result(text: &str) -> Result<RawHarvisPromptResult, String> {
+    let value = serde_json::from_str::<Value>(json_payload(text))
+        .map_err(|error| format!("模型结果不是可解析的 JSON：{error}"))?;
+    let value = match value {
+        Value::String(encoded_json) => serde_json::from_str::<Value>(&encoded_json)
+            .map_err(|error| format!("模型结果中的 JSON 字符串无法解析：{error}"))?,
+        value => value,
+    };
+    serde_json::from_value(value).map_err(|error| format!("模型结果字段不符合提示词结构：{error}"))
+}
+
+fn compact_validation_reason(reason: &str) -> String {
+    let compact = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(180).collect()
 }
 
 fn normalize_result(raw: RawHarvisPromptResult, input: &HarvisPromptInput, model: &str) -> Result<HarvisPromptResult, String> {
@@ -234,7 +272,7 @@ fn normalize_result(raw: RawHarvisPromptResult, input: &HarvisPromptInput, model
         prompt_zh: raw.suno_prompt_zh.trim().to_string(),
         negative_tags: raw.negative_tags.into_iter().filter(|value| !value.trim().is_empty()).take(12).collect(),
         evidence_case_ids,
-        confidence: raw.confidence.clamp(0.0, 1.0),
+        confidence: raw.confidence.unwrap_or(0.68).clamp(0.0, 1.0),
         warnings: warnings.into_iter().filter(|value| !value.trim().is_empty()).take(6).collect(),
         model: model.to_string(),
         evidence_cases,
@@ -299,8 +337,7 @@ pub async fn compose_harvis_music_prompt(settings: &Settings, input: HarvisPromp
         .map_err(|error| format!("无法创建 Harvis 提示词助手客户端：{error}"))?;
     let first = request_once(&client, endpoint, api_key, request_body(model, &input, None)).await?;
     let first_text = output_text(&first).ok_or_else(|| "Harvis 提示词助手没有返回文本内容".to_string())?;
-    let first_result = serde_json::from_str::<RawHarvisPromptResult>(&first_text)
-        .map_err(|error| error.to_string())
+    let first_result = parse_raw_harvis_prompt_result(&first_text)
         .and_then(|raw| normalize_result(raw, &input, model));
     match first_result {
         Ok(result) => Ok(result),
@@ -309,9 +346,13 @@ pub async fn compose_harvis_music_prompt(settings: &Settings, input: HarvisPromp
             let result = repaired
                 .ok()
                 .and_then(|response| output_text(&response))
-                .and_then(|text| serde_json::from_str::<RawHarvisPromptResult>(&text).ok())
+                .and_then(|text| parse_raw_harvis_prompt_result(&text).ok())
                 .and_then(|raw| normalize_result(raw, &input, model).ok());
-            Ok(result.unwrap_or_else(|| fallback_result(&input, model, "模型结构化输出异常，已使用可编辑模板降级")))
+            Ok(result.unwrap_or_else(|| fallback_result(
+                &input,
+                model,
+                &format!("模型结构化输出异常，已使用可编辑模板降级：{}", compact_validation_reason(&error)),
+            )))
         }
     }
 }
@@ -326,6 +367,29 @@ mod tests {
             "output": [{ "content": [{ "type": "output_text", "text": "{\"analysisZh\":\"ok\"}" }] }]
         });
         assert_eq!(output_text(&response).as_deref(), Some("{\"analysisZh\":\"ok\"}"));
+    }
+
+    #[test]
+    fn parses_a_schema_result_wrapped_in_a_json_code_fence() {
+        let raw = parse_raw_harvis_prompt_result(
+            "```json\n{\"analysisZh\":\"这是一段可用的中文创作说明。\",\"genre\":[\"neo-classical\"],\"mood\":[\"elegant\"],\"instruments\":[\"piano\",\"harp\"],\"bpm\":{\"min\":68,\"max\":76,\"recommended\":72},\"durationSeconds\":45,\"sunoPromptEn\":\"Instrumental luxury watch campaign, piano and harp, no vocals, elegant restrained arc.\",\"sunoPromptZh\":\"适用于高端腕表广告的纯音乐，钢琴与竖琴营造优雅克制的情绪递进。\"}\n```",
+        )
+        .expect("code fence should not force a fallback");
+
+        assert_eq!(raw.duration_seconds, 45);
+        assert!(raw.negative_tags.is_empty());
+        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.confidence, None);
+    }
+
+    #[test]
+    fn parses_a_schema_result_when_a_compatibility_gateway_double_encodes_json() {
+        let raw = parse_raw_harvis_prompt_result(
+            "\"{\\\"analysisZh\\\":\\\"这是一段可用的中文创作说明。\\\",\\\"genre\\\":[\\\"neo-classical\\\"],\\\"mood\\\":[\\\"elegant\\\"],\\\"instruments\\\":[\\\"piano\\\",\\\"harp\\\"],\\\"bpm\\\":{\\\"min\\\":68,\\\"max\\\":76,\\\"recommended\\\":72},\\\"durationSeconds\\\":45,\\\"sunoPromptEn\\\":\\\"Instrumental luxury watch campaign, piano and harp, no vocals, elegant restrained arc.\\\",\\\"sunoPromptZh\\\":\\\"适用于高端腕表广告的纯音乐，钢琴与竖琴营造优雅克制的情绪递进。\\\"}\"",
+        )
+        .expect("double-encoded JSON should not force a fallback");
+
+        assert_eq!(raw.bpm.recommended, 72);
     }
 
     #[test]
