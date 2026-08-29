@@ -236,8 +236,8 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 发布示例：
 
 ```powershell
-git tag -a v1.0.0-beta.8 -m "小亨 WorkBuddy 1.0.0 Beta 8"
-git push origin v1.0.0-beta.8
+git tag -a v1.0.0-beta.9 -m "小亨 WorkBuddy 1.0.0 Beta 9"
+git push origin v1.0.0-beta.9
 ```
 
 ## 项目结构

@@ -309,7 +309,7 @@ fn decode_response_value(text: &str) -> Result<Value, String> {
 fn coerce_loose_harvis_prompt_result(value: Value) -> Result<RawHarvisPromptResult, String> {
     let object = value.as_object().ok_or_else(|| "模型结果 JSON 不是对象".to_string())?;
     let analysis_zh = scalar_text(first_field(object, &["analysisZh", "analysis", "analysis_zh", "reasoning"]))
-        .ok_or_else(|| "模型结果缺少中文创作分析".to_string())?;
+        .unwrap_or_default();
     let suno_prompt_en = scalar_text(first_field(object, &["sunoPromptEn", "sunoPrompt", "prompt", "promptEn", "suno_prompt_en"]))
         .ok_or_else(|| "模型结果缺少英文 Suno 提示词".to_string())?;
     let suno_prompt_zh = scalar_text(first_field(object, &["sunoPromptZh", "promptZh", "prompt_zh", "suno_prompt_zh"]))
@@ -349,19 +349,61 @@ fn compact_validation_reason(reason: &str) -> String {
     compact.chars().take(180).collect()
 }
 
+fn supplemented_analysis(input: &HarvisPromptInput) -> String {
+    let watch_style = trim_field(input.watch_style.as_deref(), "腕表细节");
+    let desired_style = trim_field(input.desired_style.as_deref(), "高级纯音乐");
+    format!(
+        "已根据{}业务线、{} {}、{}和{}风格生成可执行的纯音乐 Suno 提示词；中文创作说明由已选业务信息补齐。",
+        input.business_line, input.brand, input.watch_collection, watch_style, desired_style
+    )
+}
+
+fn supplemented_prompt_zh(input: &HarvisPromptInput) -> String {
+    let watch_style = trim_field(input.watch_style.as_deref(), "腕表细节");
+    let desired_style = trim_field(input.desired_style.as_deref(), "高级纯音乐");
+    format!(
+        "面向 {} {} 的 {} 宣传短片，围绕{}塑造{}的纯音乐氛围；不使用人声、口白或品牌唱词。",
+        input.brand, input.watch_collection, input.business_line, watch_style, desired_style
+    )
+}
+
 fn normalize_result(raw: RawHarvisPromptResult, input: &HarvisPromptInput, model: &str) -> Result<HarvisPromptResult, String> {
-    let prompt = raw.suno_prompt_en.trim().to_string();
-    let analysis_zh = raw.analysis_zh.trim().to_string();
-    if prompt.chars().count() < 30 || analysis_zh.chars().count() < 8 {
-        return Err("模型返回的提示词或中文分析过短".to_string());
+    let RawHarvisPromptResult {
+        analysis_zh: raw_analysis_zh,
+        genre: raw_genre,
+        mood: raw_mood,
+        instruments: raw_instruments,
+        bpm: raw_bpm,
+        duration_seconds: raw_duration_seconds,
+        suno_prompt_en,
+        suno_prompt_zh: raw_prompt_zh,
+        negative_tags: raw_negative_tags,
+        evidence_case_ids: raw_evidence_case_ids,
+        confidence: raw_confidence,
+        warnings: raw_warnings,
+    } = raw;
+    let prompt = suno_prompt_en.trim().to_string();
+    if prompt.chars().count() < 30 {
+        return Err("模型返回的英文 Suno 提示词过短".to_string());
     }
     let duration = input.duration.clamp(10, 360);
-    let mut warnings = raw.warnings;
-    if raw.duration_seconds != duration {
+    let mut warnings = raw_warnings;
+    let analysis_zh = if raw_analysis_zh.trim().chars().count() >= 8 {
+        raw_analysis_zh.trim().to_string()
+    } else {
+        warnings.push("模型未返回中文创作分析，已按已选业务信息补齐。".to_string());
+        supplemented_analysis(input)
+    };
+    let prompt_zh = if raw_prompt_zh.trim().chars().count() >= 12 {
+        raw_prompt_zh.trim().to_string()
+    } else {
+        warnings.push("模型未返回中文提示词说明，已按已选业务信息补齐。".to_string());
+        supplemented_prompt_zh(input)
+    };
+    if raw_duration_seconds != duration {
         warnings.push("模型返回时长已按用户选择校正".to_string());
     }
-    let mut evidence_case_ids = raw
-        .evidence_case_ids
+    let mut evidence_case_ids = raw_evidence_case_ids
         .into_iter()
         .filter(|id| input.evidence_cases.iter().any(|case| case.id == *id))
         .take(6)
@@ -374,20 +416,20 @@ fn normalize_result(raw: RawHarvisPromptResult, input: &HarvisPromptInput, model
         .filter(|case| evidence_case_ids.iter().any(|id| id == &case.id))
         .cloned()
         .collect();
-    let bpm_min = raw.bpm.min.clamp(40, 220);
-    let bpm_max = raw.bpm.max.clamp(bpm_min, 220);
+    let bpm_min = raw_bpm.min.clamp(40, 220);
+    let bpm_max = raw_bpm.max.clamp(bpm_min, 220);
     Ok(HarvisPromptResult {
         prompt,
         analysis_zh,
-        genre: raw.genre.into_iter().filter(|value| !value.trim().is_empty()).take(4).collect(),
-        mood: raw.mood.into_iter().filter(|value| !value.trim().is_empty()).take(4).collect(),
-        instruments: raw.instruments.into_iter().filter(|value| !value.trim().is_empty()).take(5).collect(),
-        bpm: HarvisBpm { min: bpm_min, max: bpm_max, recommended: raw.bpm.recommended.clamp(bpm_min, bpm_max) },
+        genre: raw_genre.into_iter().filter(|value| !value.trim().is_empty()).take(4).collect(),
+        mood: raw_mood.into_iter().filter(|value| !value.trim().is_empty()).take(4).collect(),
+        instruments: raw_instruments.into_iter().filter(|value| !value.trim().is_empty()).take(5).collect(),
+        bpm: HarvisBpm { min: bpm_min, max: bpm_max, recommended: raw_bpm.recommended.clamp(bpm_min, bpm_max) },
         duration_seconds: duration,
-        prompt_zh: raw.suno_prompt_zh.trim().to_string(),
-        negative_tags: raw.negative_tags.into_iter().filter(|value| !value.trim().is_empty()).take(12).collect(),
+        prompt_zh,
+        negative_tags: raw_negative_tags.into_iter().filter(|value| !value.trim().is_empty()).take(12).collect(),
         evidence_case_ids,
-        confidence: raw.confidence.unwrap_or(0.68).clamp(0.0, 1.0),
+        confidence: raw_confidence.unwrap_or(0.68).clamp(0.0, 1.0),
         warnings: warnings.into_iter().filter(|value| !value.trim().is_empty()).take(6).collect(),
         model: model.to_string(),
         evidence_cases,
@@ -540,6 +582,33 @@ mod tests {
         assert_eq!(raw.duration_seconds, 45);
         assert_eq!(raw.bpm.recommended, 74);
         assert_eq!(raw.genre, vec!["neo-classical", "luxury instrumental"]);
+    }
+
+    #[test]
+    fn keeps_a_repair_response_that_only_contains_an_executable_english_prompt() {
+        let input = HarvisPromptInput {
+            business_line: "腕表如诗".to_string(),
+            brand: "宝玑".to_string(),
+            watch_collection: "Classique".to_string(),
+            watch_style: Some("正装大表".to_string()),
+            desired_style: Some("新古典".to_string()),
+            bpm: Some(72),
+            duration: 45,
+            campaign_context: vec![],
+            evidence_cases: vec![],
+        };
+        let raw = parse_raw_harvis_prompt_result(
+            r#"{"prompt":"Instrumental only luxury watch campaign, neo-classical, 72 BPM, grand piano, harp and subtle strings, restrained elegant build, premium advertising mix, no vocals, no spoken words."}"#,
+        )
+        .expect("an executable English Suno prompt should be recoverable");
+
+        let result = normalize_result(raw, &input, "deepseek-v4-pro")
+            .expect("missing display fields must not discard a usable prompt");
+
+        assert!(!result.degraded);
+        assert_eq!(result.duration_seconds, 45);
+        assert!(result.analysis_zh.contains("腕表如诗"));
+        assert!(result.warnings.iter().any(|warning| warning.contains("补齐")));
     }
 
     #[test]
