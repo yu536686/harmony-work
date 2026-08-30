@@ -296,14 +296,82 @@ fn loose_bpm(value: Option<&Value>) -> HarvisBpm {
 }
 
 fn decode_response_value(text: &str) -> Result<Value, String> {
-    let mut value = serde_json::from_str::<Value>(json_payload(text))
-        .map_err(|error| format!("模型结果不是可解析的 JSON：{error}"))?;
+    let decode_first_json_value = |payload: &str| {
+        serde_json::Deserializer::from_str(payload)
+            .into_iter::<Value>()
+            .next()
+            .transpose()
+            .map_err(|error| format!("模型结果不是可解析的 JSON：{error}"))?
+            .ok_or_else(|| "模型结果不是可解析的 JSON：响应为空".to_string())
+    };
+    let mut value = decode_first_json_value(json_payload(text))?;
     for _ in 0..2 {
         let Value::String(encoded_json) = value else { break };
-        value = serde_json::from_str::<Value>(json_payload(&encoded_json))
-            .map_err(|error| format!("模型结果中的 JSON 字符串无法解析：{error}"))?;
+        value = decode_first_json_value(json_payload(&encoded_json))
+            .map_err(|error| error.replacen("模型结果不是可解析的 JSON", "模型结果中的 JSON 字符串无法解析", 1))?;
     }
     Ok(value)
+}
+
+fn clean_plain_suno_prompt(value: &str) -> Option<String> {
+    let prompt = value
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| {
+            let lower = line.to_ascii_lowercase();
+            !lower.starts_with("analysis")
+                && !lower.starts_with("中文")
+                && !lower.starts_with("negative")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|character: char| matches!(character, '-' | '*' | '`' | ' '))
+        .to_string();
+    let lower = prompt.to_ascii_lowercase();
+    (prompt.chars().count() >= 30 && lower.contains("instrumental"))
+        .then_some(prompt)
+}
+
+fn plain_suno_prompt(text: &str) -> Option<String> {
+    let trimmed = text.trim().trim_start_matches('\u{feff}').trim();
+    let lower = trimmed.to_ascii_lowercase();
+    for label in [
+        "suno prompt:",
+        "suno prompt：",
+        "english prompt:",
+        "english prompt：",
+        "prompt:",
+        "prompt：",
+    ] {
+        if let Some(index) = lower.find(label) {
+            if let Some(prompt) = clean_plain_suno_prompt(&trimmed[index + label.len()..]) {
+                return Some(prompt);
+            }
+        }
+    }
+    lower
+        .find("instrumental")
+        .and_then(|index| clean_plain_suno_prompt(&trimmed[index..]))
+}
+
+fn plain_prompt_result(text: &str) -> Result<RawHarvisPromptResult, String> {
+    let suno_prompt_en = plain_suno_prompt(text)
+        .ok_or_else(|| "模型纯文本中没有可用的英文 Suno 提示词".to_string())?;
+    Ok(RawHarvisPromptResult {
+        analysis_zh: String::new(),
+        genre: Vec::new(),
+        mood: Vec::new(),
+        instruments: Vec::new(),
+        bpm: HarvisBpm { min: 66, max: 78, recommended: 72 },
+        duration_seconds: 45,
+        suno_prompt_en,
+        suno_prompt_zh: String::new(),
+        negative_tags: Vec::new(),
+        evidence_case_ids: Vec::new(),
+        confidence: None,
+        warnings: vec!["模型未使用 JSON 包装，已从可执行英文提示词中恢复结果。".to_string()],
+    })
 }
 
 fn coerce_loose_harvis_prompt_result(value: Value) -> Result<RawHarvisPromptResult, String> {
@@ -338,10 +406,13 @@ fn coerce_loose_harvis_prompt_result(value: Value) -> Result<RawHarvisPromptResu
 }
 
 fn parse_raw_harvis_prompt_result(text: &str) -> Result<RawHarvisPromptResult, String> {
-    let value = decode_response_value(text)?;
-    serde_json::from_value(value.clone())
-        .or_else(|_| coerce_loose_harvis_prompt_result(value))
-        .map_err(|error| format!("模型结果字段不符合提示词结构：{error}"))
+    match decode_response_value(text) {
+        Ok(value) => serde_json::from_value(value.clone())
+            .or_else(|_| coerce_loose_harvis_prompt_result(value))
+            .map_err(|error| format!("模型结果字段不符合提示词结构：{error}")),
+        Err(json_error) => plain_prompt_result(text)
+            .map_err(|plain_error| format!("{json_error}；{plain_error}")),
+    }
 }
 
 fn compact_validation_reason(reason: &str) -> String {
@@ -609,6 +680,28 @@ mod tests {
         assert_eq!(result.duration_seconds, 45);
         assert!(result.analysis_zh.contains("腕表如诗"));
         assert!(result.warnings.iter().any(|warning| warning.contains("补齐")));
+    }
+
+    #[test]
+    fn accepts_the_first_complete_json_object_when_the_model_appends_another_object() {
+        let raw = parse_raw_harvis_prompt_result(
+            r#"{"prompt":"Instrumental only luxury watch campaign, neo-classical, 72 BPM, grand piano, harp and subtle strings, restrained elegant build, premium advertising mix, no vocals, no spoken words."}
+{"note":"JSON repaired"}"#,
+        )
+        .expect("a second JSON object must not invalidate the usable prompt object");
+
+        assert!(raw.suno_prompt_en.contains("Instrumental only"));
+    }
+
+    #[test]
+    fn recovers_a_labeled_plain_text_suno_prompt_when_json_is_missing() {
+        let raw = parse_raw_harvis_prompt_result(
+            "Suno Prompt: Instrumental only luxury watch campaign, neo-classical, 72 BPM, grand piano, harp and subtle strings, restrained elegant build, premium advertising mix, no vocals, no spoken words.",
+        )
+        .expect("a labeled executable English prompt should not force a fallback");
+
+        assert!(raw.suno_prompt_en.contains("72 BPM"));
+        assert!(raw.analysis_zh.is_empty());
     }
 
     #[test]
