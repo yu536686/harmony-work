@@ -29,7 +29,11 @@ fn managed_windows_runtime_executable_for_root(root: &Path, key: &str) -> Option
         "wecom_cli" => ["wecom", "wecom-cli.cmd"].as_slice(),
         _ => return None,
     };
-    Some(relative.iter().fold(root.to_path_buf(), |path, segment| path.join(segment)))
+    Some(
+        relative
+            .iter()
+            .fold(root.to_path_buf(), |path, segment| path.join(segment)),
+    )
 }
 
 pub fn managed_runtime_executable(key: &str) -> Option<PathBuf> {
@@ -67,7 +71,11 @@ pub fn managed_runtime_bin_dirs() -> Vec<PathBuf> {
 #[cfg(windows)]
 fn managed_path_value() -> Option<std::ffi::OsString> {
     let mut paths = managed_runtime_bin_dirs();
-    paths.extend(std::env::var_os("PATH").into_iter().flat_map(std::env::split_paths));
+    paths.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|value| std::env::split_paths(&value)),
+    );
     std::env::join_paths(paths).ok()
 }
 
@@ -124,6 +132,9 @@ mod tests {
             managed_windows_runtime_executable_for_root(&root, "wecom_cli"),
             Some(root.join("wecom").join("wecom-cli.cmd"))
         );
-        assert_eq!(managed_windows_runtime_executable_for_root(&root, "unknown"), None);
+        assert_eq!(
+            managed_windows_runtime_executable_for_root(&root, "unknown"),
+            None
+        );
     }
 }
