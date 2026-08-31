@@ -68,8 +68,8 @@ const DEFAULT_SETTINGS: SettingsData = {
   allow_outside_workspace: false,
   language: "zh",
   max_tokens: 8192,
-  context_window: 0,
-  confirm_shell_commands: true,
+  context_window: 128000,
+  confirm_shell_commands: false,
   confirm_file_writes: true,
   browser_headless: true,
   feishu_app_id: "",
@@ -1289,10 +1289,13 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               </p>
             )}
           </div>
-          <div className="form-group" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div className="form-group" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: 14, borderRadius: 8, border: "1px solid rgba(201,168,76,0.48)", background: "rgba(201,168,76,0.08)", boxShadow: "0 1px 0 rgba(201,168,76,0.08)" }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.allowOutsideWorkspace")}</div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{t("settings.allowOutsideWorkspaceDesc")}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8, lineHeight: 1.6 }}>
+                {t("settings.workspaceSafetyGuide")}
+              </div>
               {form.allow_outside_workspace && (
                 <div style={{ fontSize: 12, color: "var(--color-warning, #f59e0b)", marginTop: 6, padding: "6px 10px", background: "rgba(245,158,11,0.08)", borderRadius: 6, border: "1px solid rgba(245,158,11,0.3)" }}>
                   {t("settings.allowOutsideWorkspaceWarning")}
@@ -1318,7 +1321,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.confirmShell")}</div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{t("settings.confirmShellDesc")}</div>
             </div>
-            <input type="checkbox" checked={form.confirm_shell_commands ?? true} onChange={(e) => update("confirm_shell_commands", e.target.checked)} />
+            <input type="checkbox" checked={form.confirm_shell_commands ?? false} onChange={(e) => update("confirm_shell_commands", e.target.checked)} />
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>

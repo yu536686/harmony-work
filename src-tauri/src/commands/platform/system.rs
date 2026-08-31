@@ -6,6 +6,34 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+/// Ensure the user has a visible, one-click entry to the active workspace.
+/// A `.url` shortcut avoids a system-wide COM dependency while Windows Explorer
+/// still opens the local folder directly when it is double-clicked.
+pub fn ensure_workspace_shortcut(workspace_root: &str) -> Result<(), String> {
+    let workspace = PathBuf::from(workspace_root);
+    std::fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let desktop = dirs::desktop_dir().ok_or("无法定位桌面目录")?;
+        let shortcut = desktop.join("小亨工作空间.url");
+        let target = workspace.canonicalize().unwrap_or(workspace);
+        let url_path = target
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace(' ', "%20");
+        let contents = format!("[InternetShortcut]\r\nURL=file:///{url_path}\r\n");
+        std::fs::write(shortcut, contents).map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = workspace;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 pub struct VmStatus {
     pub backend: String,

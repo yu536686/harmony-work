@@ -11,6 +11,10 @@ public partial class MainWindow : Window
 {
     private readonly InstallerEngine _engine = new();
     private bool _installing;
+    private bool _loadFailed;
+    private bool _closeAfterCancellation;
+    private string? _installedApplicationPath;
+    private CancellationTokenSource? _installCancellation;
 
     public MainWindow()
     {
@@ -19,9 +23,43 @@ public partial class MainWindow : Window
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
             "小亨 WorkBuddy");
+        Loaded += Window_Loaded;
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        StatusPanel.Visibility = Visibility.Visible;
+        StatusTitle.Text = "正在加载安装器";
+        ProgressText.Text = "";
+        InstallProgress.IsIndeterminate = true;
+        try {
+            await _engine.WarmUpAsync(CancellationToken.None);
+            StatusTitle.Text = "已准备就绪";
+            ProgressText.Text = "100%";
+            InstallProgress.IsIndeterminate = false;
+            InstallProgress.Value = 100;
+            InstallButton.Content = "立即安装";
+            InstallButton.IsEnabled = true;
+        } catch (Exception error) {
+            _loadFailed = true;
+            InstallProgress.IsIndeterminate = false;
+            StatusTitle.Text = "安装器加载失败";
+            ShowError(error.Message);
+            InstallButton.Content = "关闭";
+            InstallButton.IsEnabled = true;
+        }
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        if (_installing) {
+            _closeAfterCancellation = true;
+            _installCancellation?.Cancel();
+            StatusTitle.Text = "正在取消安装";
+            return;
+        }
+        Application.Current.Shutdown();
+    }
 
     private void ToggleCustomize_Click(object sender, RoutedEventArgs e)
     {
@@ -45,6 +83,14 @@ public partial class MainWindow : Window
     private async void Install_Click(object sender, RoutedEventArgs e)
     {
         if (_installing) return;
+        if (_loadFailed) {
+            Application.Current.Shutdown();
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(_installedApplicationPath)) {
+            LaunchAndExit(_installedApplicationPath);
+            return;
+        }
         if (TermsCheckBox.IsChecked != true) {
             ShowError("请先阅读并同意用户协议和隐私条款。");
             return;
@@ -62,30 +108,35 @@ public partial class MainWindow : Window
         InstallButton.Content = "正在安装…";
 
         var progress = new Progress<InstallProgress>(UpdateProgress);
+        _installCancellation = new CancellationTokenSource();
         try {
             var options = new InstallerOptions(
                 InstallPathTextBox.Text.Trim(),
                 DesktopShortcutCheckBox.IsChecked == true,
                 StartMenuShortcutCheckBox.IsChecked == true,
                 StartupCheckBox.IsChecked == true);
-            var appPath = await _engine.InstallAsync(options, progress, CancellationToken.None);
+            var appPath = await _engine.InstallAsync(options, progress, _installCancellation.Token);
             StatusTitle.Text = "安装完成";
-            StatusDetail.Text = "运行环境已配置完成。首次启动时请完成账号、AI 提供商和企业微信授权配置。";
             ProgressText.Text = "100%";
             InstallProgress.Value = 100;
+            _installedApplicationPath = appPath;
             InstallButton.Content = "立即启动";
             InstallButton.IsEnabled = true;
-            InstallButton.Click -= Install_Click;
-            InstallButton.Click += (_, _) => _engine.LaunchApplication(appPath);
+        } catch (OperationCanceledException) when (_closeAfterCancellation) {
+            StatusTitle.Text = "已取消安装";
         } catch (Exception error) {
             ShowError(error.Message);
             StatusTitle.Text = "安装未完成";
-            StatusDetail.Text = "未写入不完整的运行时配置。修复问题后可再次运行安装器。";
             InstallButton.Content = "重试安装";
             InstallButton.IsEnabled = true;
             CustomizeButton.IsEnabled = true;
         } finally {
+            _installCancellation?.Dispose();
+            _installCancellation = null;
             _installing = false;
+            if (_closeAfterCancellation) {
+                Application.Current.Shutdown();
+            }
         }
     }
 
@@ -95,6 +146,16 @@ public partial class MainWindow : Window
         StatusDetail.Text = progress.Detail;
         InstallProgress.Value = progress.Percent;
         ProgressText.Text = $"{progress.Percent}%";
+    }
+
+    private void LaunchAndExit(string appPath)
+    {
+        try {
+            _engine.LaunchApplication(appPath);
+            Application.Current.Shutdown();
+        } catch (Exception error) {
+            ShowError($"无法启动小亨 WorkBuddy：{error.Message}");
+        }
     }
 
     private void ShowError(string message)

@@ -8,6 +8,23 @@ pub enum CodexPermissionMode {
     FullAccess,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexSandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    FullAccess,
+}
+
+impl CodexSandboxMode {
+    pub const fn sandbox(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::FullAccess => "danger-full-access",
+        }
+    }
+}
+
 impl CodexPermissionMode {
     pub const fn approval_policy(self) -> &'static str {
         match self {
@@ -17,13 +34,6 @@ impl CodexPermissionMode {
         }
     }
 
-    pub const fn sandbox(self) -> &'static str {
-        match self {
-            Self::Restricted => "read-only",
-            Self::Approval => "workspace-write",
-            Self::FullAccess => "danger-full-access",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +51,9 @@ pub struct CodexTurnOptions {
     pub provider: String,
     pub model: String,
     pub permission_mode: CodexPermissionMode,
+    pub sandbox_mode: CodexSandboxMode,
+    pub confirm_shell_commands: bool,
+    pub confirm_file_writes: bool,
     pub developer_instructions: Option<String>,
     pub attachments: Vec<CodexAttachment>,
 }
@@ -55,7 +68,7 @@ pub fn thread_start_params(options: &CodexTurnOptions) -> Value {
         "model": options.model,
         "modelProvider": options.provider,
         "personality": "pragmatic",
-        "sandbox": options.permission_mode.sandbox(),
+        "sandbox": options.sandbox_mode.sandbox(),
         "threadSource": "xiaoheng-workbuddy"
     })
 }
@@ -70,7 +83,7 @@ pub fn thread_resume_params(thread_id: &str, options: &CodexTurnOptions) -> Valu
         "model": options.model,
         "modelProvider": options.provider,
         "personality": "pragmatic",
-        "sandbox": options.permission_mode.sandbox()
+        "sandbox": options.sandbox_mode.sandbox()
     })
 }
 
@@ -88,6 +101,7 @@ pub fn turn_start_params(thread_id: &str, options: &CodexTurnOptions) -> Value {
         "input": input,
         "approvalPolicy": options.permission_mode.approval_policy(),
         "cwd": options.workspace_root,
+        "sandbox": options.sandbox_mode.sandbox(),
         "model": options.model
     })
 }
@@ -126,6 +140,13 @@ mod tests {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
             permission_mode: mode,
+            sandbox_mode: match mode {
+                CodexPermissionMode::Restricted => CodexSandboxMode::ReadOnly,
+                CodexPermissionMode::Approval => CodexSandboxMode::WorkspaceWrite,
+                CodexPermissionMode::FullAccess => CodexSandboxMode::FullAccess,
+            },
+            confirm_shell_commands: false,
+            confirm_file_writes: true,
             developer_instructions: Some("你是小亨 WorkBuddy".to_string()),
             attachments: vec![
                 CodexAttachment {
@@ -185,5 +206,14 @@ mod tests {
             json!({"decision":"acceptForSession"})
         );
         assert_eq!(approval_result(false, true), json!({"decision":"decline"}));
+    }
+
+    #[test]
+    fn full_filesystem_access_is_independent_from_confirmation_policy() {
+        let mut opts = options(CodexPermissionMode::Approval);
+        opts.sandbox_mode = CodexSandboxMode::FullAccess;
+        let params = thread_start_params(&opts);
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert_eq!(params["sandbox"], "danger-full-access");
     }
 }

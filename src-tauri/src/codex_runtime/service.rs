@@ -12,7 +12,7 @@ use crate::codex_runtime::process::{
 };
 use crate::codex_runtime::runner::{
     approval_result, extract_thread_id, extract_turn_id, thread_resume_params, thread_start_params,
-    turn_start_params, CodexAttachment, CodexPermissionMode, CodexTurnOptions,
+    turn_start_params, CodexAttachment, CodexPermissionMode, CodexSandboxMode, CodexTurnOptions,
 };
 use crate::codex_runtime::session_map::{
     CodexSessionMapError, CodexSessionMapStore, NewCodexSessionBinding,
@@ -25,13 +25,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActiveCodexTurn {
     thread_id: String,
     turn_id: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ApprovalPreferences {
+    confirm_shell_commands: bool,
+    confirm_file_writes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +273,7 @@ pub struct CodexRuntimeState {
     environment: Arc<Mutex<HashMap<String, String>>>,
     subscribers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkBuddyEvent>>>>,
     pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
+    approval_preferences: Arc<Mutex<HashMap<String, ApprovalPreferences>>>,
     event_adapter: Arc<Mutex<CodexEventAdapter>>,
     active_turns: Arc<Mutex<HashMap<String, ActiveCodexTurn>>>,
     active_execs: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -359,6 +366,7 @@ impl CodexRuntimeState {
             environment: Arc::new(Mutex::new(HashMap::new())),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            approval_preferences: Arc::new(Mutex::new(HashMap::new())),
             event_adapter: Arc::new(Mutex::new(CodexEventAdapter::default())),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             active_execs: Arc::new(Mutex::new(HashMap::new())),
@@ -530,6 +538,13 @@ impl CodexRuntimeState {
             provider: &options.provider,
             model: &options.model,
         })?;
+        self.approval_preferences.lock().await.insert(
+            thread_id.clone(),
+            ApprovalPreferences {
+                confirm_shell_commands: options.confirm_shell_commands,
+                confirm_file_writes: options.confirm_file_writes,
+            },
+        );
         let (sender, receiver) = mpsc::unbounded_channel();
         self.subscribers
             .lock()
@@ -649,6 +664,29 @@ impl CodexRuntimeState {
                             thread_id,
                             state.event_adapter.lock().await.adapt_request(&request),
                         ) {
+                            let preferences = state
+                                .approval_preferences
+                                .lock()
+                                .await
+                                .get(&thread_id)
+                                .copied()
+                                .unwrap_or(ApprovalPreferences {
+                                    confirm_shell_commands: true,
+                                    confirm_file_writes: true,
+                                });
+                            if should_auto_approve(&request.method, preferences) {
+                                if let Err(error) = process
+                                    .client()
+                                    .respond(request.id, approval_result(true, false))
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Failed to auto-approve Codex request: {}",
+                                        error
+                                    );
+                                }
+                                continue;
+                            }
                             let request_id = rpc_id_key(&request.id);
                             state
                                 .pending_approvals
@@ -691,6 +729,7 @@ impl CodexRuntimeState {
         }
         if terminal {
             self.subscribers.lock().await.remove(thread_id);
+            self.approval_preferences.lock().await.remove(thread_id);
         }
     }
 
@@ -761,6 +800,14 @@ impl CodexRuntimeState {
             process.shutdown().await?;
         }
         Ok(())
+    }
+}
+
+fn should_auto_approve(method: &str, preferences: ApprovalPreferences) -> bool {
+    match method {
+        "item/commandExecution/requestApproval" => !preferences.confirm_shell_commands,
+        "item/fileChange/requestApproval" => !preferences.confirm_file_writes,
+        _ => false,
     }
 }
 
@@ -950,7 +997,7 @@ fn decode_attachment_data(value: &str) -> Result<Vec<u8>, String> {
 }
 
 fn materialize_chat_attachments(
-    app: &tauri::AppHandle,
+    workspace_root: &str,
     session_id: &str,
     attachment: Option<LegacyChatAttachment>,
     attachments: Option<Vec<LegacyChatAttachment>>,
@@ -961,23 +1008,13 @@ fn materialize_chat_attachments(
     let mut resolved = Vec::with_capacity(source.len());
     for item in source {
         let name = safe_attachment_name(item.filename.as_deref(), &item.media_type);
-        let path = if let Some(path) = item.path.filter(|path| !path.trim().is_empty()) {
-            PathBuf::from(path)
-        } else if let Some(data) = item.data.as_deref() {
-            let directory = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| error.to_string())?
-                .join("codex-attachments")
-                .join(session_id);
-            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-            let path = directory.join(format!("{}-{name}", uuid::Uuid::new_v4()));
-            std::fs::write(&path, decode_attachment_data(data)?)
-                .map_err(|error| format!("附件写入失败：{error}"))?;
-            path
-        } else {
-            return Err(format!("附件“{name}”缺少本地路径或文件数据"));
-        };
+        let path = stage_attachment_in_workspace(
+            workspace_root,
+            session_id,
+            &name,
+            item.path.as_deref(),
+            item.data.as_deref(),
+        )?;
         resolved.push(CodexAttachment {
             path: path.display().to_string(),
             name,
@@ -987,10 +1024,71 @@ fn materialize_chat_attachments(
     Ok(resolved)
 }
 
+fn stage_attachment_in_workspace(
+    workspace_root: &str,
+    session_id: &str,
+    name: &str,
+    source_path: Option<&str>,
+    data: Option<&str>,
+) -> Result<PathBuf, String> {
+    let workspace = PathBuf::from(workspace_root);
+    std::fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("无法准备工作区：{error}"))?;
+
+    if let Some(source_path) = source_path.filter(|path| !path.trim().is_empty()) {
+        let source = PathBuf::from(source_path)
+            .canonicalize()
+            .map_err(|error| format!("无法读取已拖入的附件“{name}”：{error}"))?;
+        if !source.is_file() {
+            return Err(format!("已拖入的附件“{name}”不是可读取的文件"));
+        }
+        if source.starts_with(&workspace) {
+            return Ok(source);
+        }
+        let directory = attachment_staging_directory(&workspace, session_id);
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let destination = directory.join(format!("{}-{name}", uuid::Uuid::new_v4()));
+        std::fs::copy(&source, &destination)
+            .map_err(|error| format!("无法复制已拖入的附件“{name}”到工作区：{error}"))?;
+        return Ok(destination);
+    }
+
+    if let Some(data) = data {
+        let directory = attachment_staging_directory(&workspace, session_id);
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let path = directory.join(format!("{}-{name}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, decode_attachment_data(data)?)
+            .map_err(|error| format!("附件写入失败：{error}"))?;
+        return Ok(path);
+    }
+
+    Err(format!("附件“{name}”缺少本地路径或文件数据"))
+}
+
+fn attachment_staging_directory(workspace: &Path, session_id: &str) -> PathBuf {
+    let safe_session = session_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    workspace
+        .join(".workbuddy")
+        .join("attachments")
+        .join(safe_session)
+}
+
 fn compose_turn_content(
     content: String,
     explicit_skills: Option<Vec<String>>,
     user_context: Option<String>,
+    attachments: &[CodexAttachment],
 ) -> String {
     let mut sections = Vec::new();
     if let Some(context) = user_context.filter(|value| !value.trim().is_empty()) {
@@ -1002,6 +1100,16 @@ fn compose_turn_content(
         sections.push(format!(
             "<workbuddy_explicit_skills>\n{}\n</workbuddy_explicit_skills>",
             skills.join("\n")
+        ));
+    }
+    if !attachments.is_empty() {
+        let files = attachments
+            .iter()
+            .map(|attachment| format!("- {}: {}", attachment.name, attachment.path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!(
+            "<workbuddy_attachments>\n用户已明确附加以下文件。请直接读取这些文件完成任务，不要要求用户再次提供路径。\n{files}\n</workbuddy_attachments>"
         ));
     }
     sections.push(content);
@@ -1061,8 +1169,9 @@ pub async fn codex_chat_send(
                 settings.confirm_file_writes,
             )
         });
-    let attachments = materialize_chat_attachments(&app, &session_id, attachment, attachments)?;
-    let content = compose_turn_content(content, explicit_skills, user_context);
+    let attachments =
+        materialize_chat_attachments(&workspace_root, &session_id, attachment, attachments)?;
+    let content = compose_turn_content(content, explicit_skills, user_context, &attachments);
     let mut developer_instructions =
         "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
             .to_string();
@@ -1078,6 +1187,13 @@ pub async fn codex_chat_send(
         provider,
         model,
         permission_mode,
+        sandbox_mode: if settings.allow_outside_workspace {
+            CodexSandboxMode::FullAccess
+        } else {
+            CodexSandboxMode::WorkspaceWrite
+        },
+        confirm_shell_commands: settings.confirm_shell_commands,
+        confirm_file_writes: settings.confirm_file_writes,
         developer_instructions: Some(developer_instructions),
         attachments,
     };
@@ -1354,6 +1470,70 @@ mod tests {
             permission_mode_from_settings(false, false),
             CodexPermissionMode::FullAccess
         );
+    }
+
+    #[test]
+    fn shell_confirmation_can_be_disabled_while_file_changes_still_require_review() {
+        let preferences = ApprovalPreferences {
+            confirm_shell_commands: false,
+            confirm_file_writes: true,
+        };
+        assert!(should_auto_approve(
+            "item/commandExecution/requestApproval",
+            preferences
+        ));
+        assert!(!should_auto_approve(
+            "item/fileChange/requestApproval",
+            preferences
+        ));
+    }
+
+    #[test]
+    fn turn_prompt_explicitly_identifies_staged_attachments() {
+        let content = compose_turn_content(
+            "请分析附件".to_string(),
+            None,
+            None,
+            &[CodexAttachment {
+                path: "/workspace/.workbuddy/attachments/session/report.csv".to_string(),
+                name: "report.csv".to_string(),
+                media_type: "text/csv".to_string(),
+            }],
+        );
+        assert!(content.contains("<workbuddy_attachments>"));
+        assert!(content.contains("report.csv"));
+        assert!(content.contains("/workspace/.workbuddy/attachments/session/report.csv"));
+    }
+
+    #[test]
+    fn external_attachment_is_copied_into_workspace_before_codex_receives_it() {
+        let root =
+            std::env::temp_dir().join(format!("workbuddy-attachment-{}", uuid::Uuid::new_v4()));
+        let external =
+            std::env::temp_dir().join(format!("workbuddy-external-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&external, "attachment content").expect("write source");
+
+        let staged = stage_attachment_in_workspace(
+            &root.display().to_string(),
+            "session-1",
+            "example.txt",
+            Some(&external.display().to_string()),
+            None,
+        )
+        .expect("stage attachment");
+
+        assert!(staged.starts_with(
+            root.canonicalize()
+                .expect("workspace exists")
+                .join(".workbuddy")
+                .join("attachments")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&staged).expect("read staged"),
+            "attachment content"
+        );
+        let _ = std::fs::remove_file(external);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

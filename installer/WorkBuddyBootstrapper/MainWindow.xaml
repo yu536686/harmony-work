@@ -33,19 +33,19 @@
           <TextBlock Margin="0,18,0,0" HorizontalAlignment="Center" FontSize="29" FontWeight="SemiBold" Foreground="#1F1D1A" Text="小亨 WorkBuddy" />
           <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="14" Foreground="#77716C" Text="让创作、协作与执行在一个工作台完成" />
 
-          <Border x:Name="StatusPanel" Margin="0,30,0,0" Padding="16" Background="#FAF8F5" CornerRadius="10" Visibility="Collapsed">
+          <Border x:Name="StatusPanel" Margin="0,30,0,0" Padding="16" Background="#FAF8F5" CornerRadius="10" Visibility="Visible">
             <StackPanel>
               <DockPanel>
                 <TextBlock x:Name="StatusTitle" FontSize="14" FontWeight="SemiBold" Foreground="#26221E" Text="正在准备安装" />
                 <TextBlock x:Name="ProgressText" DockPanel.Dock="Right" FontSize="12" Foreground="#8A837B" Text="0%" />
               </DockPanel>
-              <ProgressBar x:Name="InstallProgress" Height="6" Margin="0,12,0,9" Minimum="0" Maximum="100" Value="0" Foreground="#1F1D1A" Background="#E7E1DA" />
-              <TextBlock x:Name="StatusDetail" FontSize="12" Foreground="#77716C" TextWrapping="Wrap" />
+              <ProgressBar x:Name="InstallProgress" Height="6" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="0" Foreground="#1F1D1A" Background="#E7E1DA" />
+              <TextBlock x:Name="StatusDetail" Visibility="Collapsed" FontSize="12" Foreground="#77716C" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
           <Button x:Name="InstallButton" Margin="0,30,0,0" Height="48" Background="#171614" Foreground="White" BorderThickness="0"
-                  FontSize="15" FontWeight="SemiBold" Content="立即安装" Click="Install_Click" />
+                  FontSize="15" FontWeight="SemiBold" Content="正在加载…" IsEnabled="False" Click="Install_Click" />
 
           <Button x:Name="CustomizeButton" Margin="0,14,0,0" Background="Transparent" BorderThickness="0" Foreground="#5D5751"
                   FontSize="13" Content="自定义安装⌄" Click="ToggleCustomize_Click" />

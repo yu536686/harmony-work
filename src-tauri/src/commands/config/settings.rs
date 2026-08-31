@@ -3,7 +3,7 @@ use crate::store::{AppState, Settings};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +33,11 @@ fn harmony_default_workspace() -> String {
 }
 
 #[tauri::command]
-pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result<Settings, String> {
+pub async fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    updates: Value,
+) -> Result<Settings, String> {
     let mut settings = state.settings.lock().await;
 
     // LLM provider keys — only overwrite if the incoming value is non-empty.
@@ -634,6 +638,10 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
         saved.confirm_file_writes,
     );
     drop(settings); // release lock before touching browser
+
+    crate::commands::platform::system::ensure_workspace_shortcut(&saved.workspace_root)
+        .map_err(|error| format!("创建工作区桌面快捷方式失败：{error}"))?;
+    let _ = app.emit("workspace_shortcut_ready", &saved.workspace_root);
 
     // Sync headless mode to browser manager (takes effect on next browser launch)
     {

@@ -267,7 +267,7 @@ pub struct Settings {
     /// Context window size in tokens (input limit).
     /// 0 means "auto" — the backend will use a conservative default based on the model.
     /// Common values: 8192, 32768, 65536, 131072, 1000000
-    #[serde(default)]
+    #[serde(default = "default_context_window")]
     pub context_window: u32,
     /// Fallback models tried in order when the primary model fails with
     /// rate_limit / overloaded / model_not_found errors.
@@ -281,7 +281,7 @@ pub struct Settings {
     #[serde(default)]
     pub available_models: Vec<String>,
     /// Whether to show permission dialogs for shell commands
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub confirm_shell_commands: bool,
     /// Whether to show permission dialogs for file writes
     #[serde(default = "default_true")]
@@ -704,9 +704,9 @@ fn default_model() -> String {
     "claude-sonnet-4-5".into()
 }
 pub fn default_workspace_path() -> String {
-    dirs::document_dir()
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("xiaoheng")
+        .join("harmony")
         .to_string_lossy()
         .into_owned()
 }
@@ -719,6 +719,12 @@ fn default_language() -> String {
 }
 fn default_max_tokens() -> u32 {
     8192
+}
+fn default_context_window() -> u32 {
+    128_000
+}
+fn default_false() -> bool {
+    false
 }
 fn default_true() -> bool {
     true
@@ -751,11 +757,11 @@ impl Default for Settings {
             allow_outside_workspace: false,
             language: default_language(),
             max_tokens: default_max_tokens(),
-            context_window: 0,
+            context_window: default_context_window(),
             fallback_models: vec![],
             enabled_models: vec![],
             available_models: vec![],
-            confirm_shell_commands: true,
+            confirm_shell_commands: false,
             confirm_file_writes: true,
             browser_headless: true,
             policy_mode: default_policy_mode(),
@@ -1017,5 +1023,20 @@ impl Settings {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("com.harmony.xiaoheng-workbuddy")
             .join("config.json")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn new_install_defaults_keep_the_workspace_bounded_and_shell_unattended() {
+        let settings = Settings::default();
+        assert!(!settings.allow_outside_workspace);
+        assert!(!settings.confirm_shell_commands);
+        assert!(settings.confirm_file_writes);
+        assert_eq!(settings.context_window, 128_000);
+        assert!(settings.workspace_root.ends_with("harmony"));
     }
 }

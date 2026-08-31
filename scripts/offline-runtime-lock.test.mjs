@@ -32,10 +32,9 @@ test("offline runtime lock includes a fully pinned Harmony Cut wheelhouse", () =
 });
 
 test("Windows full installer resolves the Cargo target directory and retains PATH storage", async () => {
-  const [processSource, installerScript, workflow] = await Promise.all([
+  const [processSource, installerScript] = await Promise.all([
     readFile(new URL("../src-tauri/src/process.rs", import.meta.url), "utf8"),
     readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../.github/workflows/build-windows.yml", import.meta.url), "utf8"),
   ]);
 
   assert.match(
@@ -47,11 +46,6 @@ test("Windows full installer resolves the Cargo target directory and retains PAT
     installerScript,
     /Join-Path \$ProjectRoot "target"/,
     "the bootstrapper must search Cargo's repository-level target directory",
-  );
-  assert.match(
-    workflow,
-    /^\s+target\/x86_64-pc-windows-msvc\/release\/bundle\/nsis\/\*\.exe$/m,
-    "the uploaded NSIS artifact must use Cargo's repository-level target directory",
   );
   assert.match(
     installerScript,
@@ -105,4 +99,33 @@ test("WPF bootstrapper defers the large offline payload until after its window i
     /GetManifestResourceStream\("WorkBuddyBootstrapper\.PayloadArchive"\)/,
     "the installer must materialize the embedded payload only after the user starts installation",
   );
+});
+
+test("WPF bootstrapper shows readiness before installation and exits after launch", async () => {
+  const [window, code] = await Promise.all([
+    readFile(new URL("../installer/WorkBuddyBootstrapper/MainWindow.xaml", import.meta.url), "utf8"),
+    readFile(new URL("../installer/WorkBuddyBootstrapper/MainWindow.xaml.cs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(window, /Content="正在加载…" IsEnabled="False"/);
+  assert.match(code, /Loaded \+= Window_Loaded/);
+  assert.match(code, /WarmUpAsync\(CancellationToken\.None\)/);
+  assert.match(code, /Application\.Current\.Shutdown\(\)/);
+  assert.match(code, /_installCancellation\?\.Cancel\(\)/);
+  assert.match(code, /_closeAfterCancellation/);
+});
+
+test("full installer reuses managed runtimes and reports generic user-facing progress", async () => {
+  const engine = await readFile(
+    new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(engine, /if \(!HasNodeRuntime\(\)\) InstallNode/);
+  assert.match(engine, /if \(!HasPythonRuntime\(\)\) await InstallPythonAsync/);
+  assert.match(engine, /if \(!HasGitRuntime\(\)\) await InstallPortableGitAsync/);
+  assert.match(engine, /if \(!HasWeComCliRuntime\(\)\) InstallWeComCli/);
+  assert.match(engine, /"正在配置必要组件", ""/);
+  assert.match(engine, /CopyPayloadArchiveAsync/);
+  assert.match(engine, /ExtractPayloadArchiveAsync/);
 });

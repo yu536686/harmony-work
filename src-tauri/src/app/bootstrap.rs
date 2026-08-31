@@ -359,6 +359,14 @@ fn run_impl() {
                 scheduler.start().await?;
                 store::AppState::new_sync(&app_handle, scheduler)
             })?;
+            {
+                let workspace_root = tauri::async_runtime::block_on(async {
+                    state.settings.lock().await.workspace_root.clone()
+                });
+                if let Err(error) = crate::commands::platform::system::ensure_workspace_shortcut(&workspace_root) {
+                    tracing::warn!("Workspace shortcut setup failed: {}", error);
+                }
+            }
             tauri::async_runtime::block_on(async {
                 let settings = state.settings.lock().await;
                 codex_runtime.configure_credentials(&settings).await;

@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.1.0--alpha.1-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.0-alpha.1)
+[![Version](https://img.shields.io/badge/version-1.1.1--alpha.1-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.1-alpha.1)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
@@ -221,18 +221,13 @@ target\x86_64-pc-windows-msvc\release\bundle\nsis\
 target\x86_64-pc-windows-msvc\release\bundle\msi\
 ```
 
-## GitHub Actions 构建
+## 发布版本
 
-仓库包含 [`Build Windows Installer`](.github/workflows/build-windows.yml) 工作流：
-
-- 在 GitHub 的 **Actions** 页面手动运行，可生成 Windows 构建产物。
-- 推送 `v*` 标签时自动构建，并将 EXE/MSI 附加到对应 Release。
-
-发布示例：
+Windows 安装包在受控的 Windows 构建机上生成并验证后，再上传至 GitHub Release。发布示例：
 
 ```powershell
-git tag -a v1.1.0-alpha.1 -m "小亨 WorkBuddy 1.1.0 Alpha 1"
-git push origin v1.1.0-alpha.1
+git tag -a v1.1.1-alpha.1 -m "小亨 WorkBuddy 1.1.1 Alpha 1"
+git push origin v1.1.1-alpha.1
 ```
 
 ## 项目结构
@@ -307,9 +302,8 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.1.0-alpha.1`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.0-alpha.1)
+- 当前版本：[`v1.1.1-alpha.1`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.1-alpha.1)
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/xiaoheng-workbuddy/issues)
-- Windows 构建：[GitHub Actions](https://github.com/yu536686/xiaoheng-workbuddy/actions/workflows/build-windows.yml)
 
 ---
 
