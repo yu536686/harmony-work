@@ -11,6 +11,9 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
 if (-not $SkipDownload) {
+  # A cached fetch may not launch a native process, so reset any exit code
+  # inherited from the calling PowerShell host before checking this invocation.
+  $global:LASTEXITCODE = 0
   & (Join-Path $PSScriptRoot "fetch-offline-runtime.ps1") -Destination $PayloadCache
   if ($LASTEXITCODE -ne 0) { throw "Failed to download offline runtime payload." }
 }

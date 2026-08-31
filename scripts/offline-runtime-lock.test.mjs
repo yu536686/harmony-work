@@ -53,4 +53,9 @@ test("Windows full installer resolves the Cargo target directory and retains PAT
     /^\s+target\/x86_64-pc-windows-msvc\/release\/bundle\/nsis\/\*\.exe$/m,
     "the uploaded NSIS artifact must use Cargo's repository-level target directory",
   );
+  assert.match(
+    installerScript,
+    /\$global:LASTEXITCODE\s*=\s*0\s*\n\s*& \(Join-Path \$PSScriptRoot "fetch-offline-runtime\.ps1"\)/,
+    "the full installer must not inherit a stale native exit code before fetching cached payloads",
+  );
 });
