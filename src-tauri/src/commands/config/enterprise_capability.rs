@@ -6,7 +6,7 @@
 use crate::commands::config::mcp::{
     resolve_settings_placeholders_in_mcp_config, test_mcp_server_config, McpTestResult,
 };
-use crate::process::tokio_command;
+use crate::process::{managed_runtime_executable, tokio_command};
 use crate::store::{AppState, Settings};
 use crate::tools::mcp::{McpServerConfig, McpToolInfo};
 use serde::{Deserialize, Serialize};
@@ -473,7 +473,15 @@ fn wecom_cli_candidates() -> Vec<WeComCliCommand> {
         "wecom-cli"
     };
     let npx_program = if cfg!(windows) { "npx.cmd" } else { "npx" };
-    vec![
+    let mut candidates = Vec::new();
+    if let Some(path) = managed_runtime_executable("wecom_cli") {
+        candidates.push(WeComCliCommand {
+            program: path.to_string_lossy().to_string(),
+            prefix_args: Vec::new(),
+            source: "WorkBuddy bundled WeCom CLI".into(),
+        });
+    }
+    candidates.extend([
         WeComCliCommand {
             program: direct_program.into(),
             prefix_args: Vec::new(),
@@ -484,7 +492,8 @@ fn wecom_cli_candidates() -> Vec<WeComCliCommand> {
             prefix_args: vec!["-y".into(), "@wecom/cli".into()],
             source: "@wecom/cli via npx".into(),
         },
-    ]
+    ]);
+    candidates
 }
 
 fn command_text(output: &std::process::Output) -> (String, String) {

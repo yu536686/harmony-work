@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.4-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.0.0-beta.4)
+[![Version](https://img.shields.io/badge/version-1.1.0--alpha.1-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.0-alpha.1)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
@@ -73,10 +73,14 @@ flowchart LR
 ### 系统要求
 
 - Windows 10 或 Windows 11 x64，推荐使用最新 Windows 11。
-- Microsoft Edge WebView2 Runtime。Windows 11 通常已经内置，安装程序也会按需引导安装。
+- 通过全量安装包安装时，离线 WebView2 Runtime 已内置，无需另行下载。
 - 可访问所选模型服务的网络，以及对应供应商的 API Key。
 - 若使用 Office 桌面控制能力，需要安装 Microsoft Office。
 - 若使用企业微信企业能力，需要安装并初始化 `@wecom/cli`。
+
+### 全量离线安装包
+
+发行流程同时生成 `Xiaoheng-WorkBuddy-Setup.exe`。它使用原生 WPF 安装界面，内置离线 WebView2、Node.js、Python、PortableGit、WeCom CLI 和 Harmony Cut 的 Python 依赖；安装后这些运行时仅位于 WorkBuddy 私有目录，不会改写系统 PATH。企业微信 `auth init`、账号登录和 AI 密钥仍需由当前用户在首次启动后完成。
 
 ### 1. 下载安装包
 
@@ -98,25 +102,16 @@ Get-FileHash .\Xiaoheng-WorkBuddy-<version>-x64-setup.exe -Algorithm SHA256
 
 双击安装包并按提示完成安装。当前 Beta 安装包可能尚未包含受信任的 Windows 代码签名，因此 SmartScreen 或智能应用控制可能显示“未知发布者”。请只使用本仓库 Release 提供的安装包，并先核对 SHA-256；正式分发版本应使用受信任证书签名。
 
-### 3. 初始化运行环境
+### 3. 运行环境
 
-首次启动时，小亨会检测以下运行环境：
+使用全量离线安装包时，安装阶段已经部署以下私有运行时：
 
-1. Git
-2. Node.js
-3. Python
+1. Node.js
+2. Python 与 Harmony Cut 依赖
+3. PortableGit
 4. WeCom CLI
 
-每个环境都有独立的“安装”按钮。安装完成后应用会自动重新检测；若状态没有更新，可点击“重新检测”或重启应用。
-
-在网络受限环境中，可以将离线安装包放在应用安装目录旁的 `installers` 或 `offline-installers` 目录。支持的文件形式包括：
-
-```text
-Git-*.exe
-node-*.msi / node-*.exe
-python-*.exe
-wecom-cli*.tgz
-```
+运行时位于 `%LOCALAPPDATA%\Harmony\WorkBuddy\runtime`，不会修改系统 PATH，也不会覆盖电脑上已有的开发环境。首次启动的环境检查页会直接显示“已安装”；普通 NSIS/MSI 安装包则仍会显示手动安装入口。
 
 ### 4. 登录或跳过
 
@@ -160,13 +155,13 @@ API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。�
 4. 如需通讯录、消息、文档、会议、日程和待办能力，再执行：
 
 ```powershell
-npx --yes @wecom/cli auth init
+%LOCALAPPDATA%\Harmony\WorkBuddy\runtime\wecom\wecom-cli.cmd auth init
 ```
 
 旧版 CLI 使用：
 
 ```powershell
-npx --yes @wecom/cli init
+%LOCALAPPDATA%\Harmony\WorkBuddy\runtime\wecom\wecom-cli.cmd init
 ```
 
 ### 个人微信 iLink
@@ -236,8 +231,8 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 发布示例：
 
 ```powershell
-git tag -a v1.0.0-beta.11 -m "小亨 WorkBuddy 1.0.0 Beta 11"
-git push origin v1.0.0-beta.11
+git tag -a v1.1.0-alpha.1 -m "小亨 WorkBuddy 1.1.0 Alpha 1"
+git push origin v1.1.0-alpha.1
 ```
 
 ## 项目结构
@@ -312,7 +307,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.0.0-beta.4`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.0.0-beta.4)
+- 当前版本：[`v1.1.0-alpha.1`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.1.0-alpha.1)
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/xiaoheng-workbuddy/issues)
 - Windows 构建：[GitHub Actions](https://github.com/yu536686/xiaoheng-workbuddy/actions/workflows/build-windows.yml)
 

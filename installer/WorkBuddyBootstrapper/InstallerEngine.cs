@@ -1,0 +1,327 @@
+using Microsoft.Win32;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Formats.Tar;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace WorkBuddyBootstrapper;
+
+public sealed record InstallerOptions(
+    string InstallDirectory,
+    bool CreateDesktopShortcut,
+    bool CreateStartMenuShortcut,
+    bool StartWithWindows);
+
+public sealed record InstallProgress(int Percent, string Title, string Detail);
+
+public sealed class InstallerEngine
+{
+    private const string ProductName = "小亨 WorkBuddy";
+    private readonly string _runtimeRoot = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Harmony",
+        "WorkBuddy",
+        "runtime");
+
+    public async Task<string> InstallAsync(
+        InstallerOptions options,
+        IProgress<InstallProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        var payloadRoot = ResolvePayloadRoot();
+        var manifest = await ReadManifestAsync(payloadRoot, cancellationToken);
+
+        progress.Report(new(5, "正在验证安装包", "正在校验应用与离线运行时的完整性。"));
+        await VerifyPayloadAsync(payloadRoot, manifest, cancellationToken);
+
+        progress.Report(new(16, "正在部署 Node.js", "配置应用私有 Node.js 运行时。"));
+        InstallNode(payloadRoot);
+
+        progress.Report(new(32, "正在部署 Python", "安装私有 Python 及 Harmony Cut 离线依赖。"));
+        await InstallPythonAsync(payloadRoot, cancellationToken);
+
+        progress.Report(new(50, "正在部署 Git", "解压应用私有 PortableGit。"));
+        await InstallPortableGitAsync(payloadRoot, cancellationToken);
+
+        progress.Report(new(64, "正在部署企业微信 CLI", "配置离线 WeCom CLI 和 Windows 平台二进制。"));
+        InstallWeComCli(payloadRoot);
+
+        progress.Report(new(78, "正在安装小亨 WorkBuddy", "安装应用与离线 WebView2 运行库。"));
+        await InstallApplicationAsync(payloadRoot, options.InstallDirectory, cancellationToken);
+
+        var applicationPath = Path.Combine(options.InstallDirectory, "xiaoheng-workbuddy.exe");
+        if (!File.Exists(applicationPath)) {
+            throw new InvalidOperationException($"主程序安装完成后未找到：{applicationPath}");
+        }
+
+        progress.Report(new(92, "正在创建快捷方式", "写入桌面、开始菜单和启动项配置。"));
+        ConfigureShortcuts(applicationPath, options);
+        WriteRuntimeMarker();
+
+        progress.Report(new(100, "安装完成", "小亨 WorkBuddy 已准备就绪。"));
+        return applicationPath;
+    }
+
+    public void LaunchApplication(string path)
+    {
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+    }
+
+    private static string ResolvePayloadRoot()
+    {
+        var roots = new[] {
+            Path.Combine(AppContext.BaseDirectory, "payload"),
+            Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "payload"),
+        };
+        var root = roots.FirstOrDefault(path => File.Exists(Path.Combine(path, "payload.manifest.json")));
+        return root ?? throw new FileNotFoundException("安装载荷不完整，找不到 payload.manifest.json。");
+    }
+
+    private static async Task<PayloadManifest> ReadManifestAsync(string payloadRoot, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(payloadRoot, "payload.manifest.json");
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<PayloadManifest>(stream, cancellationToken: cancellationToken)
+            ?? throw new InvalidDataException("安装载荷清单无效。");
+    }
+
+    private static async Task VerifyPayloadAsync(string payloadRoot, PayloadManifest manifest, CancellationToken cancellationToken)
+    {
+        if (manifest.Files.Count == 0) {
+            throw new InvalidDataException("安装载荷清单为空。");
+        }
+        foreach (var item in manifest.Files) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(Path.Combine(payloadRoot, item.Path));
+            if (!fullPath.StartsWith(Path.GetFullPath(payloadRoot), StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath)) {
+                throw new FileNotFoundException($"缺少安装载荷：{item.Path}");
+            }
+            var actual = await HashFileAsync(fullPath, cancellationToken);
+            if (!actual.Equals(item.Sha256, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException($"安装载荷校验失败：{item.Path}");
+            }
+        }
+    }
+
+    private void InstallNode(string payloadRoot)
+    {
+        var zipPath = PayloadPath(payloadRoot, "runtime", "node-v22.14.0-win-x64.zip");
+        var staging = CreateStagingDirectory("node");
+        try {
+            ZipFile.ExtractToDirectory(zipPath, staging, true);
+            var source = Directory.GetDirectories(staging).SingleOrDefault()
+                ?? throw new InvalidDataException("Node.js 离线包目录结构无效。");
+            ReplaceDirectory(source, Path.Combine(_runtimeRoot, "node"));
+        } finally {
+            DeleteDirectory(staging);
+        }
+    }
+
+    private async Task InstallPythonAsync(string payloadRoot, CancellationToken cancellationToken)
+    {
+        var pythonRoot = Path.Combine(_runtimeRoot, "python");
+        var installer = PayloadPath(payloadRoot, "runtime", "python-3.12.8-amd64.exe");
+        Directory.CreateDirectory(_runtimeRoot);
+        await RunProcessAsync(
+            installer,
+            $"/quiet InstallAllUsers=0 PrependPath=0 Include_pip=1 Include_test=0 TargetDir=\"{pythonRoot}\"",
+            cancellationToken);
+
+        var wheelZip = PayloadPath(payloadRoot, "runtime", "harmony-cut-wheelhouse.zip");
+        var requirements = PayloadPath(payloadRoot, "runtime", "harmony-cut-requirements.txt");
+        var wheelDirectory = Path.Combine(_runtimeRoot, "python-wheelhouse");
+        ReplaceDirectoryFromZip(wheelZip, wheelDirectory);
+        await RunProcessAsync(
+            Path.Combine(pythonRoot, "python.exe"),
+            $"-m pip install --disable-pip-version-check --no-index --find-links \"{wheelDirectory}\" -r \"{requirements}\"",
+            cancellationToken);
+    }
+
+    private async Task InstallPortableGitAsync(string payloadRoot, CancellationToken cancellationToken)
+    {
+        var gitRoot = Path.Combine(_runtimeRoot, "git");
+        DeleteDirectory(gitRoot);
+        Directory.CreateDirectory(gitRoot);
+        await RunProcessAsync(
+            PayloadPath(payloadRoot, "runtime", "PortableGit-2.47.1-64-bit.7z.exe"),
+            $"-o\"{gitRoot}\" -y",
+            cancellationToken);
+    }
+
+    private void InstallWeComCli(string payloadRoot)
+    {
+        var nodeModules = Path.Combine(_runtimeRoot, "wecom", "node_modules", "@wecom");
+        ExtractNpmPackage(
+            PayloadPath(payloadRoot, "runtime", "wecom-cli-0.1.9.tgz"),
+            Path.Combine(nodeModules, "cli"));
+        ExtractNpmPackage(
+            PayloadPath(payloadRoot, "runtime", "wecom-cli-win32-x64-0.1.9.tgz"),
+            Path.Combine(nodeModules, "cli-win32-x64"));
+
+        var commandPath = Path.Combine(_runtimeRoot, "wecom", "wecom-cli.cmd");
+        Directory.CreateDirectory(Path.GetDirectoryName(commandPath)!);
+        File.WriteAllText(commandPath,
+            "@echo off\r\n\"%~dp0..\\node\\node.exe\" \"%~dp0node_modules\\@wecom\\cli\\bin\\wecom.js\" %*\r\n");
+    }
+
+    private static async Task InstallApplicationAsync(string payloadRoot, string installDirectory, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(installDirectory);
+        var installer = PayloadPath(payloadRoot, "app", "xiaoheng-workbuddy-setup.exe");
+        await RunProcessAsync(installer, $"/S /D=\"{installDirectory}\"", cancellationToken);
+    }
+
+    private static void ConfigureShortcuts(string appPath, InstallerOptions options)
+    {
+        if (options.CreateDesktopShortcut) {
+            CreateShortcut(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                $"{ProductName}.lnk"), appPath);
+        }
+        if (options.CreateStartMenuShortcut) {
+            CreateShortcut(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                ProductName,
+                $"{ProductName}.lnk"), appPath);
+        }
+
+        using var run = Registry.CurrentUser.OpenSubKey(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Run", writable: true);
+        if (options.StartWithWindows) {
+            run?.SetValue("Harmony WorkBuddy", $"\"{appPath}\"");
+        } else {
+            run?.DeleteValue("Harmony WorkBuddy", throwOnMissingValue: false);
+        }
+    }
+
+    private static void CreateShortcut(string shortcutPath, string targetPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath)!);
+        var shellType = Type.GetTypeFromProgID("WScript.Shell")
+            ?? throw new InvalidOperationException("无法创建 Windows 快捷方式。");
+        dynamic shell = Activator.CreateInstance(shellType)!;
+        dynamic shortcut = shell.CreateShortcut(shortcutPath);
+        shortcut.TargetPath = targetPath;
+        shortcut.WorkingDirectory = Path.GetDirectoryName(targetPath)!;
+        shortcut.IconLocation = targetPath;
+        shortcut.Save();
+    }
+
+    private void WriteRuntimeMarker()
+    {
+        Directory.CreateDirectory(_runtimeRoot);
+        var marker = new {
+            version = "1.1.0-alpha.1",
+            installedAt = DateTimeOffset.UtcNow,
+            node = Path.Combine(_runtimeRoot, "node", "node.exe"),
+            python = Path.Combine(_runtimeRoot, "python", "python.exe"),
+            git = Path.Combine(_runtimeRoot, "git", "bin", "git.exe"),
+            wecomCli = Path.Combine(_runtimeRoot, "wecom", "wecom-cli.cmd"),
+        };
+        File.WriteAllText(
+            Path.Combine(_runtimeRoot, "managed-runtime.json"),
+            JsonSerializer.Serialize(marker, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static void ExtractNpmPackage(string packagePath, string destination)
+    {
+        DeleteDirectory(destination);
+        Directory.CreateDirectory(destination);
+        using var packageStream = File.OpenRead(packagePath);
+        using var gzip = new GZipStream(packageStream, CompressionMode.Decompress);
+        using var archive = new TarReader(gzip);
+        TarEntry? entry;
+        while ((entry = archive.GetNextEntry()) is not null) {
+            if (!entry.Name.StartsWith("package/", StringComparison.Ordinal) || entry.EntryType is TarEntryType.Directory) continue;
+            var relative = entry.Name["package/".Length..];
+            var target = Path.GetFullPath(Path.Combine(destination, relative));
+            if (!target.StartsWith(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException("WeCom CLI 包包含非法路径。");
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            if (entry.DataStream is not null) {
+                using var output = File.Create(target);
+                entry.DataStream.CopyTo(output);
+            }
+        }
+    }
+
+    private static void ReplaceDirectoryFromZip(string zipPath, string destination)
+    {
+        var staging = CreateStagingDirectory("wheels");
+        try {
+            ZipFile.ExtractToDirectory(zipPath, staging, true);
+            ReplaceDirectory(staging, destination);
+        } catch {
+            DeleteDirectory(staging);
+            throw;
+        }
+    }
+
+    private static void ReplaceDirectory(string source, string destination)
+    {
+        DeleteDirectory(destination);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        Directory.Move(source, destination);
+    }
+
+    private static string CreateStagingDirectory(string name)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "Harmony", "WorkBuddySetup", name, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+    }
+
+    private static string PayloadPath(string root, params string[] segments)
+    {
+        var path = segments.Aggregate(root, Path.Combine);
+        if (!File.Exists(path)) throw new FileNotFoundException($"缺少安装载荷：{Path.Combine(segments)}", path);
+        return path;
+    }
+
+    private static async Task<string> HashFileAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static async Task RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    {
+        using var process = Process.Start(new ProcessStartInfo(fileName, arguments) {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+        }) ?? throw new InvalidOperationException($"无法启动：{fileName}");
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        var stderr = await stderrTask;
+        if (process.ExitCode != 0) {
+            throw new InvalidOperationException($"安装命令失败（{Path.GetFileName(fileName)}，退出码 {process.ExitCode}）：{stderr.Trim()}");
+        }
+    }
+}
+
+public sealed class PayloadManifest
+{
+    public string Version { get; set; } = string.Empty;
+    public List<PayloadFile> Files { get; set; } = [];
+}
+
+public sealed class PayloadFile
+{
+    public string Path { get; set; } = string.Empty;
+    public string Sha256 { get; set; } = string.Empty;
+}

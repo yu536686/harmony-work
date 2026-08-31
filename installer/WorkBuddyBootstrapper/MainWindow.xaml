@@ -1,0 +1,77 @@
+<Window x:Class="WorkBuddyBootstrapper.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="安装小亨 WorkBuddy" Height="700" Width="520" MinHeight="700" MinWidth="520"
+        WindowStyle="None" ResizeMode="NoResize" Background="#FFFDFCFB" FontFamily="Microsoft YaHei UI">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="44" CornerRadius="16" GlassFrameThickness="0" ResizeBorderThickness="0" />
+  </shell:WindowChrome.WindowChrome>
+  <Border Margin="1" Background="#FFFDFCFB" CornerRadius="15" BorderBrush="#EEEAE5" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="44" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+
+      <Grid Grid.Row="0" Margin="18,0,14,0">
+        <TextBlock VerticalAlignment="Center" Foreground="#78716B" FontSize="12" Text="小亨 WorkBuddy 安装器" />
+        <Button HorizontalAlignment="Right" Width="28" Height="28" BorderThickness="0" Background="Transparent"
+                Foreground="#9A948D" FontSize="18" Content="×" Click="Close_Click" />
+      </Grid>
+
+      <Grid Grid.Row="1" Margin="42,8,42,32">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" VerticalAlignment="Center">
+          <Border Width="96" Height="96" CornerRadius="25" Background="#FFF8EE" BorderBrush="#F0E5D3" BorderThickness="1" HorizontalAlignment="Center">
+            <Image Source="pack://application:,,,/Assets/brand.png" Stretch="Uniform" Margin="14" />
+          </Border>
+          <TextBlock Margin="0,18,0,0" HorizontalAlignment="Center" FontSize="29" FontWeight="SemiBold" Foreground="#1F1D1A" Text="小亨 WorkBuddy" />
+          <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="14" Foreground="#77716C" Text="让创作、协作与执行在一个工作台完成" />
+
+          <Border x:Name="StatusPanel" Margin="0,30,0,0" Padding="16" Background="#FAF8F5" CornerRadius="10" Visibility="Collapsed">
+            <StackPanel>
+              <DockPanel>
+                <TextBlock x:Name="StatusTitle" FontSize="14" FontWeight="SemiBold" Foreground="#26221E" Text="正在准备安装" />
+                <TextBlock x:Name="ProgressText" DockPanel.Dock="Right" FontSize="12" Foreground="#8A837B" Text="0%" />
+              </DockPanel>
+              <ProgressBar x:Name="InstallProgress" Height="6" Margin="0,12,0,9" Minimum="0" Maximum="100" Value="0" Foreground="#1F1D1A" Background="#E7E1DA" />
+              <TextBlock x:Name="StatusDetail" FontSize="12" Foreground="#77716C" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Button x:Name="InstallButton" Margin="0,30,0,0" Height="48" Background="#171614" Foreground="White" BorderThickness="0"
+                  FontSize="15" FontWeight="SemiBold" Content="立即安装" Click="Install_Click" />
+
+          <Button x:Name="CustomizeButton" Margin="0,14,0,0" Background="Transparent" BorderThickness="0" Foreground="#5D5751"
+                  FontSize="13" Content="自定义安装⌄" Click="ToggleCustomize_Click" />
+
+          <StackPanel x:Name="CustomizePanel" Visibility="Collapsed" Margin="0,10,0,0">
+            <TextBlock FontSize="12" Foreground="#766F68" Text="安装位置" />
+            <Grid Margin="0,8,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="42" /></Grid.ColumnDefinitions>
+              <TextBox x:Name="InstallPathTextBox" Grid.Column="0" Height="38" Padding="11,7" BorderBrush="#E5DFD8" Background="#F7F5F2" Foreground="#514B45" />
+              <Button Grid.Column="1" Margin="7,0,0,0" Height="38" Background="#F2EFEA" BorderBrush="#E5DFD8" Content="…" Click="ChoosePath_Click" />
+            </Grid>
+            <WrapPanel Margin="0,14,0,0">
+              <CheckBox x:Name="DesktopShortcutCheckBox" Margin="0,0,20,10" IsChecked="True" Content="创建桌面快捷方式" />
+              <CheckBox x:Name="StartMenuShortcutCheckBox" Margin="0,0,20,10" IsChecked="True" Content="添加到开始菜单" />
+              <CheckBox x:Name="StartupCheckBox" Margin="0,0,20,10" Content="开机自动启动" />
+            </WrapPanel>
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1">
+          <CheckBox x:Name="TermsCheckBox" FontSize="12" Foreground="#625B55" IsChecked="True">
+            <TextBlock>我已阅读并同意 <Run Foreground="#2878D4" Text="用户协议" /> 和 <Run Foreground="#2878D4" Text="隐私条款" /></TextBlock>
+          </CheckBox>
+          <TextBlock x:Name="ErrorText" Margin="0,10,0,0" FontSize="12" Foreground="#B5382D" TextWrapping="Wrap" Visibility="Collapsed" />
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

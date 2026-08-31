@@ -1,4 +1,4 @@
-use crate::process::std_command;
+use crate::process::{managed_runtime_executable, std_command};
 use crate::store::{AppState, Settings};
 use robotz_browser::download;
 use serde::{Deserialize, Serialize};
@@ -99,6 +99,7 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
 
     // Node.js
     let node = probe_with_override("node", &["--version"], &custom_paths)
+        .or_else(|| probe_managed_runtime("node", &["--version"]))
         .or_else(|| probe_command("node", &["--version"]));
     items.push(RuntimeCheckItem {
         name: "Node.js".into(),
@@ -110,6 +111,7 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
 
     // npm (bundled with Node, but check separately)
     let npm = probe_with_override("npm", &["--version"], &custom_paths)
+        .or_else(|| probe_managed_runtime("npm", &["--version"]))
         .or_else(|| probe_command("npm", &["--version"]));
     items.push(RuntimeCheckItem {
         name: "npm".into(),
@@ -121,6 +123,7 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
 
     // Python
     let python = probe_with_override("python", &["--version"], &custom_paths)
+        .or_else(|| probe_managed_runtime("python", &["--version"]))
         .or_else(|| probe_command("python", &["--version"]))
         .or_else(|| probe_command("python3", &["--version"]));
     items.push(RuntimeCheckItem {
@@ -133,6 +136,7 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
 
     // pip
     let pip = probe_with_override("pip", &["--version"], &custom_paths)
+        .or_else(|| probe_managed_runtime("pip", &["--version"]))
         .or_else(|| probe_command("pip", &["--version"]))
         .or_else(|| probe_command("pip3", &["--version"]));
     items.push(RuntimeCheckItem {
@@ -145,6 +149,7 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
 
     // Git (needed for some skill installs)
     let git = probe_with_override("git", &["--version"], &custom_paths)
+        .or_else(|| probe_managed_runtime("git", &["--version"]))
         .or_else(|| probe_command("git", &["--version"]));
     items.push(RuntimeCheckItem {
         name: "Git".into(),
@@ -618,6 +623,11 @@ fn probe_with_override(
     probe_command(path, args)
 }
 
+fn probe_managed_runtime(key: &str, args: &[&str]) -> Option<String> {
+    managed_runtime_executable(key)
+        .and_then(|path| probe_command(path.to_string_lossy().as_ref(), args))
+}
+
 fn build_dependency_item(
     key: &str,
     name: &str,
@@ -879,9 +889,12 @@ fn collect_environment_bootstrap(
     let items = bootstrap_targets()
         .into_iter()
         .map(|target| {
+            let managed = managed_runtime_executable(target.key).is_some();
             let version = target_available(target);
             let local = find_local_installer(target);
-            let source = if version.is_some() {
+            let source = if managed {
+                "bundled".to_string()
+            } else if version.is_some() {
                 "system".to_string()
             } else if local.is_some() {
                 "local".to_string()
@@ -890,7 +903,10 @@ fn collect_environment_bootstrap(
             } else {
                 "missing".to_string()
             };
-            let details = if version.is_some() {
+            let details = if managed {
+                "Installed by the WorkBuddy full offline installer and isolated from the system environment."
+                    .to_string()
+            } else if version.is_some() {
                 "Installed and ready.".to_string()
             } else if let Some(path) = &local {
                 format!("Local installer found: {}", path.display())
@@ -943,7 +959,8 @@ fn collect_environment_bootstrap(
 
 fn target_available(target: BootstrapTarget) -> Option<String> {
     if target.key == "wecom_cli" {
-        return probe_command(target.probe_command, target.probe_args)
+        return probe_managed_runtime("wecom_cli", target.probe_args)
+            .or_else(|| probe_command(target.probe_command, target.probe_args))
             .or_else(|| probe_command("wecom-cli.cmd", target.probe_args))
             .or_else(probe_wecom_cli_from_npm_prefix)
             .or_else(|| probe_command("npx", &["-y", "@wecom/cli", "--version"]))
@@ -951,7 +968,8 @@ fn target_available(target: BootstrapTarget) -> Option<String> {
             .or_else(|| probe_command("npm", &["list", "-g", "@wecom/cli", "--depth=0"]))
             .or_else(|| probe_command("npm.cmd", &["list", "-g", "@wecom/cli", "--depth=0"]));
     }
-    let detected = probe_command(target.probe_command, target.probe_args);
+    let detected = probe_managed_runtime(target.key, target.probe_args)
+        .or_else(|| probe_command(target.probe_command, target.probe_args));
     if target.key == "python" {
         detected.or_else(|| probe_command("python3", target.probe_args))
     } else {

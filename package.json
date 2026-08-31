@@ -1,7 +1,7 @@
 {
   "name": "xiaoheng-workbuddy",
   "private": true,
-  "version": "1.0.0-beta.11",
+  "version": "1.1.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,8 @@
     "stage:codex": "node scripts/stage-codex-sidecar.mjs",
     "stage:mcp-host": "node scripts/stage-workbuddy-mcp-host.mjs",
     "tauri": "tauri",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs",
+    "test:installer": "node --test scripts/offline-runtime-lock.test.mjs",
     "test:codex-sdk": "node --test scripts/codex-sdk-runner.test.mjs",
     "test:codex-sidecar": "node --test scripts/stage-codex-sidecar.test.mjs",
     "test:mcp-host": "node --test scripts/stage-workbuddy-mcp-host.test.mjs",
