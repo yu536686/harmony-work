@@ -8763,7 +8763,7 @@ dependencies = [
 
 [[package]]
 name = "workbuddy-mcp-host"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.11"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8903,7 +8903,7 @@ dependencies = [
 
 [[package]]
 name = "xiaoheng-workbuddy"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.11"
 dependencies = [
  "aes",
  "anyhow",

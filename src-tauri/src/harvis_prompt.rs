@@ -178,27 +178,83 @@ fn request_body(model: &str, input: &HarvisPromptInput, repair: Option<&str>) ->
             }
         },
         "max_output_tokens": 1600,
-        "temperature": 0.45
+        "temperature": 0.45,
+        "reasoning": {
+            "effort": "low"
+        }
     })
 }
 
+fn content_text(content: &Value) -> Option<String> {
+    content
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| content.get("output_text").and_then(Value::as_str))
+        .map(str::to_string)
+}
+
 fn output_text(response: &Value) -> Option<String> {
-    if let Some(text) = response.get("output_text").and_then(Value::as_str) {
-        return Some(text.to_string());
-    }
-    response
-        .get("output")
-        .and_then(Value::as_array)
+    let output = response.get("output").and_then(Value::as_array);
+
+    // Responses APIs expose model thinking as a separate `reasoning` item. Only
+    // `message` output is allowed to drive the user-visible Suno prompt.
+    if let Some(text) = output
         .into_iter()
         .flatten()
-        .flat_map(|item| item.get("content").and_then(Value::as_array).into_iter().flatten())
-        .find_map(|content| {
-            content
-                .get("text")
-                .and_then(Value::as_str)
-                .or_else(|| content.get("output_text").and_then(Value::as_str))
-                .map(str::to_string)
+        .rev()
+        .filter_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("message"))
+                .then_some(item)
+                .into_iter()
+                .flat_map(|item| {
+                    item.get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .rev()
+                })
+                .filter(|content| {
+                    content.get("type").and_then(Value::as_str) == Some("output_text")
+                })
+                .find_map(content_text)
         })
+        .next()
+    {
+        return Some(text);
+    }
+
+    // Some compatibility gateways omit item/content types. Keep that support,
+    // while continuing to reject an explicitly typed reasoning item.
+    if let Some(text) = output
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter_map(|item| {
+            let item_type = item.get("type").and_then(Value::as_str);
+            (item_type != Some("reasoning") && item_type != Some("message"))
+                .then_some(item)
+                .into_iter()
+                .flat_map(|item| {
+                    item.get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .rev()
+                })
+                .filter(|content| {
+                    content.get("type").and_then(Value::as_str) != Some("reasoning_text")
+                })
+                .find_map(content_text)
+        })
+        .next()
+    {
+        return Some(text);
+    }
+
+    response
+        .get("output_text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn json_payload(text: &str) -> &str {
@@ -608,7 +664,57 @@ mod tests {
         let response = json!({
             "output": [{ "content": [{ "type": "output_text", "text": "{\"analysisZh\":\"ok\"}" }] }]
         });
-        assert_eq!(output_text(&response).as_deref(), Some("{\"analysisZh\":\"ok\"}"));
+        assert_eq!(
+            output_text(&response).as_deref(),
+            Some("{\"analysisZh\":\"ok\"}")
+        );
+    }
+
+    #[test]
+    fn ignores_reasoning_output_and_uses_the_final_message() {
+        let response = json!({
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": "Need decide which evidence cases fit before returning JSON."
+                    }]
+                },
+                {
+                    "type": "message",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "{\"analysisZh\":\"最终说明\",\"sunoPromptEn\":\"Instrumental luxury watch campaign, no vocals.\"}"
+                    }]
+                }
+            ]
+        });
+
+        assert_eq!(
+            output_text(&response).as_deref(),
+            Some("{\"analysisZh\":\"最终说明\",\"sunoPromptEn\":\"Instrumental luxury watch campaign, no vocals.\"}")
+        );
+    }
+
+    #[test]
+    fn requests_low_reasoning_effort_for_the_prompt_assistant() {
+        let input = HarvisPromptInput {
+            business_line: "腕表如诗".to_string(),
+            brand: "宝珀".to_string(),
+            watch_collection: "Villeret".to_string(),
+            watch_style: None,
+            desired_style: None,
+            bpm: None,
+            duration: 45,
+            campaign_context: Vec::new(),
+            evidence_cases: Vec::new(),
+        };
+        let body = request_body("deepseek-chat", &input, None);
+        assert_eq!(
+            body.pointer("/reasoning/effort").and_then(Value::as_str),
+            Some("low")
+        );
     }
 
     #[test]
