@@ -13,6 +13,7 @@ if (-not (Test-Path -LiteralPath $PayloadCache)) { throw "Offline runtime cache 
 
 Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination "app"), (Join-Path $Destination "runtime") | Out-Null
+$Destination = [System.IO.Path]::GetFullPath($Destination)
 
 Copy-Item -LiteralPath $InnerInstaller -Destination (Join-Path $Destination "app\xiaoheng-workbuddy-setup.exe")
 foreach ($Property in $Lock.components.PSObject.Properties) {
