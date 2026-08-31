@@ -58,7 +58,7 @@ public partial class MainWindow : Window
             StatusTitle.Text = "正在取消安装";
             return;
         }
-        Application.Current.Shutdown();
+        System.Windows.Application.Current.Shutdown();
     }
 
     private void ToggleCustomize_Click(object sender, RoutedEventArgs e)
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
     {
         if (_installing) return;
         if (_loadFailed) {
-            Application.Current.Shutdown();
+            System.Windows.Application.Current.Shutdown();
             return;
         }
         if (!string.IsNullOrWhiteSpace(_installedApplicationPath)) {
@@ -135,7 +135,7 @@ public partial class MainWindow : Window
             _installCancellation = null;
             _installing = false;
             if (_closeAfterCancellation) {
-                Application.Current.Shutdown();
+                System.Windows.Application.Current.Shutdown();
             }
         }
     }
@@ -152,7 +152,7 @@ public partial class MainWindow : Window
     {
         try {
             _engine.LaunchApplication(appPath);
-            Application.Current.Shutdown();
+            System.Windows.Application.Current.Shutdown();
         } catch (Exception error) {
             ShowError($"无法启动小亨 WorkBuddy：{error.Message}");
         }
