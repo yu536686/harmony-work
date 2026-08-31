@@ -36,14 +36,25 @@ if (-not $InnerInstaller) {
 }
 if (-not $InnerInstaller) { throw "Could not locate the generated NSIS installer." }
 
+$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot "stage-full-installer-payload.ps1") -InnerInstaller $InnerInstaller -PayloadCache $PayloadCache
 if ($LASTEXITCODE -ne 0) { throw "Failed to stage full installer payload." }
+
+$StagedPayload = Join-Path $ProjectRoot "installer\.build\payload"
+$PayloadArchive = Join-Path $ProjectRoot "installer\.build\payload.zip"
+Remove-Item -LiteralPath $PayloadArchive -Force -ErrorAction SilentlyContinue
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+  $StagedPayload,
+  $PayloadArchive,
+  [System.IO.Compression.CompressionLevel]::Optimal,
+  $false)
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 dotnet publish (Join-Path $ProjectRoot "installer\WorkBuddyBootstrapper\WorkBuddyBootstrapper.csproj") `
   -c Release `
   -r win-x64 `
   -p:PayloadDirectory="$(Join-Path $ProjectRoot 'installer\.build\payload')" `
+  -p:PayloadArchive="$PayloadArchive" `
   -p:Version="1.1.0-alpha.1" `
   -o $OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw "WPF bootstrapper publish failed." }

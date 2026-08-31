@@ -6,6 +6,7 @@ using System.Formats.Tar;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -35,7 +36,8 @@ public sealed class InstallerEngine
         IProgress<InstallProgress> progress,
         CancellationToken cancellationToken)
     {
-        var payloadRoot = ResolvePayloadRoot();
+        progress.Report(new(1, "正在准备安装器", "正在载入离线安装载荷，首次执行可能需要几分钟。"));
+        var payloadRoot = await ResolvePayloadRootAsync(cancellationToken);
         var manifest = await ReadManifestAsync(payloadRoot, cancellationToken);
 
         progress.Report(new(5, "正在验证安装包", "正在校验应用与离线运行时的完整性。"));
@@ -74,21 +76,43 @@ public sealed class InstallerEngine
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
-    private static string ResolvePayloadRoot()
+    private static async Task<string> ResolvePayloadRootAsync(CancellationToken cancellationToken)
     {
-        var roots = new[] {
-            Path.Combine(AppContext.BaseDirectory, "payload"),
-            Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "payload"),
-        };
-        var root = roots.FirstOrDefault(path => File.Exists(Path.Combine(path, "payload.manifest.json")));
-        return root ?? throw new FileNotFoundException("安装载荷不完整，找不到 payload.manifest.json。");
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Harmony",
+            "WorkBuddy",
+            "installer-cache",
+            "1.1.0-alpha.1",
+            "payload");
+        if (File.Exists(Path.Combine(root, "payload.manifest.json"))) return root;
+
+        var staging = root + ".staging-" + Guid.NewGuid().ToString("N");
+        var archivePath = Path.Combine(staging, "payload.zip");
+        var extractedPayload = Path.Combine(staging, "payload");
+        try {
+            Directory.CreateDirectory(staging);
+            await using var source = Assembly.GetExecutingAssembly().GetManifestResourceStream("WorkBuddyBootstrapper.PayloadArchive")
+                ?? throw new FileNotFoundException("安装载荷未嵌入安装程序。");
+            await using (var archive = File.Create(archivePath)) {
+                await source.CopyToAsync(archive, cancellationToken);
+            }
+            await Task.Run(() => ZipFile.ExtractToDirectory(archivePath, extractedPayload, true), cancellationToken);
+            DeleteDirectory(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+            Directory.Move(extractedPayload, root);
+            return root;
+        } finally {
+            DeleteDirectory(staging);
+        }
     }
 
     private static async Task<PayloadManifest> ReadManifestAsync(string payloadRoot, CancellationToken cancellationToken)
     {
         var path = Path.Combine(payloadRoot, "payload.manifest.json");
         await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<PayloadManifest>(stream, cancellationToken: cancellationToken)
+        return await JsonSerializer.DeserializeAsync<PayloadManifest>(stream,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken)
             ?? throw new InvalidDataException("安装载荷清单无效。");
     }
 
@@ -175,7 +199,8 @@ public sealed class InstallerEngine
     {
         Directory.CreateDirectory(installDirectory);
         var installer = PayloadPath(payloadRoot, "app", "xiaoheng-workbuddy-setup.exe");
-        await RunProcessAsync(installer, $"/S /D=\"{installDirectory}\"", cancellationToken);
+        // NSIS /D 必须是最后一个参数，且值不能加引号（即使路径含空格）
+        await RunProcessAsync(installer, $"/S /D={installDirectory}", cancellationToken);
     }
 
     private static void ConfigureShortcuts(string appPath, InstallerOptions options)

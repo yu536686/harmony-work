@@ -58,4 +58,51 @@ test("Windows full installer resolves the Cargo target directory and retains PAT
     /\$global:LASTEXITCODE\s*=\s*0\s*\n\s*& \(Join-Path \$PSScriptRoot "fetch-offline-runtime\.ps1"\)/,
     "the full installer must not inherit a stale native exit code before fetching cached payloads",
   );
+  assert.match(
+    installerScript,
+    /\$global:LASTEXITCODE\s*=\s*0\s*\n\s*& \(Join-Path \$PSScriptRoot "stage-full-installer-payload\.ps1"\)/,
+    "the full installer must not inherit a stale native exit code before staging the payload",
+  );
+});
+
+test("WPF bootstrapper declares the installer main window as its startup window", async () => {
+  const appXaml = await readFile(
+    new URL("../installer/WorkBuddyBootstrapper/App.xaml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    appXaml,
+    /StartupUri="MainWindow\.xaml"/,
+    "the bootstrapper must create MainWindow instead of remaining as a background process",
+  );
+});
+
+test("WPF bootstrapper defers the large offline payload until after its window is visible", async () => {
+  const [project, engine] = await Promise.all([
+    readFile(
+      new URL("../installer/WorkBuddyBootstrapper/WorkBuddyBootstrapper.csproj", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(
+    project,
+    /<EmbeddedResource Include="\$\(PayloadArchive\)" LogicalName="WorkBuddyBootstrapper\.PayloadArchive"/,
+    "the payload must be embedded as one archive instead of extracted before WPF starts",
+  );
+  assert.doesNotMatch(
+    project,
+    /IncludeAllContentForSelfExtract>true/,
+    "self-extracting all content blocks the installer window behind the large payload extraction",
+  );
+  assert.match(
+    engine,
+    /GetManifestResourceStream\("WorkBuddyBootstrapper\.PayloadArchive"\)/,
+    "the installer must materialize the embedded payload only after the user starts installation",
+  );
 });

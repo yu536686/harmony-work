@@ -12,17 +12,14 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <PublishTrimmed>false</PublishTrimmed>
     <PayloadDirectory Condition="'$(PayloadDirectory)' == ''">$(MSBuildProjectDirectory)\..\.build\payload</PayloadDirectory>
+    <PayloadArchive Condition="'$(PayloadArchive)' == ''">$(MSBuildProjectDirectory)\..\.build\payload.zip</PayloadArchive>
   </PropertyGroup>
 
   <ItemGroup>
     <Resource Include="..\..\src-tauri\icons\128x128.png" Link="Assets\brand.png" />
-    <Content Include="$(PayloadDirectory)\**\*" Link="payload\%(RecursiveDir)%(Filename)%(Extension)">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
-    </Content>
+    <EmbeddedResource Include="$(PayloadArchive)" LogicalName="WorkBuddyBootstrapper.PayloadArchive" />
   </ItemGroup>
 </Project>
