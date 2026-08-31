@@ -30,3 +30,27 @@ test("offline runtime lock includes a fully pinned Harmony Cut wheelhouse", () =
     assert.match(wheel.sha256, /^[a-f0-9]{64}$/i);
   }
 });
+
+test("Windows full installer resolves the Cargo target directory and retains PATH storage", async () => {
+  const [processSource, installerScript, workflow] = await Promise.all([
+    readFile(new URL("../src-tauri/src/process.rs", import.meta.url), "utf8"),
+    readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/build-windows.yml", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(
+    processSource,
+    /if let Some\(current_path\) = std::env::var_os\("PATH"\)/,
+    "the Windows PATH value must live while split_paths borrows it",
+  );
+  assert.match(
+    installerScript,
+    /Join-Path \$ProjectRoot "target"/,
+    "the bootstrapper must search Cargo's repository-level target directory",
+  );
+  assert.match(
+    workflow,
+    /^\s+target\/x86_64-pc-windows-msvc\/release\/bundle\/nsis\/\*\.exe$/m,
+    "the uploaded NSIS artifact must use Cargo's repository-level target directory",
+  );
+});

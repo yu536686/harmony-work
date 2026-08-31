@@ -71,11 +71,9 @@ pub fn managed_runtime_bin_dirs() -> Vec<PathBuf> {
 #[cfg(windows)]
 fn managed_path_value() -> Option<std::ffi::OsString> {
     let mut paths = managed_runtime_bin_dirs();
-    paths.extend(
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|value| std::env::split_paths(&value)),
-    );
+    if let Some(current_path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current_path));
+    }
     std::env::join_paths(paths).ok()
 }
 

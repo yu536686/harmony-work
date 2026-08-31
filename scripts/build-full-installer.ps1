@@ -21,7 +21,13 @@ if (-not $InnerInstaller -and -not $SkipTauriBuild) {
 }
 
 if (-not $InnerInstaller) {
-  $InnerInstaller = Get-ChildItem -Path (Join-Path $ProjectRoot "src-tauri\target") -Recurse -Filter "*setup.exe" |
+  $TargetDirectories = @(
+    (Join-Path $ProjectRoot "target"),
+    (Join-Path $ProjectRoot "src-tauri\target")
+  ) | Where-Object { Test-Path -LiteralPath $_ }
+  $InnerInstaller = $TargetDirectories | ForEach-Object {
+    Get-ChildItem -Path $_ -Recurse -Filter "*setup.exe" -ErrorAction SilentlyContinue
+  } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1 -ExpandProperty FullName
 }
