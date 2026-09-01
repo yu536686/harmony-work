@@ -129,7 +129,7 @@ mod tests {
     fn b1_version_has_semver_and_display_forms() {
         let config = CodexRuntimeConfig::b1_default();
 
-        assert_eq!(config.package_version, "1.2.0-alpha.1");
+        assert_eq!(config.package_version, "1.2.0-alpha.2");
         assert_eq!(config.display_version, "b1.0.5");
         assert_eq!(config.codex_version, "0.149.0");
     }
