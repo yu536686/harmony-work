@@ -7,6 +7,7 @@ import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { RootState, settingsActions } from "../../store";
 import {
   settingsApi,
+  accountSettingsSyncApi,
   gatewayApi,
   systemApi,
   wechatApi,
@@ -21,6 +22,7 @@ import {
   ProviderModelInfo,
   EnterpriseCapabilityStatus,
   EnterpriseCapabilityTestResult,
+  readRememberedMarketingUser,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
@@ -512,6 +514,14 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key)));
+      const syncUser = readRememberedMarketingUser();
+      if (syncUser?.approvalStatus === "active" && localStorage.getItem(`workbuddy.accountSettingsSyncEnabled.${syncUser.id}`) === "true") {
+        // The initial login prompt establishes the local encrypted data key.
+        // Later changes are backed up best-effort and never block saving local settings.
+        void accountSettingsSyncApi.backup(syncUser.id).catch((error) => {
+          console.warn("Unable to refresh account settings backup", error);
+        });
+      }
       try {
         const gateway = await gatewayApi.connect();
         setGatewayStatus(gateway.channels);

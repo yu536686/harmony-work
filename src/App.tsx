@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type ChatAttachment, type MarketingUser } from "./services/tauri";
+import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type ChatAttachment, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import i18n, { setLanguage } from "./i18n";
@@ -124,9 +124,24 @@ function AppContent() {
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(() => {
     return (readMigratedStorage('workbuddy-color-mode', 'piscis-color-mode') as 'light' | 'dark') || 'light';
   });
+  const [accountSyncPrompt, setAccountSyncPrompt] = useState<AccountSettingsSyncPrompt | null>(null);
+  const [accountSyncBusy, setAccountSyncBusy] = useState(false);
+  const [accountSyncError, setAccountSyncError] = useState("");
 
   useEffect(() => {
     applyFontScale(getFontScale());
+  }, []);
+
+  useEffect(() => {
+    const onPrepared = (event: Event) => {
+      const prepared = (event as CustomEvent<AccountSettingsSyncPrompt>).detail;
+      if (prepared) {
+        setAccountSyncError("");
+        setAccountSyncPrompt(prepared);
+      }
+    };
+    window.addEventListener("workbuddy:account-settings-sync-prepared", onPrepared);
+    return () => window.removeEventListener("workbuddy:account-settings-sync-prepared", onPrepared);
   }, []);
 
   useEffect(() => {
@@ -379,6 +394,22 @@ function AppContent() {
     await marketingApi.logout().catch(() => {});
     setMarketingUser(null);
     setUserMenuOpen(false);
+  };
+  const handleAccountSettingsSync = async (action: "restore" | "backup") => {
+    if (!accountSyncPrompt) return;
+    setAccountSyncBusy(true);
+    setAccountSyncError("");
+    try {
+      if (action === "restore") await accountSettingsSyncApi.restore(accountSyncPrompt.userId);
+      else await accountSettingsSyncApi.backup(accountSyncPrompt.userId);
+      localStorage.setItem(`workbuddy.accountSettingsSyncEnabled.${accountSyncPrompt.userId}`, "true");
+      dispatch(settingsActions.setSettings(await settingsApi.get()));
+      setAccountSyncPrompt(null);
+    } catch (error) {
+      setAccountSyncError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAccountSyncBusy(false);
+    }
   };
   const stageCreativeToChat = (attachments: ChatAttachment[], draft: string) => {
     dispatch(sessionsActions.openMainChatView({ filter: "chat", composerDraft: draft, composerAttachments: attachments }));
@@ -643,6 +674,25 @@ function AppContent() {
         </Suspense>
       </main>
       <Toaster />
+      {accountSyncPrompt && (
+        <div className="account-sync-backdrop" role="presentation">
+          <section className="account-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="account-sync-title">
+            <span className="eyebrow">Personal settings</span>
+            <h2 id="account-sync-title">{accountSyncPrompt.suggestedAction === "restore" ? "是否同步个人设置" : "是否备份当前个人设置"}</h2>
+            <p>{accountSyncPrompt.suggestedAction === "restore"
+              ? "检测到该账号已有加密设置备份。恢复后会更新模型、提供商和通用偏好；工作区、会话和本机 IM/SSH 凭据保持不变。"
+              : "该账号还没有云端设置备份。可将当前模型、提供商、API Key 与通用偏好加密备份到账号。"}</p>
+            <p className="account-sync-note">云端仅保存端到端加密数据，服务器无法读取 API Key 或设置内容。</p>
+            {accountSyncError && <p className="account-sync-error">{accountSyncError}</p>}
+            <div className="account-sync-actions">
+              <button className="btn btn-secondary" disabled={accountSyncBusy} onClick={() => setAccountSyncPrompt(null)}>暂不处理</button>
+              <button className="btn btn-primary" disabled={accountSyncBusy} onClick={() => void handleAccountSettingsSync(accountSyncPrompt.suggestedAction)}>
+                {accountSyncBusy ? "正在同步..." : accountSyncPrompt.suggestedAction === "restore" ? "从云端恢复" : "加密备份"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

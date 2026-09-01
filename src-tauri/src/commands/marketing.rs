@@ -6,6 +6,7 @@
 //! does not have to fight CORS or browser cookie rules.
 
 use crate::harvis_prompt::{compose_harvis_music_prompt, HarvisEvidenceCase, HarvisPromptInput};
+use crate::store::secrets::SecretStore;
 use crate::store::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
@@ -34,10 +35,18 @@ async fn load_persisted_cookie() -> Option<String> {
     let value = tokio::fs::read_to_string(path).await.ok()?;
     let value = value.trim().to_string();
     if value.is_empty() {
-        None
-    } else {
-        Some(value)
+        return None;
     }
+
+    // Older releases stored this session value in plaintext. Prefer the local
+    // SecretStore value, but keep that legacy format readable for one upgrade.
+    let app_dir = crate::app::logging::default_app_data_dir();
+    if let Ok(store) = SecretStore::new(&app_dir) {
+        if let Ok(decrypted) = store.decrypt_hex(&value) {
+            return Some(decrypted);
+        }
+    }
+    Some(value)
 }
 
 async fn persist_cookie(cookie: &str) {
@@ -45,14 +54,18 @@ async fn persist_cookie(cookie: &str) {
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
-    let _ = tokio::fs::write(path, cookie).await;
+    let app_dir = crate::app::logging::default_app_data_dir();
+    let value = SecretStore::new(&app_dir)
+        .and_then(|store| store.encrypt_hex(cookie))
+        .unwrap_or_else(|_| cookie.to_string());
+    let _ = tokio::fs::write(path, value).await;
 }
 
 async fn clear_persisted_cookie() {
     let _ = tokio::fs::remove_file(marketing_cookie_path()).await;
 }
 
-fn marketing_base_url() -> String {
+pub(crate) fn marketing_base_url() -> String {
     std::env::var("WORKBUDDY_MARKETING_URL")
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
@@ -60,7 +73,7 @@ fn marketing_base_url() -> String {
         .unwrap_or_else(|| DEFAULT_MARKETING_BASE.to_string())
 }
 
-fn marketing_client() -> Result<reqwest::Client, String> {
+pub(crate) fn marketing_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("Xiaoheng-WorkBuddy/0.7 Marketing")
@@ -68,7 +81,7 @@ fn marketing_client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+pub(crate) async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     let cookie = cookie_store().lock().await.clone();
     let cookie = if cookie.is_some() {
         cookie
@@ -479,11 +492,18 @@ pub async fn marketing_creative_compose_music_prompt(
             business_line,
             brand,
             watch_collection,
-            watch_style: request.watch_style.map(|value| compact_prompt_field(&value, 80)),
-            desired_style: request.desired_style.map(|value| compact_prompt_field(&value, 120)),
+            watch_style: request
+                .watch_style
+                .map(|value| compact_prompt_field(&value, 80)),
+            desired_style: request
+                .desired_style
+                .map(|value| compact_prompt_field(&value, 120)),
             bpm: request.bpm.filter(|value| (40..=220).contains(value)),
             duration,
-            campaign_context: details.iter().map(|(key, value)| format!("{key}: {value}")).collect(),
+            campaign_context: details
+                .iter()
+                .map(|(key, value)| format!("{key}: {value}"))
+                .collect(),
             evidence_cases,
         },
     )
@@ -509,7 +529,10 @@ pub async fn marketing_creative_stage_for_chat(job_id: String) -> Result<Value, 
 }
 
 #[tauri::command]
-pub async fn marketing_creative_adopt_music_artifact(job_id: String, artifact_id: String) -> Result<Value, String> {
+pub async fn marketing_creative_adopt_music_artifact(
+    job_id: String,
+    artifact_id: String,
+) -> Result<Value, String> {
     marketing_post_json(
         &format!(
             "/api/creative/music/jobs/{}/adopt",
@@ -547,7 +570,9 @@ pub async fn marketing_creative_admin_upsert_music_brand(request: Value) -> Resu
 }
 
 #[tauri::command]
-pub async fn marketing_creative_admin_upsert_music_business_line(request: Value) -> Result<Value, String> {
+pub async fn marketing_creative_admin_upsert_music_business_line(
+    request: Value,
+) -> Result<Value, String> {
     marketing_post_json("/api/admin/creative/music/business-lines", request).await
 }
 
@@ -804,6 +829,9 @@ mod tests {
             "theme": "节日礼赠"
         }));
         assert_eq!(payload.get("model"), None);
-        assert_eq!(payload.get("theme").and_then(Value::as_str), Some("节日礼赠"));
+        assert_eq!(
+            payload.get("theme").and_then(Value::as_str),
+            Some("节日礼赠")
+        );
     }
 }

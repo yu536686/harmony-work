@@ -8,6 +8,21 @@ export interface MarketingUser {
   approvalStatus: "pending" | "active" | "disabled";
 }
 
+export interface AccountSettingsSyncPrepared {
+  snapshotExists: boolean;
+  revision: number | null;
+  suggestedAction: "restore" | "backup";
+}
+
+export interface AccountSettingsSyncPrompt extends AccountSettingsSyncPrepared {
+  userId: string;
+}
+
+export interface AccountSettingsSyncStatus {
+  snapshot: { revision: number; schemaVersion: number; updatedAt: string; updatedDeviceName: string } | null;
+  locallyConfigured: boolean;
+}
+
 export interface MarketingAsset {
   id: string;
   fileName: string;
@@ -179,6 +194,21 @@ export const marketingApi = {
   login: async (email: string, password: string) => {
     const result = await invoke<{ user: MarketingUser }>("marketing_login", { request: { email, password } });
     rememberUser(result.user);
+    try {
+      const prepared = await invoke<AccountSettingsSyncPrepared>("account_settings_sync_prepare", {
+        request: {
+          userId: result.user.id,
+          password,
+          deviceName: navigator.userAgent.includes("Windows") ? "Windows WorkBuddy" : "WorkBuddy desktop",
+        },
+      });
+      const prompt: AccountSettingsSyncPrompt = { ...prepared, userId: result.user.id };
+      window.dispatchEvent(new CustomEvent("workbuddy:account-settings-sync-prepared", { detail: prompt }));
+    } catch (error) {
+      // Settings sync is optional. Authentication remains available if a legacy
+      // cloud vault cannot be unlocked on this device.
+      console.warn("Unable to prepare account settings sync", error);
+    }
     return result.user;
   },
   logout: async () => {
@@ -205,4 +235,11 @@ export const marketingApi = {
     invoke<MarketingAssetDataUrl>("marketing_asset_data_url", {
       request: { assetId, fileName, maxBytes: maxBytes || null },
     }),
+};
+
+export const accountSettingsSyncApi = {
+  status: () => invoke<AccountSettingsSyncStatus>("account_settings_sync_status"),
+  backup: (userId: string) => invoke<AccountSettingsSyncStatus>("account_settings_sync_backup", { request: { userId } }),
+  restore: (userId: string) => invoke<AccountSettingsSyncStatus>("account_settings_sync_restore", { request: { userId } }),
+  delete: (userId: string) => invoke("account_settings_sync_delete", { request: { userId } }),
 };

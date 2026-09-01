@@ -17,6 +17,7 @@
 //! own submodule list (see e.g. [`chat`] declaring `debug`, `gateway`,
 //! `scheduler`, `collab_trial`, `fish`).
 
+pub mod account_settings_sync;
 pub mod chat;
 pub mod config;
 pub mod harmony_cut;

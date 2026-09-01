@@ -1282,6 +1282,11 @@ fn run_impl() {
             commands::config::enterprise_capability::enable_enterprise_capability,
             commands::config::enterprise_capability::test_enterprise_capability,
             // marketing portal/
+            commands::account_settings_sync::account_settings_sync_status,
+            commands::account_settings_sync::account_settings_sync_prepare,
+            commands::account_settings_sync::account_settings_sync_backup,
+            commands::account_settings_sync::account_settings_sync_restore,
+            commands::account_settings_sync::account_settings_sync_delete,
             commands::marketing::marketing_login,
             commands::marketing::marketing_logout,
             commands::marketing::marketing_me,

@@ -850,6 +850,38 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Returns settings that are safe to move between devices. Paths, local
+    /// execution state, and channel credentials remain bound to this machine.
+    pub fn cloud_snapshot(&self) -> Value {
+        let mut value =
+            serde_json::to_value(self).unwrap_or_else(|_| Value::Object(Default::default()));
+        if let Value::Object(ref mut object) = value {
+            for key in CLOUD_EXCLUDED_SETTING_KEYS {
+                object.remove(*key);
+            }
+        }
+        value
+    }
+
+    /// Merges a validated cloud snapshot into local settings while preserving
+    /// device-specific files, paths, channels, and the local encryption path.
+    pub fn apply_cloud_snapshot(&mut self, snapshot: &Value) -> Result<()> {
+        let mut local = serde_json::to_value(&*self)?;
+        let (Value::Object(local), Value::Object(cloud)) = (&mut local, snapshot) else {
+            return Err(anyhow::anyhow!("Cloud settings snapshot must be an object"));
+        };
+        for (key, value) in cloud {
+            if !CLOUD_EXCLUDED_SETTING_KEYS.contains(&key.as_str()) {
+                local.insert(key.clone(), value.clone());
+            }
+        }
+        let config_path = self.config_path.clone();
+        let mut next: Settings = serde_json::from_value(Value::Object(local.clone()))?;
+        next.config_path = config_path;
+        *self = next;
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let mut settings = if path.exists() {
             let content = std::fs::read_to_string(path)?;
@@ -1026,6 +1058,62 @@ impl Settings {
     }
 }
 
+const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
+    "workspace_root",
+    "allow_outside_workspace",
+    "runtime_paths",
+    "mcp_servers",
+    "ssh_servers",
+    "user_tool_configs",
+    "feishu_app_id",
+    "feishu_app_secret",
+    "feishu_domain",
+    "feishu_enabled",
+    "wecom_bot_id",
+    "wecom_bot_secret",
+    "wecom_enabled",
+    "dingtalk_app_key",
+    "dingtalk_app_secret",
+    "dingtalk_robot_code",
+    "dingtalk_corp_id",
+    "dingtalk_agent_id",
+    "dingtalk_mcp_url",
+    "dingtalk_enabled",
+    "telegram_bot_token",
+    "telegram_enabled",
+    "slack_webhook_url",
+    "slack_enabled",
+    "discord_webhook_url",
+    "discord_enabled",
+    "teams_webhook_url",
+    "teams_enabled",
+    "matrix_homeserver",
+    "matrix_access_token",
+    "matrix_room_id",
+    "matrix_enabled",
+    "webhook_outbound_url",
+    "webhook_auth_token",
+    "webhook_enabled",
+    "wechat_enabled",
+    "wechat_gateway_token",
+    "wechat_gateway_port",
+    "wechat_bot_token",
+    "wechat_base_url",
+    "wechat_bot_id",
+    "smtp_host",
+    "smtp_port",
+    "smtp_username",
+    "smtp_password",
+    "imap_host",
+    "imap_port",
+    "smtp_from_name",
+    "email_enabled",
+    "overlay_x",
+    "overlay_y",
+    "allow_multiple_instances",
+    "config_path",
+];
+
 #[cfg(test)]
 mod tests {
     use super::Settings;
@@ -1038,5 +1126,40 @@ mod tests {
         assert!(settings.confirm_file_writes);
         assert_eq!(settings.context_window, 128_000);
         assert!(settings.workspace_root.ends_with("harmony"));
+    }
+
+    #[test]
+    fn cloud_snapshot_excludes_device_bound_paths_and_channel_credentials() {
+        let mut settings = Settings::default();
+        settings.workspace_root = "C:\\Users\\one\\harmony".to_string();
+        settings.wecom_bot_secret = "device-only-secret".to_string();
+        settings.openai_api_key = "syncable-provider-key".to_string();
+
+        let snapshot = settings.cloud_snapshot();
+        assert_eq!(snapshot["openai_api_key"], "syncable-provider-key");
+        assert!(snapshot.get("workspace_root").is_none());
+        assert!(snapshot.get("wecom_bot_secret").is_none());
+    }
+
+    #[test]
+    fn applying_cloud_snapshot_preserves_local_workspace_and_channels() {
+        let mut local = Settings::default();
+        local.workspace_root = "D:\\local-workspace".to_string();
+        local.wecom_bot_secret = "local-channel-secret".to_string();
+        let snapshot = serde_json::json!({
+            "provider": "deepseek",
+            "model": "deepseek-reasoner",
+            "deepseek_api_key": "cloud-provider-key"
+        });
+
+        local
+            .apply_cloud_snapshot(&snapshot)
+            .expect("cloud snapshot should apply");
+        assert_eq!(local.provider, "deepseek");
+        assert_eq!(local.model, "deepseek-reasoner");
+        assert_eq!(local.deepseek_api_key, "cloud-provider-key");
+        assert_eq!(local.workspace_root, "D:\\local-workspace");
+        assert_eq!(local.wecom_bot_secret, "local-channel-secret");
+        assert!(snapshot.is_object());
     }
 }
