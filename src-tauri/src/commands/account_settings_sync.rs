@@ -6,6 +6,7 @@
 
 use crate::commands::marketing::{apply_cookie, marketing_base_url, marketing_client};
 use crate::store::secrets::SecretStore;
+use crate::store::settings::CLOUD_EXCLUDED_SETTING_KEYS;
 use crate::store::AppState;
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -15,15 +16,115 @@ use chacha20poly1305::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::State;
 use tokio::sync::Mutex;
 
-const CLOUD_SCHEMA_VERSION: u32 = 1;
+const CLOUD_SCHEMA_VERSION: u32 = 2;
 const PENDING_UNLOCK_TTL: Duration = Duration::from_secs(5 * 60);
+
+const CATEGORY_AI_PROVIDER: &str = "aiProvider";
+const CATEGORY_VISION: &str = "vision";
+const CATEGORY_AGENT: &str = "agent";
+const CATEGORY_TOOL_PREFERENCES: &str = "toolPreferences";
+const CATEGORY_INTERACTION_SAFETY: &str = "interactionSafety";
+
+#[derive(Debug, Clone, Copy)]
+struct CategoryDefinition {
+    id: &'static str,
+    label: &'static str,
+    description: &'static str,
+    keys: &'static [&'static str],
+}
+
+const CATEGORY_DEFINITIONS: &[CategoryDefinition] = &[
+    CategoryDefinition {
+        id: CATEGORY_AI_PROVIDER,
+        label: "AI 提供商与模型",
+        description: "默认提供商、模型、API Key、已启用模型与命名提供商。",
+        keys: &[
+            "anthropic_api_key",
+            "openai_api_key",
+            "deepseek_api_key",
+            "qwen_api_key",
+            "minimax_api_key",
+            "zhipu_api_key",
+            "kimi_api_key",
+            "siliconflow_api_key",
+            "provider",
+            "model",
+            "custom_base_url",
+            "fallback_models",
+            "enabled_models",
+            "available_models",
+            "llm_providers",
+            "max_tokens",
+        ],
+    },
+    CategoryDefinition {
+        id: CATEGORY_VISION,
+        label: "视觉与多模态",
+        description: "视觉模型、视觉 API 配置和主模型复用偏好。",
+        keys: &[
+            "vision_enabled",
+            "vision_use_main_llm",
+            "vision_provider",
+            "vision_model",
+            "vision_api_key",
+            "vision_base_url",
+        ],
+    },
+    CategoryDefinition {
+        id: CATEGORY_AGENT,
+        label: "智能体偏好",
+        description: "上下文、执行迭代、压缩、摘要与个人助手偏好。",
+        keys: &[
+            "context_window",
+            "max_iterations",
+            "auto_compact_input_tokens_threshold",
+            "compaction_micro_percent",
+            "compaction_auto_percent",
+            "compaction_full_percent",
+            "max_tool_result_tokens",
+            "summary_model",
+            "project_instruction_budget_chars",
+            "enable_project_instructions",
+            "xiaoheng_personal_prompt",
+            "llm_read_timeout_secs",
+            "koi_timeout_secs",
+            "heartbeat_enabled",
+            "heartbeat_interval_mins",
+            "heartbeat_prompt",
+        ],
+    },
+    CategoryDefinition {
+        id: CATEGORY_TOOL_PREFERENCES,
+        label: "工具与技能偏好",
+        description: "内置工具开关、技能演进和浏览器执行偏好。",
+        keys: &[
+            "builtin_tool_enabled",
+            "skill_evolution",
+            "browser_headless",
+            "enable_streaming",
+        ],
+    },
+    CategoryDefinition {
+        id: CATEGORY_INTERACTION_SAFETY,
+        label: "安全与交互偏好",
+        description: "确认策略、语言、界面行为与通用交互设置。",
+        keys: &[
+            "language",
+            "confirm_shell_commands",
+            "confirm_file_writes",
+            "policy_mode",
+            "tool_rate_limit_per_minute",
+            "allow_multiple_instances",
+        ],
+    },
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,10 +200,295 @@ pub struct AccountSettingsSyncUserRequest {
     pub user_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettingsSyncSelectedRequest {
+    pub user_id: String,
+    pub category_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CloudSettingsPayload {
     version: u32,
-    settings: Value,
+    #[serde(default)]
+    settings: Option<Value>,
+    #[serde(default)]
+    categories: BTreeMap<String, Value>,
+}
+
+impl CloudSettingsPayload {
+    #[cfg(test)]
+    fn legacy(settings: Value) -> Self {
+        Self {
+            version: 1,
+            settings: Some(settings),
+            categories: BTreeMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn categories(categories: Value) -> Result<Self, String> {
+        let categories = serde_json::from_value(categories)
+            .map_err(|_| "云端个人设置类别格式无效".to_string())?;
+        Ok(Self {
+            version: CLOUD_SCHEMA_VERSION,
+            settings: None,
+            categories,
+        })
+    }
+
+    fn from_settings(settings: &Value) -> Self {
+        Self {
+            version: CLOUD_SCHEMA_VERSION,
+            settings: None,
+            categories: split_cloud_settings(settings),
+        }
+    }
+
+    fn into_categories(mut self) -> Result<Self, String> {
+        match self.version {
+            1 => {
+                let settings = self.settings.take().unwrap_or_else(|| json!({}));
+                self.version = CLOUD_SCHEMA_VERSION;
+                self.settings = None;
+                self.categories = split_cloud_settings(&settings);
+                Ok(self)
+            }
+            CLOUD_SCHEMA_VERSION => Ok(self),
+            _ => Err("云端个人设置版本暂不受支持".to_string()),
+        }
+    }
+
+    fn category(&self, id: &str) -> &Value {
+        static EMPTY_CATEGORY: OnceLock<Value> = OnceLock::new();
+        self.categories
+            .get(id)
+            .unwrap_or_else(|| EMPTY_CATEGORY.get_or_init(|| json!({})))
+    }
+
+    fn all_settings(&self) -> Value {
+        let mut settings = serde_json::Map::new();
+        for value in self.categories.values() {
+            if let Value::Object(category) = value {
+                for (key, value) in category {
+                    if !CLOUD_EXCLUDED_SETTING_KEYS.contains(&key.as_str()) {
+                        settings.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        Value::Object(settings)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettingsSyncFieldSummary {
+    pub label: String,
+    pub configured: bool,
+    pub sensitive: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettingsSyncCategoryPreview {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub fields: Vec<AccountSettingsSyncFieldSummary>,
+    pub configured_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettingsSyncCatalog {
+    pub categories: Vec<AccountSettingsSyncCategoryPreview>,
+    pub local_only_items: Vec<String>,
+    pub snapshot: Option<SettingsMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettingsSyncPreview {
+    pub snapshot: SettingsMetadata,
+    pub categories: Vec<AccountSettingsSyncCategoryPreview>,
+}
+
+fn category_definition(id: &str) -> Option<&'static CategoryDefinition> {
+    CATEGORY_DEFINITIONS
+        .iter()
+        .find(|definition| definition.id == id)
+}
+
+fn category_for_key(key: &str) -> &'static str {
+    CATEGORY_DEFINITIONS
+        .iter()
+        .find(|definition| definition.keys.contains(&key))
+        .map(|definition| definition.id)
+        .unwrap_or(CATEGORY_AGENT)
+}
+
+fn split_cloud_settings(settings: &Value) -> BTreeMap<String, Value> {
+    let mut categories = CATEGORY_DEFINITIONS
+        .iter()
+        .map(|definition| {
+            (
+                definition.id.to_string(),
+                Value::Object(serde_json::Map::new()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let Value::Object(settings) = settings else {
+        return categories;
+    };
+
+    for (key, value) in settings {
+        if CLOUD_EXCLUDED_SETTING_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let category = categories
+            .entry(category_for_key(key).to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Value::Object(category) = category {
+            category.insert(key.clone(), value.clone());
+        }
+    }
+    categories
+}
+
+fn validate_category_ids(ids: &[String]) -> Result<Vec<&'static CategoryDefinition>, String> {
+    if ids.is_empty() {
+        return Err("请至少选择一个可同步配置类别".to_string());
+    }
+    let mut definitions = Vec::with_capacity(ids.len());
+    for id in ids {
+        if definitions
+            .iter()
+            .any(|definition: &&CategoryDefinition| definition.id == id)
+        {
+            return Err("同步类别不能重复".to_string());
+        }
+        let definition =
+            category_definition(id).ok_or_else(|| format!("不支持的同步类别：{id}"))?;
+        definitions.push(definition);
+    }
+    Ok(definitions)
+}
+
+fn merge_selected_categories(
+    cloud: CloudSettingsPayload,
+    local_settings: &Value,
+    category_ids: &[String],
+) -> Result<CloudSettingsPayload, String> {
+    let definitions = validate_category_ids(category_ids)?;
+    let mut cloud = cloud.into_categories()?;
+    let local = split_cloud_settings(local_settings);
+    for definition in definitions {
+        let value = local
+            .get(definition.id)
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        cloud.categories.insert(definition.id.to_string(), value);
+    }
+    Ok(cloud)
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    key.ends_with("_api_key")
+        || key.contains("secret")
+        || key.contains("token")
+        || key.contains("password")
+}
+
+fn field_label(key: &str) -> String {
+    match key {
+        "anthropic_api_key" => "Anthropic API Key".to_string(),
+        "openai_api_key" => "OpenAI API Key".to_string(),
+        "deepseek_api_key" => "DeepSeek API Key".to_string(),
+        "qwen_api_key" => "通义千问 API Key".to_string(),
+        "minimax_api_key" => "MiniMax API Key".to_string(),
+        "zhipu_api_key" => "智谱 API Key".to_string(),
+        "kimi_api_key" => "Kimi API Key".to_string(),
+        "siliconflow_api_key" => "SiliconFlow API Key".to_string(),
+        "vision_api_key" => "视觉 API Key".to_string(),
+        _ => key.replace('_', " "),
+    }
+}
+
+fn value_is_configured(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_u64().unwrap_or_default() != 0,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn category_preview(
+    id: &str,
+    settings: &Value,
+) -> Result<AccountSettingsSyncCategoryPreview, String> {
+    let definition = category_definition(id).ok_or_else(|| format!("不支持的同步类别：{id}"))?;
+    let Value::Object(settings) = settings else {
+        return Ok(AccountSettingsSyncCategoryPreview {
+            id: definition.id.to_string(),
+            label: definition.label.to_string(),
+            description: definition.description.to_string(),
+            fields: Vec::new(),
+            configured_fields: Vec::new(),
+        });
+    };
+    let fields = settings
+        .iter()
+        .map(|(key, value)| AccountSettingsSyncFieldSummary {
+            label: field_label(key),
+            configured: value_is_configured(value),
+            sensitive: is_sensitive_key(key),
+        })
+        .collect::<Vec<_>>();
+    let configured_fields = fields
+        .iter()
+        .filter(|field| field.configured)
+        .map(|field| field.label.clone())
+        .collect();
+    Ok(AccountSettingsSyncCategoryPreview {
+        id: definition.id.to_string(),
+        label: definition.label.to_string(),
+        description: definition.description.to_string(),
+        fields,
+        configured_fields,
+    })
+}
+
+fn all_category_previews(
+    payload: &CloudSettingsPayload,
+) -> Result<Vec<AccountSettingsSyncCategoryPreview>, String> {
+    CATEGORY_DEFINITIONS
+        .iter()
+        .map(|definition| category_preview(definition.id, payload.category(definition.id)))
+        .collect()
+}
+
+fn selected_settings(
+    payload: &CloudSettingsPayload,
+    category_ids: &[String],
+) -> Result<Value, String> {
+    let definitions = validate_category_ids(category_ids)?;
+    let mut settings = serde_json::Map::new();
+    for definition in definitions {
+        let Value::Object(category) = payload.category(definition.id) else {
+            continue;
+        };
+        for (key, value) in category {
+            if !CLOUD_EXCLUDED_SETTING_KEYS.contains(&key.as_str()) {
+                settings.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(Value::Object(settings))
 }
 
 struct PendingUnlock {
@@ -319,6 +705,53 @@ pub async fn account_settings_sync_status(
 }
 
 #[tauri::command]
+pub async fn account_settings_sync_catalog(
+    state: State<'_, AppState>,
+) -> Result<AccountSettingsSyncCatalog, String> {
+    let value = get_json("/api/workbuddy/settings/meta").await?;
+    let snapshot =
+        serde_json::from_value(value.get("snapshot").cloned().unwrap_or(Value::Null)).ok();
+    let settings = state.settings.lock().await.cloud_snapshot();
+    let payload = CloudSettingsPayload::from_settings(&settings);
+    Ok(AccountSettingsSyncCatalog {
+        categories: all_category_previews(&payload)?,
+        local_only_items: vec![
+            "工作区与工作区外文件访问权限".to_string(),
+            "IM、邮件和 Webhook 渠道凭据".to_string(),
+            "MCP、SSH 与用户工具连接".to_string(),
+            "运行环境路径与窗口位置".to_string(),
+        ],
+        snapshot,
+    })
+}
+
+#[tauri::command]
+pub async fn account_settings_sync_preview(
+    request: AccountSettingsSyncUserRequest,
+) -> Result<Option<AccountSettingsSyncPreview>, String> {
+    let Some(snapshot) = remote_snapshot().await? else {
+        return Ok(None);
+    };
+    let data_key = match take_pending_if_valid(&request.user_id).await {
+        Some(unlock) => unlock.data_key,
+        None => load_local_data_key(&request.user_id)?,
+    };
+    let plaintext = decrypt(&data_key, &snapshot.envelope.payload)?;
+    let payload: CloudSettingsPayload = serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
+        .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?
+        .into_categories()?;
+    Ok(Some(AccountSettingsSyncPreview {
+        snapshot: SettingsMetadata {
+            revision: snapshot.revision,
+            schema_version: snapshot.schema_version,
+            updated_at: snapshot.updated_at,
+            updated_device_name: snapshot.updated_device_name,
+        },
+        categories: all_category_previews(&payload)?,
+    }))
+}
+
+#[tauri::command]
 pub async fn account_settings_sync_prepare(
     request: PrepareAccountSettingsSyncRequest,
 ) -> Result<AccountSettingsSyncPrepared, String> {
@@ -369,11 +802,8 @@ pub async fn account_settings_sync_backup(
 ) -> Result<AccountSettingsSyncStatus, String> {
     let pending = backup_material(&request.user_id).await?;
     let settings = state.settings.lock().await.cloud_snapshot();
-    let payload = serde_json::to_vec(&CloudSettingsPayload {
-        version: CLOUD_SCHEMA_VERSION,
-        settings,
-    })
-    .map_err(|error| format!("无法序列化个人设置：{error}"))?;
+    let payload = serde_json::to_vec(&CloudSettingsPayload::from_settings(&settings))
+        .map_err(|error| format!("无法序列化个人设置：{error}"))?;
     let payload = encrypt(&pending.data_key, &payload)?;
     let metadata = get_json("/api/workbuddy/settings/meta").await?;
     let base_revision = metadata
@@ -400,6 +830,58 @@ pub async fn account_settings_sync_backup(
 }
 
 #[tauri::command]
+pub async fn account_settings_sync_backup_selected(
+    request: AccountSettingsSyncSelectedRequest,
+    state: State<'_, AppState>,
+) -> Result<AccountSettingsSyncStatus, String> {
+    validate_category_ids(&request.category_ids)?;
+    let pending = backup_material(&request.user_id).await?;
+    let remote = remote_snapshot().await?;
+    let base_revision = remote
+        .as_ref()
+        .map(|snapshot| snapshot.revision)
+        .unwrap_or(0);
+    let cloud_payload = match remote {
+        Some(snapshot) => {
+            let plaintext = decrypt(&pending.data_key, &snapshot.envelope.payload)?;
+            serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
+                .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?
+                .into_categories()?
+        }
+        None => CloudSettingsPayload::from_settings(&json!({})),
+    };
+    let local_settings = state.settings.lock().await.cloud_snapshot();
+    let merged = merge_selected_categories(cloud_payload, &local_settings, &request.category_ids)?;
+    let payload = encrypt(
+        &pending.data_key,
+        &serde_json::to_vec(&merged).map_err(|error| format!("无法序列化个人设置：{error}"))?,
+    )?;
+    put_json(
+        "/api/workbuddy/settings/snapshot",
+        json!({
+            "baseRevision": base_revision,
+            "schemaVersion": CLOUD_SCHEMA_VERSION,
+            "deviceName": pending.device_name,
+            "envelope": {
+                "version": CLOUD_SCHEMA_VERSION,
+                "kdf": pending.kdf,
+                "wrappedDataKey": pending.wrapped_data_key,
+                "payload": payload,
+            }
+        }),
+    )
+    .await
+    .map_err(|error| {
+        if error.contains("HTTP 409") {
+            "云端配置已在其他设备更新，请重新读取后重试".to_string()
+        } else {
+            error
+        }
+    })?;
+    account_settings_sync_status(state).await
+}
+
+#[tauri::command]
 pub async fn account_settings_sync_restore(
     request: AccountSettingsSyncUserRequest,
     state: State<'_, AppState>,
@@ -412,14 +894,44 @@ pub async fn account_settings_sync_restore(
         None => load_local_data_key(&request.user_id)?,
     };
     let plaintext = decrypt(&data_key, &snapshot.envelope.payload)?;
-    let payload: CloudSettingsPayload = serde_json::from_slice(&plaintext)
+    let payload: CloudSettingsPayload = serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
         .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?;
-    if payload.version != CLOUD_SCHEMA_VERSION {
-        return Err("云端个人设置版本暂不受支持".to_string());
-    }
+    let payload = payload.into_categories()?;
     let mut settings = state.settings.lock().await;
     settings
-        .apply_cloud_snapshot(&payload.settings)
+        .apply_cloud_snapshot(&payload.all_settings())
+        .map_err(|error| error.to_string())?;
+    settings.save().map_err(|error| error.to_string())?;
+    crate::agent_core::approval::sync_confirm_flags(
+        &state.confirm_flags,
+        settings.confirm_shell_commands,
+        settings.confirm_file_writes,
+    );
+    drop(settings);
+    account_settings_sync_status(state).await
+}
+
+#[tauri::command]
+pub async fn account_settings_sync_restore_selected(
+    request: AccountSettingsSyncSelectedRequest,
+    state: State<'_, AppState>,
+) -> Result<AccountSettingsSyncStatus, String> {
+    validate_category_ids(&request.category_ids)?;
+    let Some(snapshot) = remote_snapshot().await? else {
+        return Err("账号下没有可恢复的个人设置".to_string());
+    };
+    let data_key = match take_pending_if_valid(&request.user_id).await {
+        Some(unlock) => unlock.data_key,
+        None => load_local_data_key(&request.user_id)?,
+    };
+    let plaintext = decrypt(&data_key, &snapshot.envelope.payload)?;
+    let payload: CloudSettingsPayload = serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
+        .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?
+        .into_categories()?;
+    let selected = selected_settings(&payload, &request.category_ids)?;
+    let mut settings = state.settings.lock().await;
+    settings
+        .apply_cloud_snapshot(&selected)
         .map_err(|error| error.to_string())?;
     settings.save().map_err(|error| error.to_string())?;
     crate::agent_core::approval::sync_confirm_flags(
@@ -473,5 +985,49 @@ mod tests {
             derive_password_key("same-password", &kdf).unwrap(),
             derive_password_key("other-password", &kdf).unwrap()
         );
+    }
+
+    #[test]
+    fn legacy_snapshot_migrates_into_named_categories() {
+        let payload = CloudSettingsPayload::legacy(json!({
+            "provider": "deepseek",
+            "deepseek_api_key": "secret",
+            "context_window": 128000,
+            "workspace_root": "C:\\local"
+        }));
+
+        let migrated = payload.into_categories().expect("migrate legacy payload");
+        assert_eq!(migrated.category("aiProvider")["provider"], "deepseek");
+        assert_eq!(migrated.category("agent")["context_window"], 128000);
+        assert!(migrated.all_settings().get("workspace_root").is_none());
+    }
+
+    #[test]
+    fn merging_selected_categories_preserves_unselected_cloud_categories() {
+        let cloud = CloudSettingsPayload::categories(json!({
+            "aiProvider": { "model": "remote-model" },
+            "agent": { "context_window": 64000 }
+        }))
+        .expect("cloud categories");
+        let local = json!({ "model": "local-model", "context_window": 128000 });
+
+        let merged = merge_selected_categories(cloud, &local, &["aiProvider".to_string()])
+            .expect("merge selected category");
+        assert_eq!(merged.category("aiProvider")["model"], "local-model");
+        assert_eq!(merged.category("agent")["context_window"], 64000);
+    }
+
+    #[test]
+    fn category_preview_masks_api_key_values() {
+        let preview = category_preview(
+            "aiProvider",
+            &json!({
+                "deepseek_api_key": "sk-secret"
+            }),
+        )
+        .expect("preview");
+
+        assert_eq!(preview.configured_fields, vec!["DeepSeek API Key"]);
+        assert!(!format!("{preview:?}").contains("sk-secret"));
     }
 }

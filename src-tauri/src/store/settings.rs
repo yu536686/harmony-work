@@ -1058,7 +1058,7 @@ impl Settings {
     }
 }
 
-const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
+pub const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
     "workspace_root",
     "allow_outside_workspace",
     "runtime_paths",

@@ -1284,8 +1284,12 @@ fn run_impl() {
             // marketing portal/
             commands::account_settings_sync::account_settings_sync_status,
             commands::account_settings_sync::account_settings_sync_prepare,
+            commands::account_settings_sync::account_settings_sync_catalog,
+            commands::account_settings_sync::account_settings_sync_preview,
             commands::account_settings_sync::account_settings_sync_backup,
+            commands::account_settings_sync::account_settings_sync_backup_selected,
             commands::account_settings_sync::account_settings_sync_restore,
+            commands::account_settings_sync::account_settings_sync_restore_selected,
             commands::account_settings_sync::account_settings_sync_delete,
             commands::marketing::marketing_login,
             commands::marketing::marketing_logout,
