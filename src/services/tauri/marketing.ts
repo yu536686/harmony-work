@@ -23,6 +23,31 @@ export interface AccountSettingsSyncStatus {
   locallyConfigured: boolean;
 }
 
+export interface AccountSettingsSyncFieldSummary {
+  label: string;
+  configured: boolean;
+  sensitive: boolean;
+}
+
+export interface AccountSettingsSyncCategory {
+  id: string;
+  label: string;
+  description: string;
+  fields: AccountSettingsSyncFieldSummary[];
+  configuredFields: string[];
+}
+
+export interface AccountSettingsSyncCatalog {
+  categories: AccountSettingsSyncCategory[];
+  localOnlyItems: string[];
+  snapshot: AccountSettingsSyncStatus["snapshot"];
+}
+
+export interface AccountSettingsSyncPreview {
+  snapshot: NonNullable<AccountSettingsSyncStatus["snapshot"]>;
+  categories: AccountSettingsSyncCategory[];
+}
+
 export interface MarketingAsset {
   id: string;
   fileName: string;
@@ -239,7 +264,13 @@ export const marketingApi = {
 
 export const accountSettingsSyncApi = {
   status: () => invoke<AccountSettingsSyncStatus>("account_settings_sync_status"),
+  catalog: () => invoke<AccountSettingsSyncCatalog>("account_settings_sync_catalog"),
+  preview: (userId: string) => invoke<AccountSettingsSyncPreview | null>("account_settings_sync_preview", { request: { userId } }),
   backup: (userId: string) => invoke<AccountSettingsSyncStatus>("account_settings_sync_backup", { request: { userId } }),
+  backupSelected: (userId: string, categoryIds: string[]) =>
+    invoke<AccountSettingsSyncStatus>("account_settings_sync_backup_selected", { request: { userId, categoryIds } }),
   restore: (userId: string) => invoke<AccountSettingsSyncStatus>("account_settings_sync_restore", { request: { userId } }),
+  restoreSelected: (userId: string, categoryIds: string[]) =>
+    invoke<AccountSettingsSyncStatus>("account_settings_sync_restore_selected", { request: { userId, categoryIds } }),
   delete: (userId: string) => invoke("account_settings_sync_delete", { request: { userId } }),
 };

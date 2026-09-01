@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.2.0--alpha.1-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.1)
+[![Version](https://img.shields.io/badge/version-1.2.0--alpha.2-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.2)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
@@ -39,7 +39,7 @@
 | **技能与 MCP** | 统一管理系统技能、市场技能和 MCP 服务，让 Agent 按任务加载对应能力。 |
 | **长期记忆** | 保存用户偏好、项目事实和执行经验，并通过关键词与向量检索按需注入上下文。 |
 | **素材库与数据看板** | 登录后浏览、筛选和预览素材，将文件暂存到会话，或基于看板数据新建分析任务。 |
-| **个人设置云同步** | 登录后可选择恢复或加密备份模型、提供商、API Key 与通用偏好；云端只保存端到端加密密文，本机路径和 IM 凭据不迁移。 |
+| **个人设置云同步** | 登录后可按类别选择恢复或加密备份模型、提供商、API Key 与通用偏好；云端只保存端到端加密密文，本机路径和 IM 凭据不迁移。 |
 | **IM 渠道** | 支持企业微信智能机器人长连接和个人微信 iLink，将消息转为可持续执行的 Agent 会话。 |
 | **自动化与桌面工具** | 支持定时任务、文件操作、Shell、浏览器控制和 Windows UI 自动化。 |
 
@@ -120,7 +120,7 @@ Get-FileHash .\Xiaoheng-WorkBuddy-<version>-x64-setup.exe -Algorithm SHA256
 - **注册**：打开线上注册页面。新账号需要管理员审批后才能登录高阶模块。
 - **跳过**：直接进入基础对话功能，之后可以从左下角账户菜单再次登录。
 
-首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。确认后，后续在设置页保存的模型、提供商、API Key 和通用偏好会自动更新同一份加密备份。工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
+首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。之后可在“设置 → 我的云端配置”中按类别选择 AI 提供商与模型、视觉模型、Agent 运行偏好、工具偏好或交互与安全策略进行上传与恢复。工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
 
 ### 5. 配置模型
 
@@ -229,8 +229,8 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 Windows 安装包在受控的 Windows 构建机上生成并验证后，再上传至 GitHub Release。发布示例：
 
 ```powershell
-git tag -a v1.2.0-alpha.1 -m "小亨 WorkBuddy 1.2.0 Alpha 1"
-git push origin v1.2.0-alpha.1
+git tag -a v1.2.0-alpha.2 -m "小亨 WorkBuddy 1.2.0 Alpha 2"
+git push origin v1.2.0-alpha.2
 ```
 
 ## 项目结构
@@ -305,7 +305,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.2.0-alpha.1`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.1)
+- 当前版本：[`v1.2.0-alpha.2`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.2)
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/xiaoheng-workbuddy/issues)
 
 ---

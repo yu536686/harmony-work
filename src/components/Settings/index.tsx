@@ -25,6 +25,7 @@ import {
   readRememberedMarketingUser,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
+import AccountSettingsSyncPanel from "./AccountSettingsSyncPanel";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
@@ -543,6 +544,20 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
     }
   };
 
+  const reloadSettingsAfterCloudRestore = useCallback(async () => {
+    const updated = await settingsApi.get();
+    setForm({ ...DEFAULT_SETTINGS, ...updated });
+    dispatch(settingsActions.setSettings(updated));
+    dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(
+      updated.anthropic_api_key
+      || updated.openai_api_key
+      || updated.deepseek_api_key
+      || updated.qwen_api_key
+      || updated.siliconflow_api_key
+    )));
+    if (updated.language) setLanguage(updated.language as "zh" | "en");
+  }, [dispatch]);
+
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
@@ -792,6 +807,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       )}
 
       <div className="page-body" style={{ maxWidth: 640 }}>
+        <AccountSettingsSyncPanel
+          user={readRememberedMarketingUser()}
+          onSettingsApplied={reloadSettingsAfterCloudRestore}
+        />
+
         {/* AI Provider */}
         <section style={{ marginBottom: 32 }}>
           <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>

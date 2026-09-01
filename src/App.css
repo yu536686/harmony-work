@@ -1497,3 +1497,374 @@ input[type="checkbox"]:disabled {
   gap: 10px;
   margin-top: 24px;
 }
+
+/* Account settings sync: category selection keeps encrypted fields legible without exposing values. */
+.account-settings-sync-section {
+  margin: 0 0 28px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-secondary));
+}
+
+.account-settings-sync-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.account-settings-sync-heading .settings-section-title {
+  margin: 0 0 4px;
+}
+
+.account-settings-sync-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-muted, rgba(99, 102, 241, 0.1));
+}
+
+.account-settings-sync-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.account-settings-sync-summary > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.account-settings-sync-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.account-settings-sync-summary strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-settings-sync-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-link {
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.btn-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.btn-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-settings-sync-backdrop {
+  position: fixed;
+  z-index: 1800;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 18, 28, 0.42);
+  backdrop-filter: blur(5px);
+}
+
+.account-settings-sync-modal {
+  display: flex;
+  width: min(720px, 100%);
+  max-height: min(82vh, 760px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.28);
+}
+
+.account-settings-sync-modal-header,
+.account-settings-sync-footer,
+.account-settings-sync-toolbar,
+.account-settings-sync-confirm {
+  flex-shrink: 0;
+}
+
+.account-settings-sync-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 22px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-settings-sync-modal-header h2 {
+  margin: 4px 0 5px;
+  color: var(--text-primary);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.account-settings-sync-modal-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-settings-sync-modal .eyebrow {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.account-settings-sync-error {
+  margin: 14px 22px 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(220, 53, 69, 0.28);
+  border-radius: 7px;
+  color: var(--color-error, #dc2626);
+  background: rgba(220, 53, 69, 0.08);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.account-settings-sync-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 22px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.account-settings-sync-list {
+  min-height: 110px;
+  overflow: auto;
+  padding: 0 22px 12px;
+}
+
+.account-settings-sync-empty {
+  display: grid;
+  min-height: 110px;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.account-settings-sync-category {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.account-settings-sync-category.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-muted, rgba(99, 102, 241, 0.08));
+}
+
+.account-settings-sync-category-main {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 10px 13px 13px;
+  cursor: pointer;
+}
+
+.account-settings-sync-category-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.account-settings-sync-category-copy strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-settings-sync-category-copy small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-settings-sync-category-state {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.account-settings-sync-expand {
+  align-self: center;
+  margin-right: 8px;
+}
+
+.account-settings-sync-fields {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding: 7px 13px 10px 39px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.account-settings-sync-field {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 0;
+}
+
+.account-settings-sync-field > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-settings-sync-field > span:last-child {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.account-settings-sync-field .is-configured {
+  color: var(--color-success, #16a34a);
+}
+
+.account-settings-sync-local-only {
+  display: flex;
+  gap: 10px;
+  margin: 0 22px 16px;
+  padding: 11px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 7px 7px 0;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.account-settings-sync-local-only > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.account-settings-sync-local-only strong,
+.account-settings-sync-local-only p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-settings-sync-local-only p {
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.account-settings-sync-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 22px 14px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-muted, rgba(99, 102, 241, 0.08));
+}
+
+.account-settings-sync-confirm strong,
+.account-settings-sync-confirm p {
+  display: block;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.account-settings-sync-confirm p {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.account-settings-sync-confirm > div:last-child,
+.account-settings-sync-footer,
+.account-settings-sync-footer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-settings-sync-footer {
+  justify-content: space-between;
+  padding: 15px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 620px) {
+  .account-settings-sync-backdrop {
+    padding: 12px;
+  }
+
+  .account-settings-sync-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .account-settings-sync-category-main {
+    grid-template-columns: 16px minmax(0, 1fr);
+  }
+
+  .account-settings-sync-category-state {
+    grid-column: 2;
+  }
+
+  .account-settings-sync-confirm,
+  .account-settings-sync-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-settings-sync-footer > div {
+    justify-content: flex-end;
+  }
+}
