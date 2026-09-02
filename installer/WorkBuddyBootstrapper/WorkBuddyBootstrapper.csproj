@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\src-tauri\icons\icon.ico</ApplicationIcon>
+    <AssemblyName>Xiaoheng-WorkBuddy-Setup</AssemblyName>
+    <RootNamespace>WorkBuddyBootstrapper</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PayloadDirectory Condition="'$(PayloadDirectory)' == ''">$(MSBuildProjectDirectory)\..\.build\payload</PayloadDirectory>
+    <PayloadArchive Condition="'$(PayloadArchive)' == ''">$(MSBuildProjectDirectory)\..\.build\payload.zip</PayloadArchive>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\src-tauri\icons\128x128.png" Link="Assets\brand.png" />
+    <EmbeddedResource Include="$(PayloadArchive)" LogicalName="WorkBuddyBootstrapper.PayloadArchive" />
+  </ItemGroup>
+</Project>
