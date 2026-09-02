@@ -159,7 +159,7 @@ export interface SshServerConfig {
 export interface LlmProviderConfig {
   id: string;
   label: string;
-  /** "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "siliconflow" | "custom" */
+  /** "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "siliconflow" | "harmony" | "custom" */
   provider: string;
   model: string;
   enabled_models?: string[];

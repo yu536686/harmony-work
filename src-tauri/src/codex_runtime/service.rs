@@ -970,9 +970,9 @@ pub(crate) fn resolve_model_selection(
         }
     };
     match provider.as_str() {
-        "openai" | "deepseek" => Ok((provider, model)),
+        "openai" | "deepseek" | "harmony" => Ok((provider, model)),
         _ => Err(format!(
-            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI 或 DeepSeek Responses API"
+            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI、DeepSeek 或 Harmony Responses API"
         )),
     }
 }
