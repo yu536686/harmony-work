@@ -50,6 +50,54 @@ impl DeepSeekProfile {
     }
 }
 
+/// Harmony 内部网关供应商：走 OpenAI Responses 协议，模型与额度由网关统一管理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarmonyProfile {
+    pub provider_id: &'static str,
+    pub model: &'static str,
+    pub base_url: &'static str,
+    pub env_key: &'static str,
+    pub display_name: &'static str,
+}
+
+impl Default for HarmonyProfile {
+    fn default() -> Self {
+        Self {
+            provider_id: "harmony",
+            model: "deepseek-v4-flash",
+            base_url: "https://api.harmonywatch.cn:13001/v1",
+            env_key: "HARMONY_API_KEY",
+            display_name: "Harmony",
+        }
+    }
+}
+
+impl HarmonyProfile {
+    /// 用当前 model / base_url / env_key 渲染 codex.toml 的 LLM 顶部配置段。
+    /// wire_api = "responses" 保证 Codex Responses 协议（与 DeepSeek 一致）。
+    pub fn render_toml(self) -> String {
+        format!(
+            "model = \"{}\"\nmodel_provider = \"{}\"\n\n[model_providers.{}]\nname = \"{}\"\nbase_url = \"{}\"\nenv_key = \"{}\"\nwire_api = \"responses\"\nsupports_websockets = false\n",
+            self.model, self.provider_id, self.provider_id, self.display_name, self.base_url, self.env_key
+        )
+    }
+}
+
+/// 渲染一份同时含 DeepSeek（默认，保持原行为）与 Harmony（内部网关备选）的 codex.toml 初始配置。
+/// DeepSeek 作为默认 model_provider 不变；Harmony 作为额外 provider 段，用户可在设置中切换。
+pub fn render_default_providers_toml() -> String {
+    let deepseek = DeepSeekProfile::default();
+    let harmony = HarmonyProfile::default();
+    format!(
+        "{}{}",
+        deepseek.render_toml(),
+        format!(
+            "\n[model_providers.{}]\nname = \"{}\"\nbase_url = \"{}\"\nenv_key = \"{}\"\nwire_api = \"responses\"\nsupports_websockets = false\n",
+            harmony.provider_id, harmony.display_name, harmony.base_url, harmony.env_key
+        )
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkBuddyMcpProfile {
     executable: PathBuf,

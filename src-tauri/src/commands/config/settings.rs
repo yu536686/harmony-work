@@ -82,6 +82,11 @@ pub async fn save_settings(
             settings.siliconflow_api_key = v.to_string();
         }
     }
+    if let Some(v) = updates["harmony_api_key"].as_str() {
+        if !v.is_empty() {
+            settings.harmony_api_key = v.to_string();
+        }
+    }
     if let Some(v) = updates["provider"].as_str() {
         settings.provider = v.to_string();
     }
@@ -681,6 +686,7 @@ fn provider_default_base_url(provider: &str) -> &'static str {
         "zhipu" => "https://api.z.ai/api/paas/v4",
         "kimi" | "moonshot" => "https://api.moonshot.cn/v1",
         "siliconflow" => "https://api.siliconflow.cn/v1",
+        "harmony" => "https://api.harmonywatch.cn:13001/v1",
         _ => "",
     }
 }

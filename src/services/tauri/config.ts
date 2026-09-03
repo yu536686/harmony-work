@@ -22,6 +22,7 @@ export interface Settings {
   zhipu_api_key: string;
   kimi_api_key: string;
   siliconflow_api_key: string;
+  harmony_api_key: string;
   provider: string;
   model: string;
   enabled_models: string[];
@@ -158,7 +159,7 @@ export interface SshServerConfig {
 export interface LlmProviderConfig {
   id: string;
   label: string;
-  /** "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "siliconflow" | "custom" */
+  /** "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "siliconflow" | "harmony" | "custom" */
   provider: string;
   model: string;
   enabled_models?: string[];

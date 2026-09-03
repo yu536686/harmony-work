@@ -41,6 +41,7 @@ const LLM_PROVIDER_OPTIONS = [
   { id: "zhipu", labelKey: "settings.providerZhipu", icon: "🧠", baseUrl: "https://api.z.ai/api/paas/v4", keyField: "zhipu_api_key", placeholder: "glm-5" },
   { id: "kimi", labelKey: "settings.providerKimi", icon: "🌙", baseUrl: "https://api.moonshot.cn/v1", keyField: "kimi_api_key", placeholder: "kimi-k2.5" },
   { id: "siliconflow", labelKey: "settings.providerSiliconflow", icon: "⚡", baseUrl: "https://api.siliconflow.cn/v1", keyField: "siliconflow_api_key", placeholder: "deepseek-ai/DeepSeek-V3" },
+  { id: "harmony", labelKey: "settings.providerHarmony", icon: "🫧", baseUrl: "https://api.harmonywatch.cn:13001/v1", keyField: "harmony_api_key", placeholder: "deepseek-v4-flash" },
   { id: "custom", labelKey: "settings.providerCustom", icon: "🔌", baseUrl: "", keyField: "openai_api_key", placeholder: "model-name" },
 ] as const;
 
@@ -131,6 +132,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   zhipu_api_key: "",
   kimi_api_key: "",
   siliconflow_api_key: "",
+  harmony_api_key: "",
   enabled_models: [],
   available_models: [],
   user_tool_configs: {},
@@ -514,7 +516,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         }),
       });
       dispatch(settingsActions.setSettings(updated));
-      dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key)));
+      dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key || updated.harmony_api_key)));
       const syncUser = readRememberedMarketingUser();
       if (syncUser?.approvalStatus === "active" && localStorage.getItem(`workbuddy.accountSettingsSyncEnabled.${syncUser.id}`) === "true") {
         // The initial login prompt establishes the local encrypted data key.
@@ -554,6 +556,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
       || updated.deepseek_api_key
       || updated.qwen_api_key
       || updated.siliconflow_api_key
+      || updated.harmony_api_key
     )));
     if (updated.language) setLanguage(updated.language as "zh" | "en");
   }, [dispatch]);
@@ -936,6 +939,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                     <option value="minimax">{t("settings.providerMinimax")}</option>
                     <option value="zhipu">{t("settings.providerZhipu")}</option>
                     <option value="kimi">{t("settings.providerKimi")}</option>
+                    <option value="siliconflow">{t("settings.providerSiliconflow")}</option>
+                    <option value="harmony">{t("settings.providerHarmony")}</option>
                     <option value="custom">{t("settings.providerCustom")}</option>
                   </select>
                 </div>
@@ -1076,6 +1081,18 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
                 Base URL: <code>https://api.siliconflow.cn/v1</code>
                 {" · "}<a href="https://cloud.siliconflow.cn" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.siliconflowKeyHelp")}</a>
+              </p>
+            </div>
+          )}
+
+          {form.provider === "harmony" && (
+            <div className="form-group">
+              <label className="label">{t("settings.harmonyKey")}</label>
+              <input className="input" type={showKeys ? "text" : "password"} value={form.harmony_api_key ?? ""}
+                onChange={(e) => update("harmony_api_key", e.target.value)} placeholder="sk-..." />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                Base URL: <code>https://api.harmonywatch.cn:13001/v1</code>
+                {" · "}<a href="https://portal.harmonywatch.cn/workspace?tab=console" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.harmonyKeyHelp")}</a>
               </p>
             </div>
           )}

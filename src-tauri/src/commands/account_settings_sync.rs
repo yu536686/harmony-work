@@ -54,6 +54,7 @@ const CATEGORY_DEFINITIONS: &[CategoryDefinition] = &[
             "zhipu_api_key",
             "kimi_api_key",
             "siliconflow_api_key",
+            "harmony_api_key",
             "provider",
             "model",
             "custom_base_url",
@@ -411,6 +412,7 @@ fn field_label(key: &str) -> String {
         "zhipu_api_key" => "智谱 API Key".to_string(),
         "kimi_api_key" => "Kimi API Key".to_string(),
         "siliconflow_api_key" => "SiliconFlow API Key".to_string(),
+        "harmony_api_key" => "Harmony API Key".to_string(),
         "vision_api_key" => "视觉 API Key".to_string(),
         _ => key.replace('_', " "),
     }

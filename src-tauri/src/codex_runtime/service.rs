@@ -1,6 +1,6 @@
 use crate::codex_runtime::client::{AppServerError, AppServerEvent};
 use crate::codex_runtime::config::{
-    merge_managed_mcp_config, CodexRuntimeConfig, DeepSeekProfile, WorkBuddyMcpProfile,
+    merge_managed_mcp_config, CodexRuntimeConfig, WorkBuddyMcpProfile,
     PINNED_CODEX_VERSION,
 };
 use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
@@ -335,7 +335,7 @@ impl CodexRuntimeState {
         let existing_config = if config_path.exists() {
             std::fs::read_to_string(&config_path).map_err(CodexRuntimeStateError::PrepareConfig)?
         } else {
-            DeepSeekProfile::default().render_toml()
+            crate::codex_runtime::config::render_default_providers_toml()
         };
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
@@ -385,6 +385,13 @@ impl CodexRuntimeState {
             next_environment.insert(
                 "DEEPSEEK_API_KEY".to_string(),
                 settings.deepseek_api_key.clone(),
+            );
+        }
+        // Harmony 内部网关 API Key（走 Codex Responses 协议）
+        if !settings.harmony_api_key.trim().is_empty() {
+            next_environment.insert(
+                "HARMONY_API_KEY".to_string(),
+                settings.harmony_api_key.clone(),
             );
         }
         let changed = {
@@ -963,9 +970,9 @@ pub(crate) fn resolve_model_selection(
         }
     };
     match provider.as_str() {
-        "openai" | "deepseek" => Ok((provider, model)),
+        "openai" | "deepseek" | "harmony" => Ok((provider, model)),
         _ => Err(format!(
-            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI 或 DeepSeek Responses API"
+            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI、DeepSeek 或 Harmony Responses API"
         )),
     }
 }

@@ -137,6 +137,7 @@ fn responses_endpoint(provider: &str, base_url: Option<&str>) -> String {
     let default_base = match provider.to_lowercase().as_str() {
         "deepseek" => "https://api.deepseek.com",
         "openai" => "https://api.openai.com/v1",
+        "harmony" => "https://api.harmonywatch.cn:13001/v1",
         _ => "https://api.openai.com/v1",
     };
     let base = base_url

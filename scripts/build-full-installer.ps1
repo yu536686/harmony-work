@@ -55,7 +55,7 @@ dotnet publish (Join-Path $ProjectRoot "installer\WorkBuddyBootstrapper\WorkBudd
   -r win-x64 `
   -p:PayloadDirectory="$(Join-Path $ProjectRoot 'installer\.build\payload')" `
   -p:PayloadArchive="$PayloadArchive" `
-  -p:Version="1.2.0-alpha.2" `
+  -p:Version="1.2.0-alpha.4" `
   -o $OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw "WPF bootstrapper publish failed." }
 

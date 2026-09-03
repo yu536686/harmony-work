@@ -242,7 +242,10 @@ pub struct Settings {
     /// SiliconFlow API key
     #[serde(default)]
     pub siliconflow_api_key: String,
-    /// Active LLM provider: "anthropic" | "openai" | "custom" | "deepseek" | "qwen"
+    /// Harmony 内部网关 API key
+    #[serde(default)]
+    pub harmony_api_key: String,
+    /// Active LLM provider: "anthropic" | "openai" | "custom" | "deepseek" | "qwen" | "harmony"
     #[serde(default = "default_provider")]
     pub provider: String,
     /// Model name (e.g. "claude-sonnet-4-5" or "gpt-4o")
@@ -750,6 +753,7 @@ impl Default for Settings {
             zhipu_api_key: String::new(),
             kimi_api_key: String::new(),
             siliconflow_api_key: String::new(),
+            harmony_api_key: String::new(),
             provider: default_provider(),
             model: default_model(),
             custom_base_url: String::new(),
@@ -918,6 +922,7 @@ impl Settings {
             Self::try_decrypt_field(&store, &mut settings.zhipu_api_key);
             Self::try_decrypt_field(&store, &mut settings.kimi_api_key);
             Self::try_decrypt_field(&store, &mut settings.siliconflow_api_key);
+            Self::try_decrypt_field(&store, &mut settings.harmony_api_key);
             Self::try_decrypt_field(&store, &mut settings.feishu_app_secret);
             Self::try_decrypt_field(&store, &mut settings.wecom_bot_secret);
             Self::try_decrypt_field(&store, &mut settings.dingtalk_app_secret);
@@ -956,6 +961,7 @@ impl Settings {
             Self::encrypt_field(&store, &mut clone.zhipu_api_key);
             Self::encrypt_field(&store, &mut clone.kimi_api_key);
             Self::encrypt_field(&store, &mut clone.siliconflow_api_key);
+            Self::encrypt_field(&store, &mut clone.harmony_api_key);
             Self::encrypt_field(&store, &mut clone.feishu_app_secret);
             Self::encrypt_field(&store, &mut clone.wecom_bot_secret);
             Self::encrypt_field(&store, &mut clone.dingtalk_app_secret);
@@ -1016,6 +1022,7 @@ impl Settings {
             || !self.zhipu_api_key.trim().is_empty()
             || !self.kimi_api_key.trim().is_empty()
             || !self.siliconflow_api_key.trim().is_empty()
+            || !self.harmony_api_key.trim().is_empty()
             || is_local_ollama_openai_provider(&self.provider, &self.custom_base_url)
     }
 
@@ -1035,6 +1042,7 @@ impl Settings {
             "zhipu" => &self.zhipu_api_key,
             "kimi" | "moonshot" => &self.kimi_api_key,
             "siliconflow" => &self.siliconflow_api_key,
+            "harmony" => &self.harmony_api_key,
             _ => &self.anthropic_api_key,
         }
     }

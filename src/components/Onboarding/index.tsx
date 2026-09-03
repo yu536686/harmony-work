@@ -94,6 +94,16 @@ const PROVIDERS = [
     guideText: "进入 SiliconFlow 控制台创建 API Key。",
   },
   {
+    id: "harmony",
+    label: "Harmony（内部网关）",
+    baseUrl: "https://api.harmonywatch.cn:13001/v1",
+    keyField: "harmony_api_key",
+    placeholder: "deepseek-v4-flash",
+    keyPlaceholder: "sk-...",
+    guide: "https://portal.harmonywatch.cn/workspace?tab=console",
+    guideText: "使用门户「我的控制台」中的 Harmony API Key。",
+  },
+  {
     id: "custom",
     label: "自定义 OpenAI 兼容接口",
     baseUrl: "",
