@@ -3,6 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 export type CreativeKind = "music" | "image";
 export type CreativeStatus = "queued" | "submitting" | "submitted" | "processing" | "partial_success" | "succeeded" | "archiving" | "archived" | "failed" | "expired";
 
+export type HarvisTaskKind = "image" | "video" | "music" | "tts";
+
+export interface HarvisTask {
+  taskId: string;
+  kind: HarvisTaskKind;
+  prompt: string;
+  status: "pending" | "processing" | "succeeded" | "failed";
+  progress: number;
+  resultUrl?: string;
+  errorMessage?: string;
+  createdAt: number;
+}
+
 export interface CreativeArtifact {
   id: string;
   kind: "audio" | "image" | "cover";
@@ -194,3 +207,24 @@ export const creativeApi = {
   harvisQueryTaskContent: (taskId: string) =>
     invoke<Record<string, unknown>>("harvis_query_task_content", { taskId })
 };
+
+const HARVIS_TASKS_KEY = "workbuddy.harvis.tasks";
+
+export function loadHarvisTasks(): HarvisTask[] {
+  try {
+    const raw = localStorage.getItem(HARVIS_TASKS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as HarvisTask[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHarvisTasks(tasks: HarvisTask[]): void {
+  try {
+    localStorage.setItem(HARVIS_TASKS_KEY, JSON.stringify(tasks));
+  } catch {
+    // ignore quota / serialization errors
+  }
+}
