@@ -24,16 +24,16 @@ type CreativePageProps = {
 
 function normalizeHarvisStatus(raw: unknown): HarvisTask["status"] {
   const value = typeof raw === "string" ? raw.toLowerCase() : "";
-  if (value.includes("success") || value.includes("complete") || value === "done") return "succeeded";
-  if (value.includes("fail") || value.includes("error")) return "failed";
-  if (value.includes("process") || value.includes("running") || value.includes("pending") || value.includes("queue")) return "processing";
+  if (value === "succeeded" || value.includes("success") || value.includes("complete") || value === "done") return "succeeded";
+  if (value === "failed" || value.includes("fail") || value.includes("error")) return "failed";
+  if (value === "processing" || value.includes("process") || value.includes("running") || value.includes("pending") || value.includes("queue")) return "processing";
   return "processing";
 }
 
 function extractHarvisResultUrl(raw: unknown): string | undefined {
   const obj = raw as Record<string, unknown> | null | undefined;
   if (!obj) return undefined;
-  const candidates = [obj.url, obj.resultUrl, obj.downloadUrl, obj.audioUrl, obj.imageUrl];
+  const candidates = [obj.url, obj.resultUrl, obj.result_url, obj.downloadUrl, obj.audioUrl, obj.audio_url, obj.imageUrl, obj.image_url];
   for (const value of candidates) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
@@ -246,18 +246,21 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     const timer = window.setInterval(() => {
       void Promise.all(activeHarvisTasks.map(async (task) => {
         try {
-          const statusResp = await creativeApi.harvisQueryTask(task.taskId);
-          const rawStatus = (statusResp as any)?.status ?? (statusResp as any)?.state ?? statusResp;
-          const status = normalizeHarvisStatus(rawStatus);
+          const statusResp = await creativeApi.harvisQueryTask(task.taskId, task.kind);
+          const status = normalizeHarvisStatus((statusResp as any)?.status ?? (statusResp as any)?.state ?? statusResp);
+          const progress = typeof (statusResp as any)?.progress === "number" ? (statusResp as any).progress : task.progress;
           if (status === "succeeded") {
-            const contentResp = await creativeApi.harvisQueryTaskContent(task.taskId);
-            const resultUrl = extractHarvisResultUrl(contentResp);
+            let resultUrl = extractHarvisResultUrl(statusResp);
+            if (!resultUrl) {
+              const contentResp = await creativeApi.harvisQueryTaskContent(task.taskId, task.kind);
+              resultUrl = extractHarvisResultUrl(contentResp);
+            }
             return { ...task, status: "succeeded" as const, progress: 100, resultUrl };
           }
           if (status === "failed") {
             return { ...task, status: "failed" as const, errorMessage: "生成任务失败" };
           }
-          return { ...task, status: "processing" as const };
+          return { ...task, status: "processing" as const, progress };
         } catch (error) {
           return { ...task, errorMessage: String(error) };
         }
@@ -394,7 +397,23 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         referenceIds
       });
       const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
-      if (taskId) {
+      const resultUrl = (result as any)?.result_url ?? "";
+      if (resultUrl) {
+        const task: HarvisTask = {
+          taskId: `image-${Date.now()}`,
+          kind: "image",
+          prompt: imagePrompt.trim(),
+          status: "succeeded",
+          progress: 100,
+          resultUrl,
+          createdAt: Date.now(),
+        };
+        setHarvisTasks((prev) => {
+          const next = [task, ...prev];
+          saveHarvisTasks(next);
+          return next;
+        });
+      } else if (taskId) {
         const task: HarvisTask = {
           taskId,
           kind: "image",
@@ -409,7 +428,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
           return next;
         });
       }
-      setNotice(taskId ? `图片任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "图片任务已提交（个人 Harmony Key）");
+      setNotice(resultUrl ? "图片已生成（个人 Harmony Key）" : taskId ? `图片任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "图片任务已提交（个人 Harmony Key）");
     } catch (error) {
       setNotice(String(error));
     } finally {

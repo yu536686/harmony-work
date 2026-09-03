@@ -202,10 +202,10 @@ export const creativeApi = {
     }),
   harvisGenerate: (request: Record<string, unknown>) =>
     invoke<Record<string, unknown>>("harvis_generate", { request }),
-  harvisQueryTask: (taskId: string) =>
-    invoke<Record<string, unknown>>("harvis_query_task", { taskId }),
-  harvisQueryTaskContent: (taskId: string) =>
-    invoke<Record<string, unknown>>("harvis_query_task_content", { taskId })
+  harvisQueryTask: (taskId: string, kind: HarvisTaskKind) =>
+    invoke<Record<string, unknown>>("harvis_query_task", { taskId, kind }),
+  harvisQueryTaskContent: (taskId: string, kind: HarvisTaskKind) =>
+    invoke<Record<string, unknown>>("harvis_query_task_content", { taskId, kind })
 };
 
 const HARVIS_TASKS_KEY = "workbuddy.harvis.tasks";
