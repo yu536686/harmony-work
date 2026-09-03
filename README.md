@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.2.0--alpha.2-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.2)
+[![Version](https://img.shields.io/badge/version-1.2.0--alpha.4-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.4)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
@@ -130,8 +130,11 @@ Get-FileHash .\Xiaoheng-WorkBuddy-<version>-x64-setup.exe -Algorithm SHA256
 
 - OpenAI Responses API
 - DeepSeek Responses API
+- Harmony 内部网关（Responses）
 
-设置界面还提供 Anthropic、通义千问、MiniMax、智谱 GLM、Kimi、SiliconFlow 和自定义 OpenAI 兼容接口。实际可用性取决于供应商是否兼容当前 Codex Responses 执行协议。
+设置界面还提供 Anthropic、通义千问、MiniMax、智谱 GLM、Kimi、SiliconFlow、Harmony 和自定义 OpenAI 兼容接口。实际可用性取决于供应商是否兼容当前 Codex Responses 执行协议。
+
+**Harmony 内部网关（公司统一计费）**：选择「Harmony（内部网关）」后，Base URL 默认为 `https://api.harmonywatch.cn:13001/v1`，填入门户「我的控制台」中生成的 Harmony API Key 即可调用。员工无需自付费用，用量由网关按个人 Key 统一核算。
 
 推荐配置流程：
 
@@ -229,9 +232,17 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 Windows 安装包在受控的 Windows 构建机上生成并验证后，再上传至 GitHub Release。发布示例：
 
 ```powershell
-git tag -a v1.2.0-alpha.2 -m "小亨 WorkBuddy 1.2.0 Alpha 2"
-git push origin v1.2.0-alpha.2
+git tag -a v1.2.0-alpha.4 -m "小亨 WorkBuddy 1.2.0 Alpha 4"
+git push origin v1.2.0-alpha.4
 ```
+
+## 路线图
+
+以下为后续功能开发计划：
+
+- **Harvis 创作模型接入**：在设置中选择提供商并获取模型后，按模型种类识别并新增 Harvis 生图、视频、音乐、TTS 四类模型选择；将生图与音乐模型绑定到现有 Harvis 创作模块，使用员工个人 API Key 调用并按人统计用量；视频与 TTS 预留接口，后续逐步实现。
+- **Harmony 供应商完善**：完善门户控制台与个人 Key 的用量、成本、日志展示，深度绑定 token 中转站后台。
+- **微信 / 企业微信登录**：门户与小亨账号系统支持微信、企业微信登录。
 
 ## 项目结构
 
@@ -305,7 +316,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.2.0-alpha.2`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.2)
+- 当前版本：[`v1.2.0-alpha.4`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.4)
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/xiaoheng-workbuddy/issues)
 
 ---
