@@ -332,11 +332,17 @@ impl CodexRuntimeState {
         let codex_home = app_data_dir.join("codex-home");
         std::fs::create_dir_all(&codex_home).map_err(CodexRuntimeStateError::PrepareConfig)?;
         let config_path = codex_home.join("config.toml");
-        let existing_config = if config_path.exists() {
+        let mut existing_config = if config_path.exists() {
             std::fs::read_to_string(&config_path).map_err(CodexRuntimeStateError::PrepareConfig)?
         } else {
             crate::codex_runtime::config::render_default_providers_toml()
         };
+        // 升级场景：旧版 codex.toml 只有 DeepSeek 段，需补齐 Harmony 内置 provider 段，
+        // 否则切换到 Harmony 时 codex 会报 `Model provider harmony not found`。
+        if !existing_config.contains("[model_providers.harmony]") {
+            existing_config
+                .push_str(&crate::codex_runtime::config::render_harmony_provider_section());
+        }
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
         let installed_skill_root = app_data_dir.join("installed-skills");

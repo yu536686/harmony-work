@@ -98,6 +98,16 @@ pub fn render_default_providers_toml() -> String {
     )
 }
 
+/// 渲染 Harmony 内部网关的 provider 段（不含顶层 model / model_provider），
+/// 用于在升级场景（已有 codex.toml 但缺少 harmony 段）时补齐配置。
+pub fn render_harmony_provider_section() -> String {
+    let harmony = HarmonyProfile::default();
+    format!(
+        "\n[model_providers.{}]\nname = \"{}\"\nbase_url = \"{}\"\nenv_key = \"{}\"\nwire_api = \"responses\"\nsupports_websockets = false\n",
+        harmony.provider_id, harmony.display_name, harmony.base_url, harmony.env_key
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkBuddyMcpProfile {
     executable: PathBuf,
@@ -177,7 +187,7 @@ mod tests {
     fn b1_version_has_semver_and_display_forms() {
         let config = CodexRuntimeConfig::b1_default();
 
-        assert_eq!(config.package_version, "1.2.0-alpha.2");
+        assert_eq!(config.package_version, "1.2.0-alpha.4");
         assert_eq!(config.display_version, "b1.0.5");
         assert_eq!(config.codex_version, "0.149.0");
     }
