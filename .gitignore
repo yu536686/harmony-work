@@ -18,3 +18,4 @@ installer/WorkBuddyBootstrapper/bin/
 installer/WorkBuddyBootstrapper/obj/
 src-tauri/resources/codex/
 src-tauri/resources/workbuddy-mcp-host/
+release/
