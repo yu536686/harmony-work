@@ -339,7 +339,8 @@ impl CodexRuntimeState {
         };
         // 升级场景：旧版 codex.toml 只有 DeepSeek 段，需补齐 Harmony 内置 provider 段，
         // 否则切换到 Harmony 时 codex 会报 `Model provider harmony not found`。
-        if !existing_config.contains("[model_providers.harmony]") {
+        let harmony_missing = !existing_config.contains("[model_providers.harmony]");
+        if harmony_missing {
             existing_config
                 .push_str(&crate::codex_runtime::config::render_harmony_provider_section());
         }
@@ -358,7 +359,7 @@ impl CodexRuntimeState {
             &marketing_base_url,
         );
         let merged_config = merge_managed_mcp_config(&existing_config, &mcp_profile.render_toml());
-        if merged_config != existing_config {
+        if harmony_missing || merged_config != existing_config {
             std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
         }
