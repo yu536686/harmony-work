@@ -1316,6 +1316,10 @@ fn run_impl() {
             commands::marketing::marketing_creative_admin_upsert_music_business_line,
             commands::marketing::marketing_creative_save_to_workspace,
             commands::marketing::marketing_creative_upload_reference,
+            // harvis generation/
+            commands::harvis_generate::harvis_generate,
+            commands::harvis_generate::harvis_query_task,
+            commands::harvis_generate::harvis_query_task_content,
             // harmony cut/
             commands::harmony_cut::harmony_cut_health,
             commands::harmony_cut::harmony_cut_start_service,

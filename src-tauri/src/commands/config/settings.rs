@@ -11,6 +11,7 @@ pub struct ProviderModelInfo {
     pub id: String,
     pub label: String,
     pub owned_by: Option<String>,
+    pub kind: String,
 }
 
 #[tauri::command]
@@ -86,6 +87,18 @@ pub async fn save_settings(
         if !v.is_empty() {
             settings.harmony_api_key = v.to_string();
         }
+    }
+    if let Some(v) = updates["harvis_image_model"].as_str() {
+        settings.harvis_image_model = v.to_string();
+    }
+    if let Some(v) = updates["harvis_video_model"].as_str() {
+        settings.harvis_video_model = v.to_string();
+    }
+    if let Some(v) = updates["harvis_music_model"].as_str() {
+        settings.harvis_music_model = v.to_string();
+    }
+    if let Some(v) = updates["harvis_tts_model"].as_str() {
+        settings.harvis_tts_model = v.to_string();
     }
     if let Some(v) = updates["provider"].as_str() {
         settings.provider = v.to_string();
@@ -702,6 +715,34 @@ fn normalize_model_base_url(provider: &str, base_url: Option<&str>) -> Result<St
     Ok(raw.trim_end_matches('/').to_string())
 }
 
+/// 依据模型 ID 关键字识别模型种类，用于 Harvis 创作模型分类。
+/// 返回 "chat" | "image" | "video" | "music" | "tts"。
+pub fn classify_harvis_model_kind(id: &str) -> &'static str {
+    let lower = id.to_ascii_lowercase();
+    if lower.contains("gpt-image")
+        || lower.contains("dall-e")
+        || lower.contains("flux")
+        || lower.contains("stable-diffusion")
+        || lower.contains("sd-")
+    {
+        "image"
+    } else if lower.contains("seedance")
+        || lower.contains("sora")
+        || lower.contains("vidu")
+        || lower.contains("kling")
+        || lower.contains("hailuo")
+        || lower.contains("runway")
+    {
+        "video"
+    } else if lower.contains("suno") || lower.contains("udio") {
+        "music"
+    } else if lower.contains("tts") || lower.contains("speech") || lower.contains("cosyvoice") {
+        "tts"
+    } else {
+        "chat"
+    }
+}
+
 fn extract_models(value: &Value) -> Vec<ProviderModelInfo> {
     let arr = value
         .get("data")
@@ -740,6 +781,7 @@ fn extract_models(value: &Value) -> Vec<ProviderModelInfo> {
                 id: id.to_string(),
                 label,
                 owned_by,
+                kind: classify_harvis_model_kind(id).to_string(),
             });
         }
     }

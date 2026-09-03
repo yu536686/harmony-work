@@ -186,5 +186,11 @@ export const creativeApi = {
         mediaType: file.type || "application/octet-stream",
         dataBase64: await encodeFile(file)
       }
-    })
+    }),
+  harvisGenerate: (request: Record<string, unknown>) =>
+    invoke<Record<string, unknown>>("harvis_generate", { request }),
+  harvisQueryTask: (taskId: string) =>
+    invoke<Record<string, unknown>>("harvis_query_task", { taskId }),
+  harvisQueryTaskContent: (taskId: string) =>
+    invoke<Record<string, unknown>>("harvis_query_task_content", { taskId })
 };

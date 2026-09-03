@@ -23,6 +23,10 @@ export interface Settings {
   kimi_api_key: string;
   siliconflow_api_key: string;
   harmony_api_key: string;
+  harvis_image_model: string;
+  harvis_video_model: string;
+  harvis_music_model: string;
+  harvis_tts_model: string;
   provider: string;
   model: string;
   enabled_models: string[];
@@ -176,6 +180,7 @@ export interface ProviderModelInfo {
   id: string;
   label: string;
   owned_by?: string | null;
+  kind: string;
 }
 
 export const settingsApi = {

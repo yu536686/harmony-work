@@ -276,10 +276,15 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     setBusy(true);
     setNotice("");
     try {
-      const response = await creativeApi.createMusic({ mode: musicMode, tags: musicTags.trim(), title: musicTitle.trim() || `${brand} ${watchCollection} 品牌 BGM`, duration: musicDuration, prompt: musicTags.trim() });
-      setJobs((previous) => [response.job, ...previous]);
-      setSelectedJobId(response.job.id);
-      setNotice(response.job.status === "failed" ? `音乐任务提交失败：${response.job.errorMessage || "供应商未返回可执行任务"}` : "音乐任务已提交");
+      const result = await creativeApi.harvisGenerate({
+        kind: "music",
+        prompt: musicTags.trim(),
+        title: musicTitle.trim() || `${brand} ${watchCollection} 品牌 BGM`,
+        duration: musicDuration,
+        mode: musicMode
+      });
+      const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
+      setNotice(taskId ? `音乐任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "音乐任务已提交（个人 Harmony Key）");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -300,7 +305,8 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     setNotice("");
     try {
       const canvas = resolveCanvasRequest(canvasPreset, canvasWidth, canvasHeight);
-      const response = await creativeApi.createImage({
+      const result = await creativeApi.harvisGenerate({
+        kind: "image",
         mode: imageMode,
         prompt: imagePrompt.trim(),
         canvasPreset: canvas.canvasPreset,
@@ -308,9 +314,8 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         outputHeight: canvas.outputHeight,
         referenceIds
       });
-      setJobs((previous) => [response.job, ...previous]);
-      setSelectedJobId(response.job.id);
-      setNotice(response.job.status === "failed" ? `图片任务提交失败：${response.job.errorMessage || "供应商未返回可执行任务"}` : "图片任务已提交");
+      const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
+      setNotice(taskId ? `图片任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "图片任务已提交（个人 Harmony Key）");
     } catch (error) {
       setNotice(String(error));
     } finally {

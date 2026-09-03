@@ -133,6 +133,10 @@ const DEFAULT_SETTINGS: SettingsData = {
   kimi_api_key: "",
   siliconflow_api_key: "",
   harmony_api_key: "",
+  harvis_image_model: "",
+  harvis_video_model: "",
+  harvis_music_model: "",
+  harvis_tts_model: "",
   enabled_models: [],
   available_models: [],
   user_tool_configs: {},
@@ -171,6 +175,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const dispatch = useDispatch();
   const { settings } = useSelector((s: RootState) => s.settings);
   const [form, setForm] = useState<SettingsData>({ ...DEFAULT_SETTINGS });
+  const [harvisModelOptions, setHarvisModelOptions] = useState<ProviderModelInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -592,6 +597,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         enabled_models: uniqStrings([...(prev.enabled_models ?? []), ...ids.slice(0, 1)]),
         model: prev.model || ids[0] || "",
       }));
+      setHarvisModelOptions(models);
     } catch (e) {
       setGlobalModelError(String(e));
     } finally {
@@ -1094,6 +1100,36 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                 Base URL: <code>https://api.harmonywatch.cn:13001/v1</code>
                 {" · "}<a href="https://portal.harmonywatch.cn/workspace?tab=console" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.harmonyKeyHelp")}</a>
               </p>
+            </div>
+          )}
+
+          {form.provider === "harmony" && (
+            <div className="form-group">
+              <label className="label">Harvis 创作模型</label>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                选择后，Harvis 创作将使用当前 Harmony 账号的个人 API Key 调用对应模型。
+              </p>
+              {(["image", "video", "music", "tts"] as const).map((kind) => {
+                const field = ({
+                  image: "harvis_image_model",
+                  video: "harvis_video_model",
+                  music: "harvis_music_model",
+                  tts: "harvis_tts_model",
+                } as const)[kind];
+                const label = { image: "生图", video: "视频", music: "音乐", tts: "TTS" }[kind];
+                const options = harvisModelOptions.filter((m) => m.kind === kind);
+                return (
+                  <div key={kind} style={{ marginTop: 8 }}>
+                    <label className="label" style={{ fontSize: 13 }}>{label}</label>
+                    <select className="input" value={(form as any)[field] ?? ""} onChange={(e) => update(field, e.target.value)}>
+                      <option value="">请选择模型</option>
+                      {options.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
           )}
 

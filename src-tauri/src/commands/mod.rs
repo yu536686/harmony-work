@@ -20,6 +20,7 @@
 pub mod account_settings_sync;
 pub mod chat;
 pub mod config;
+pub mod harvis_generate;
 pub mod harmony_cut;
 pub mod ide;
 pub mod journal;

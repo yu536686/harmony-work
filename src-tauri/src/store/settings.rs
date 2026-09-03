@@ -245,6 +245,18 @@ pub struct Settings {
     /// Harmony 内部网关 API key
     #[serde(default)]
     pub harmony_api_key: String,
+    /// Harvis 生图模型（Harmony 网关）
+    #[serde(default)]
+    pub harvis_image_model: String,
+    /// Harvis 视频模型（Harmony 网关）
+    #[serde(default)]
+    pub harvis_video_model: String,
+    /// Harvis 音乐模型（Harmony 网关）
+    #[serde(default)]
+    pub harvis_music_model: String,
+    /// Harvis TTS 模型（Harmony 网关）
+    #[serde(default)]
+    pub harvis_tts_model: String,
     /// Active LLM provider: "anthropic" | "openai" | "custom" | "deepseek" | "qwen" | "harmony"
     #[serde(default = "default_provider")]
     pub provider: String,
@@ -754,6 +766,10 @@ impl Default for Settings {
             kimi_api_key: String::new(),
             siliconflow_api_key: String::new(),
             harmony_api_key: String::new(),
+            harvis_image_model: String::new(),
+            harvis_video_model: String::new(),
+            harvis_music_model: String::new(),
+            harvis_tts_model: String::new(),
             provider: default_provider(),
             model: default_model(),
             custom_base_url: String::new(),
