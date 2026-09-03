@@ -1,0 +1,7 @@
+starlette
+uvicorn
+pydantic
+opencv-python
+numpy
+imageio-ffmpeg
+

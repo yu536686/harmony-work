@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "platform": "win-x64",
+  "components": {
+    "node": {
+      "version": "22.14.0",
+      "fileName": "node-v22.14.0-win-x64.zip",
+      "url": "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip",
+      "sha256": "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217"
+    },
+    "python": {
+      "version": "3.12.8",
+      "fileName": "python-3.12.8-amd64.exe",
+      "url": "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe",
+      "sha256": "71bd44e6b0e91c17558963557e4cdb80b483de9b0a0a9717f06cf896f95ab598"
+    },
+    "portableGit": {
+      "version": "2.47.1.windows.1",
+      "fileName": "PortableGit-2.47.1-64-bit.7z.exe",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/PortableGit-2.47.1-64-bit.7z.exe",
+      "sha256": "4f3f21f4effcb659566883ee1ed3ae403e5b3d7a0699cee455f6cd765e1ac39c"
+    },
+    "wecomCli": {
+      "version": "0.1.9",
+      "fileName": "wecom-cli-0.1.9.tgz",
+      "url": "https://registry.npmjs.org/@wecom/cli/-/cli-0.1.9.tgz",
+      "sha256": "d162cf4590fd67789ca1720c5d48219370305911b40e7b56657caa1db85ea61f"
+    },
+    "wecomCliWindows": {
+      "version": "0.1.9",
+      "fileName": "wecom-cli-win32-x64-0.1.9.tgz",
+      "url": "https://registry.npmjs.org/@wecom/cli-win32-x64/-/cli-win32-x64-0.1.9.tgz",
+      "sha256": "9803e8deab1e5ad6877fc21679a07c562fda0d3b389c4839dfdaf0ea49ef549c"
+    }
+  },
+  "pythonWheels": [
+    { "name": "annotated-types", "version": "0.8.0", "fileName": "annotated_types-0.8.0-py3-none-any.whl", "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0" },
+    { "name": "anyio", "version": "4.14.2", "fileName": "anyio-4.14.2-py3-none-any.whl", "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494" },
+    { "name": "click", "version": "8.5.0", "fileName": "click-8.5.0-py3-none-any.whl", "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360" },
+    { "name": "h11", "version": "0.16.0", "fileName": "h11-0.16.0-py3-none-any.whl", "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86" },
+    { "name": "idna", "version": "3.19", "fileName": "idna-3.19-py3-none-any.whl", "sha256": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4" },
+    { "name": "imageio-ffmpeg", "version": "0.6.0", "fileName": "imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl", "sha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a" },
+    { "name": "numpy", "version": "2.5.2", "fileName": "numpy-2.5.2-cp312-cp312-win_amd64.whl", "sha256": "28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4" },
+    { "name": "opencv-python", "version": "5.0.0.93", "fileName": "opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl", "sha256": "f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2" },
+    { "name": "pydantic", "version": "2.13.5", "fileName": "pydantic-2.13.5-py3-none-any.whl", "sha256": "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73" },
+    { "name": "pydantic-core", "version": "2.46.5", "fileName": "pydantic_core-2.46.5-cp312-cp312-win_amd64.whl", "sha256": "5e81740c09e310f5aa5cbd3e434a01c154d4bef93241c7877b39f211d2b78ba8" },
+    { "name": "starlette", "version": "1.6.0", "fileName": "starlette-1.6.0-py3-none-any.whl", "sha256": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c" },
+    { "name": "typing-extensions", "version": "4.16.0", "fileName": "typing_extensions-4.16.0-py3-none-any.whl", "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8" },
+    { "name": "typing-inspection", "version": "0.4.4", "fileName": "typing_inspection-0.4.4-py3-none-any.whl", "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147" },
+    { "name": "uvicorn", "version": "0.52.4", "fileName": "uvicorn-0.52.4-py3-none-any.whl", "sha256": "f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1" }
+  ]
+}

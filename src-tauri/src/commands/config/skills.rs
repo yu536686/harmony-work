@@ -1,0 +1,1436 @@
+use crate::skills::loader::check_skill_compatibility;
+use crate::store::{db::Skill, AppState};
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
+use tracing::{info, warn};
+
+// reqwest is available as a transitive dependency from other tools
+use reqwest;
+
+fn notify_skills_changed(state: &State<'_, AppState>) {
+    let _ = state.app_handle.emit("skills_changed", ());
+}
+
+/// Perform a GET request with automatic retry on 429 (rate-limit) and 5xx errors.
+///
+/// Retry schedule: up to `max_retries` attempts with exponential back-off starting at
+/// `base_delay_ms` ms (doubled each attempt, capped at 16 s).
+/// Respects the `Retry-After` header when present.
+async fn clawhub_get_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    max_retries: u32,
+) -> Result<reqwest::Response, String> {
+    let base_delay_ms: u64 = 1000;
+    let mut attempt = 0u32;
+
+    loop {
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("网络请求失败：{}", e))?;
+
+        let status = resp.status();
+
+        // Success or a client error that won't be fixed by retrying (4xx except 429)
+        if status.is_success() || (status.is_client_error() && status.as_u16() != 429) {
+            return Ok(resp);
+        }
+
+        // 429 or 5xx — potentially retryable
+        if attempt >= max_retries {
+            return Ok(resp); // return the last response; caller handles the error status
+        }
+
+        // Honour Retry-After header if present (value in seconds)
+        let retry_after_ms = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|secs| secs * 1000)
+            .unwrap_or(0);
+
+        let backoff_ms = if retry_after_ms > 0 {
+            retry_after_ms.min(30_000) // cap at 30 s
+        } else {
+            let exp = base_delay_ms * (1u64 << attempt.min(4)); // 1s, 2s, 4s, 8s, 16s
+            exp.min(16_000)
+        };
+
+        warn!(
+            "ClawHub {} for '{}', retrying in {}ms (attempt {}/{})",
+            status,
+            url,
+            backoff_ms,
+            attempt + 1,
+            max_retries
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        attempt += 1;
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkillList {
+    pub skills: Vec<Skill>,
+    pub total: usize,
+}
+
+#[tauri::command]
+pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
+    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    loader.load_all().map_err(|e| e.to_string())?;
+    let fs_skill_ids: std::collections::HashSet<String> = loader
+        .list_skills()
+        .into_iter()
+        .map(|s| s.skill_id.clone())
+        .collect();
+
+    let db = state.db.lock().await;
+    let skills = db.list_skills().map_err(|e| e.to_string())?;
+    // Filter out any stale "unnamed" entries left by failed skill parses
+    let skills: Vec<_> = skills
+        .into_iter()
+        .filter(|s| s.name != "unnamed" && s.id != "unnamed" && fs_skill_ids.contains(&s.id))
+        .collect();
+    let total = skills.len();
+    Ok(SkillList { skills, total })
+}
+
+#[tauri::command]
+pub async fn toggle_skill(
+    state: State<'_, AppState>,
+    skill_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.set_skill_enabled(&skill_id, enabled)
+        .map_err(|e| e.to_string())
+        .map(|_| notify_skills_changed(&state))
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkillCatalogItem {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub source: String,
+    pub tools: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub permissions: Vec<String>,
+    pub platform: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn scan_skill_catalog(
+    state: State<'_, AppState>,
+) -> Result<Vec<SkillCatalogItem>, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = app_dir.join("skills");
+    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    loader.load_all().map_err(|e| e.to_string())?;
+
+    let fs_skills = loader.list_skills();
+
+    let items = fs_skills
+        .into_iter()
+        .filter(|s| !s.name.is_empty() && s.name != "unnamed")
+        .map(|s| SkillCatalogItem {
+            name: s.name.clone(),
+            description: s.description.clone(),
+            version: s.version.clone(),
+            source: s.source.clone(),
+            tools: s.tools.clone(),
+            dependencies: s.dependencies.clone(),
+            permissions: s.permissions.clone(),
+            platform: s.platform.clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(items)
+}
+
+/// Scan the skills directory on disk and register any skills that are present
+/// on the filesystem but not yet in the database.  Already-registered skills
+/// are left untouched (their `enabled` flag is preserved).
+///
+/// Returns a summary: `{ synced: N, already_registered: M, errors: [...] }`
+#[derive(Debug, Serialize)]
+pub struct SyncSkillsResult {
+    pub synced: usize,
+    pub already_registered: usize,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn sync_skills_from_disk(state: State<'_, AppState>) -> Result<SyncSkillsResult, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = app_dir.join("skills");
+
+    // Load all skills from the filesystem
+    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    loader.load_all().map_err(|e| e.to_string())?;
+    let fs_skills = loader.list_skills();
+
+    // Get the set of skill IDs already in the DB
+    let db_skill_ids: std::collections::HashSet<String> = {
+        let db = state.db.lock().await;
+        db.list_skills()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+
+    let mut synced = 0usize;
+    let mut already_registered = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for skill in fs_skills {
+        if skill.name.is_empty() || skill.name == "unnamed" {
+            continue;
+        }
+
+        // Derive the same safe_name key used by install_skill
+        let safe_name: String = skill
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
+
+        if db_skill_ids.contains(&safe_name) {
+            already_registered += 1;
+            continue;
+        }
+
+        let meta = match skill.lifecycle.as_str() {
+            crate::skills::provenance::LIFECYCLE_BUILTIN => {
+                crate::skills::provenance::SkillConfigMeta::builtin()
+            }
+            crate::skills::provenance::LIFECYCLE_DRAFT => {
+                crate::skills::provenance::SkillConfigMeta::draft("sync", None)
+            }
+            crate::skills::provenance::LIFECYCLE_LEARNED => {
+                let mut m = crate::skills::provenance::SkillConfigMeta::draft("sync", None);
+                m.lifecycle = crate::skills::provenance::LIFECYCLE_LEARNED.to_string();
+                m
+            }
+            _ => crate::skills::provenance::SkillConfigMeta::installed("sync", None, None),
+        };
+        let skill_id = if !skill.skill_id.is_empty() {
+            skill.skill_id.clone()
+        } else {
+            safe_name.clone()
+        };
+
+        let db = state.db.lock().await;
+        match db.upsert_skill_with_config(
+            &skill_id,
+            &skill.name,
+            &skill.description,
+            "📦",
+            Some(&meta.to_json()),
+        ) {
+            Ok(_) => {
+                let _ = db.ensure_skill_usage(&skill_id, meta.source.as_deref());
+                info!("sync_skills_from_disk: registered '{}'", skill.name);
+                synced += 1;
+            }
+            Err(e) => {
+                errors.push(format!("'{}': {}", skill.name, e));
+            }
+        }
+    }
+
+    if synced > 0 {
+        notify_skills_changed(&state);
+    }
+    Ok(SyncSkillsResult {
+        synced,
+        already_registered,
+        errors,
+    })
+}
+
+/// Install a skill from a URL (raw SKILL.md) or local file path.
+/// The SKILL.md is downloaded, parsed, and written to the app skills directory.
+async fn install_skill_from_content(
+    state: &State<'_, AppState>,
+    content: String,
+) -> Result<SkillCatalogItem, String> {
+    install_skill_from_content_sourced(state, content, "manual", None).await
+}
+
+async fn install_skill_from_content_sourced(
+    state: &State<'_, AppState>,
+    content: String,
+    source: &str,
+    source_url: Option<String>,
+) -> Result<SkillCatalogItem, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
+
+    let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    let skill = loader
+        .parse_skill_from_content(&content)
+        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
+
+    if skill.name.is_empty() || skill.name == "unnamed" {
+        return Err("SKILL.md must declare a 'name' field in frontmatter".into());
+    }
+
+    let compat = check_skill_compatibility(&skill).await;
+    if !compat.compatible {
+        return Err(format!(
+            "技能 '{}' 与当前系统不兼容：\n{}",
+            skill.name,
+            compat.issues.join("\n")
+        ));
+    }
+    for w in &compat.warnings {
+        warn!("Skill '{}' compatibility warning: {}", skill.name, w);
+    }
+
+    if !skill.permissions.is_empty() {
+        warn!(
+            "Installing skill '{}' with permissions: {:?}",
+            skill.name, skill.permissions
+        );
+    }
+
+    let (safe_name, _display_name) = {
+        let db = state.db.lock().await;
+        crate::skills::service::install_to_installed(
+            &db,
+            &skills_dir,
+            &content,
+            source,
+            source_url,
+            None,
+        )
+        .map_err(|e| format!("Failed to install skill: {}", e))?
+    };
+
+    let skill_dir = crate::skills::provenance::installed_dir(&skills_dir).join(&safe_name);
+    let skill_file = skill_dir.join("SKILL.md");
+    info!("Installed skill '{}' to {:?}", skill.name, skill_dir);
+
+    // Enrich triggers through the same Codex runtime used by the main session.
+    {
+        let enrich_state = state.inner().clone();
+        let enrich_skill = skill.clone();
+        let enrich_file = skill_file.clone();
+        tokio::spawn(async move {
+            if let Err(error) =
+                enrich_triggers_with_codex(&enrich_state, &enrich_skill, &enrich_file).await
+            {
+                warn!("Trigger enrichment failed (non-fatal): {}", error);
+            }
+        });
+    }
+
+    notify_skills_changed(state);
+    Ok(SkillCatalogItem {
+        name: skill.name,
+        description: skill.description,
+        version: skill.version,
+        source: "installed".to_string(),
+        tools: skill.tools,
+        dependencies: skill.dependencies,
+        permissions: skill.permissions,
+        platform: skill.platform,
+    })
+}
+
+/// Strip ASCII whitespace AND Unicode invisible/directional characters that get
+/// silently inserted when copying paths from Windows Explorer, browsers, or
+/// certain chat UIs (e.g. U+202A LEFT-TO-RIGHT EMBEDDING, U+202C POP, U+200B
+/// ZERO WIDTH SPACE, U+FEFF BOM, U+00A0 NO-BREAK SPACE, etc.).
+fn sanitize_source(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                *c,
+                '\u{200B}' // ZERO WIDTH SPACE
+                | '\u{200C}' // ZERO WIDTH NON-JOINER
+                | '\u{200D}' // ZERO WIDTH JOINER
+                | '\u{200E}' // LEFT-TO-RIGHT MARK
+                | '\u{200F}' // RIGHT-TO-LEFT MARK
+                | '\u{202A}' // LEFT-TO-RIGHT EMBEDDING
+                | '\u{202B}' // RIGHT-TO-LEFT EMBEDDING
+                | '\u{202C}' // POP DIRECTIONAL FORMATTING
+                | '\u{202D}' // LEFT-TO-RIGHT OVERRIDE
+                | '\u{202E}' // RIGHT-TO-LEFT OVERRIDE
+                | '\u{2060}' // WORD JOINER
+                | '\u{FEFF}' // BOM / ZERO WIDTH NO-BREAK SPACE
+                | '\u{00A0}' // NO-BREAK SPACE
+            )
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn install_skill(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<SkillCatalogItem, String> {
+    let source_trimmed = sanitize_source(&source);
+
+    // ── Detect zip: local path ending in .zip, or URL ending in .zip ──────────
+    let is_zip_url = (source_trimmed.starts_with("http://")
+        || source_trimmed.starts_with("https://"))
+        && source_trimmed.to_lowercase().ends_with(".zip");
+    let is_zip_local = !source_trimmed.starts_with("http://")
+        && !source_trimmed.starts_with("https://")
+        && source_trimmed.to_lowercase().ends_with(".zip");
+
+    if is_zip_url || is_zip_local {
+        return install_skill_from_zip(&state, &source_trimmed).await;
+    }
+
+    let content = if source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://")
+    {
+        // Basic URL validation — reject internal/private addresses
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
+        for pat in blocked {
+            if source_trimmed.contains(pat) {
+                return Err(format!(
+                    "Blocked URL: '{}' points to a private/local address",
+                    source_trimmed
+                ));
+            }
+        }
+        info!("Downloading skill from URL: {}", source_trimmed);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get(&source_trimmed)
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "HTTP {} when downloading: {}",
+                resp.status(),
+                source_trimmed
+            ));
+        }
+        resp.text()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))?
+    } else {
+        // Local file path
+        tokio::fs::read_to_string(&source_trimmed)
+            .await
+            .map_err(|e| format!("Failed to read local file '{}': {}", source_trimmed, e))?
+    };
+
+    install_skill_from_content(&state, content).await
+}
+
+/// Install a skill from a .zip archive (local path or URL).
+///
+/// The zip must contain a `SKILL.md` at the root or inside a single top-level
+/// directory. All other files in the same directory as `SKILL.md` are extracted
+/// alongside it (e.g. `reference.md`, `examples.md`, helper scripts).
+async fn install_skill_from_zip(
+    state: &State<'_, AppState>,
+    source: &str,
+) -> Result<SkillCatalogItem, String> {
+    // ── 1. Fetch zip bytes ────────────────────────────────────────────────────
+    let zip_bytes: Vec<u8> = if source.starts_with("http://") || source.starts_with("https://") {
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
+        for pat in blocked {
+            if source.contains(pat) {
+                return Err(format!(
+                    "Blocked URL: '{}' points to a private/local address",
+                    source
+                ));
+            }
+        }
+        info!("Downloading skill zip from URL: {}", source);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get(source)
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "HTTP {} when downloading zip: {}",
+                resp.status(),
+                source
+            ));
+        }
+        resp.bytes()
+            .await
+            .map_err(|e| format!("Failed to read zip bytes: {}", e))?
+            .to_vec()
+    } else {
+        tokio::fs::read(source)
+            .await
+            .map_err(|e| format!("Failed to read zip file '{}': {}", source, e))?
+    };
+
+    // ── 2. Parse zip and locate SKILL.md ─────────────────────────────────────
+    let cursor = std::io::Cursor::new(&zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open zip archive: {}", e))?;
+
+    // Find SKILL.md — accept root-level or one directory deep.
+    // Normalise path separators to '/' and do case-insensitive filename match
+    // so zips created on Windows (backslash paths) also work.
+    let skill_md_path: Option<String> = {
+        let mut found = None;
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).map_err(|e| e.to_string())?;
+            // Normalise backslashes → forward slashes
+            let name = file.name().replace('\\', "/");
+            let parts: Vec<&str> = name.trim_end_matches('/').split('/').collect();
+            // Accept: "SKILL.md" or "skill-name/SKILL.md" (case-insensitive)
+            if (parts.len() == 1 || parts.len() == 2)
+                && parts.last().map(|s| s.to_uppercase()) == Some("SKILL.MD".to_string())
+            {
+                found = Some(name);
+                break;
+            }
+        }
+        found
+    };
+
+    let skill_md_path =
+        skill_md_path.ok_or_else(|| "Zip archive does not contain a SKILL.md file".to_string())?;
+
+    // Determine the prefix directory (empty string if SKILL.md is at root)
+    let prefix: String = {
+        let parts: Vec<&str> = skill_md_path.split('/').collect();
+        if parts.len() == 2 {
+            format!("{}/", parts[0])
+        } else {
+            String::new()
+        }
+    };
+
+    // ── 3. Read SKILL.md content (find by index to handle backslash paths) ──────
+    let skill_md_content = {
+        // Re-scan to find the index of the SKILL.md entry (by_name may fail on
+        // backslash paths stored in the zip central directory on Windows)
+        let mut skill_idx: Option<usize> = None;
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let normalised = file.name().replace('\\', "/");
+            if normalised == skill_md_path {
+                skill_idx = Some(i);
+                break;
+            }
+        }
+        let idx = skill_idx.ok_or_else(|| "Could not re-locate SKILL.md in zip".to_string())?;
+        let mut file = archive
+            .by_index(idx)
+            .map_err(|e| format!("Failed to read SKILL.md from zip: {}", e))?;
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut file, &mut content)
+            .map_err(|e| format!("Failed to decode SKILL.md: {}", e))?;
+        // Strip BOM if present
+        content.trim_start_matches('\u{FEFF}').to_string()
+    };
+
+    // ── 4. Parse, validate, register in DB ───────────────────────────────────
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = app_dir.join("skills");
+
+    let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    let skill = loader
+        .parse_skill_from_content(&skill_md_content)
+        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
+
+    if skill.name.is_empty() || skill.name == "unnamed" {
+        return Err("SKILL.md must declare a 'name' field in frontmatter".into());
+    }
+
+    let compat = check_skill_compatibility(&skill).await;
+    if !compat.compatible {
+        return Err(format!(
+            "技能 '{}' 与当前系统不兼容：\n{}",
+            skill.name,
+            compat.issues.join("\n")
+        ));
+    }
+
+    let safe_name: String = skill
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase();
+
+    {
+        let db = state.db.lock().await;
+        db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦")
+            .map_err(|e| format!("Failed to register skill in database: {}", e))?;
+    }
+
+    let skill_dir = skills_dir.join(&safe_name);
+    if let Err(e) = tokio::fs::create_dir_all(&skill_dir).await {
+        let db = state.db.lock().await;
+        let _ = db.delete_skill(&safe_name);
+        return Err(format!("Failed to create skill directory: {}", e));
+    }
+
+    // ── 5. Extract all files that share the same prefix ──────────────────────
+    // Re-open archive (cursor consumed above)
+    let cursor2 = std::io::Cursor::new(&zip_bytes);
+    let mut archive2 = zip::ZipArchive::new(cursor2)
+        .map_err(|e| format!("Failed to re-open zip archive: {}", e))?;
+
+    let mut extracted_count = 0usize;
+    for i in 0..archive2.len() {
+        let mut file = archive2.by_index(i).map_err(|e| e.to_string())?;
+        // Normalise separators for consistent prefix matching
+        let raw_name = file.name().replace('\\', "/");
+
+        // Skip directories
+        if raw_name.ends_with('/') {
+            continue;
+        }
+
+        // Only extract files under the same prefix as SKILL.md
+        if !raw_name.starts_with(&prefix) {
+            continue;
+        }
+
+        // Relative path inside the skill directory
+        let rel = &raw_name[prefix.len()..];
+
+        // Security: reject path traversal
+        if rel.contains("..") || rel.starts_with('/') {
+            warn!("Zip install: skipping suspicious path '{}'", raw_name);
+            continue;
+        }
+
+        let dest = skill_dir.join(rel);
+
+        // Create parent directories if needed
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!("Zip install: failed to create dir {:?}: {}", parent, e);
+                continue;
+            }
+        }
+
+        let mut content_bytes = Vec::new();
+        if let Err(e) = std::io::Read::read_to_end(&mut file, &mut content_bytes) {
+            warn!("Zip install: failed to read '{}': {}", raw_name, e);
+            continue;
+        }
+
+        if let Err(e) = std::fs::write(&dest, &content_bytes) {
+            warn!("Zip install: failed to write {:?}: {}", dest, e);
+            continue;
+        }
+
+        extracted_count += 1;
+    }
+
+    info!(
+        "Installed skill '{}' from zip ({} file(s)) to {:?}",
+        skill.name, extracted_count, skill_dir
+    );
+
+    notify_skills_changed(state);
+    Ok(SkillCatalogItem {
+        name: skill.name,
+        description: skill.description,
+        version: skill.version,
+        source: "installed".to_string(),
+        tools: skill.tools,
+        dependencies: skill.dependencies,
+        permissions: skill.permissions,
+        platform: skill.platform,
+    })
+}
+
+/// Remove an installed skill by name. Only skills whose source is "installed" or "workspace"
+/// can be removed this way; built-in skills are protected.
+#[tauri::command]
+pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> Result<(), String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_dir = app_dir.join("skills");
+
+    let safe_name: String = skill_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase();
+
+    // Remove from DB first — if the DB delete fails, abort before touching the filesystem
+    {
+        let db = state.db.lock().await;
+        db.delete_skill(&safe_name)
+            .map_err(|e| format!("Failed to remove skill from database: {}", e))?;
+    }
+
+    // Remove matching skill folders from disk by both directory id and parsed skill name.
+    if skills_dir.exists() {
+        let canonical_skills = skills_dir.canonicalize().map_err(|e| e.to_string())?;
+        let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+        let _ = loader.load_all();
+
+        let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> =
+            std::collections::BTreeSet::new();
+        candidate_dirs.insert(skills_dir.join(&safe_name));
+        for skill in loader.list_skills() {
+            let parsed_safe_name = skill
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+                .to_lowercase();
+            if skill.name.eq_ignore_ascii_case(&skill_name) || parsed_safe_name == safe_name {
+                if let Some(dir) = skill.source_path.parent() {
+                    candidate_dirs.insert(dir.to_path_buf());
+                }
+            }
+        }
+
+        for skill_dir in candidate_dirs {
+            if !skill_dir.exists() {
+                continue;
+            }
+            let canonical_dir = skill_dir.canonicalize().map_err(|e| e.to_string())?;
+            if !canonical_dir.starts_with(&canonical_skills) {
+                return Err("Path traversal attempt blocked".into());
+            }
+            tokio::fs::remove_dir_all(&skill_dir).await.map_err(|e| {
+                format!(
+                    "Skill removed from database but failed to delete files: {}",
+                    e
+                )
+            })?;
+        }
+    }
+
+    info!("Uninstalled skill '{}'", skill_name);
+    notify_skills_changed(&state);
+    Ok(())
+}
+
+// ─── ClawHub Skill Registry ───────────────────────────────────────────────────
+
+/// ClawHub public API base URL.
+const CLAWHUB_API: &str = "https://clawhub.ai";
+const HARMONY_MARKET_API: &str = "http://61.150.31.150:8787";
+
+/// A skill entry from the ClawHub registry.
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct ClawHubSkill {
+    /// Unique skill slug on ClawHub (e.g. "my-skill").
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub author: String,
+    pub downloads: u64,
+    pub stars: u64,
+    pub tags: Vec<String>,
+    /// URL to fetch SKILL.md via `/api/v1/skills/<slug>/file?path=SKILL.md`
+    pub skill_url: Option<String>,
+    /// URL to download the zip bundle via `/api/v1/download?slug=<slug>`
+    pub zip_url: Option<String>,
+    /// OS/platform requirements from ClawHub metadata (e.g. ["windows"], ["linux"])
+    pub platform: Vec<String>,
+    /// Dependency requirements extracted from SKILL.md frontmatter (if pre-fetched)
+    pub dependencies: Vec<String>,
+    /// Whether this skill is compatible with the current system (None = not yet checked)
+    pub compatible: Option<bool>,
+    /// Compatibility issues (populated when compatible = false)
+    pub compat_issues: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ClawHubSearchResult {
+    pub items: Vec<ClawHubSkill>,
+    pub total: usize,
+    pub query: String,
+}
+
+fn harmony_market_base_url() -> String {
+    std::env::var("HARMONY_MARKET_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| HARMONY_MARKET_API.to_string())
+}
+
+fn harmony_auth(mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let (Ok(user), Ok(pass)) = (
+        std::env::var("HARMONY_MARKET_BASIC_USER"),
+        std::env::var("HARMONY_MARKET_BASIC_PASSWORD"),
+    ) {
+        if !user.trim().is_empty() {
+            req = req.basic_auth(user, Some(pass));
+        }
+    }
+    req
+}
+
+fn harmony_abs_url(base: &str, path_or_url: &str) -> String {
+    if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
+        path_or_url.to_string()
+    } else if path_or_url.starts_with('/') {
+        format!("{}{}", base.trim_end_matches('/'), path_or_url)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), path_or_url)
+    }
+}
+
+/// Search ClawHub for skills.
+///
+/// Uses vector search (`/api/v1/search?q=`) when a query is provided,
+/// or the list endpoint (`/api/v1/skills?sort=stars`) when the query is empty.
+#[tauri::command]
+pub async fn clawhub_search(
+    query: String,
+    limit: Option<u32>,
+) -> Result<ClawHubSearchResult, String> {
+    let limit = limit.unwrap_or(20).min(50);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let q = query.trim().to_string();
+
+    // Choose endpoint: vector search when query is non-empty, list by stars otherwise
+    let (url, use_search_endpoint) = if q.is_empty() {
+        (
+            format!("{}/api/v1/skills?sort=stars&limit={}", CLAWHUB_API, limit),
+            false,
+        )
+    } else {
+        (
+            format!(
+                "{}/api/v1/search?q={}&limit={}",
+                CLAWHUB_API,
+                urlencoding::encode(&q),
+                limit
+            ),
+            true,
+        )
+    };
+    info!("ClawHub search: {}", url);
+
+    let resp = clawhub_get_with_retry(&client, &url, 3)
+        .await
+        .map_err(|e| {
+            format!(
+                "无法连接到 ClawHub（{}）：{}。请检查网络连接。",
+                CLAWHUB_API, e
+            )
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let hint = if status.as_u16() == 429 {
+            "（请求过于频繁，请稍后再试）".to_string()
+        } else {
+            String::new()
+        };
+        let body = resp.text().await.unwrap_or_default();
+        let body_preview = if body.chars().count() > 300 {
+            body.chars().take(300).collect::<String>()
+        } else {
+            body.clone()
+        };
+        return Err(format!(
+            "ClawHub 返回错误 HTTP {}{}：{}",
+            status, hint, body_preview
+        ));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("ClawHub 响应格式异常：{}", e))?;
+
+    // Parse items from either endpoint format:
+    // - /api/v1/search  → { results: [{ slug, displayName, summary, version, score }] }
+    // - /api/v1/skills  → { items:   [{ slug, displayName, summary, tags, stats, latestVersion, metadata }] }
+    let items: Vec<ClawHubSkill> = if use_search_endpoint {
+        let results = body["results"].as_array().cloned().unwrap_or_default();
+        results
+            .iter()
+            .filter_map(|r| {
+                let slug = r["slug"].as_str().unwrap_or("").to_string();
+                if slug.is_empty() {
+                    return None;
+                }
+                let name = r["displayName"].as_str().unwrap_or(&slug).to_string();
+                let description = r["summary"].as_str().unwrap_or("").to_string();
+                let version = r["version"].as_str().unwrap_or("").to_string();
+                let skill_url = Some(format!(
+                    "{}/api/v1/skills/{}/file?path=SKILL.md",
+                    CLAWHUB_API, slug
+                ));
+                let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
+                Some(ClawHubSkill {
+                    slug,
+                    name,
+                    description,
+                    version,
+                    author: String::new(),
+                    downloads: 0,
+                    stars: 0,
+                    tags: vec![],
+                    skill_url,
+                    zip_url,
+                    platform: vec![],
+                    dependencies: vec![],
+                    compatible: None,
+                    compat_issues: vec![],
+                })
+            })
+            .collect()
+    } else {
+        let raw_items = body["items"].as_array().cloned().unwrap_or_default();
+        raw_items
+            .iter()
+            .filter_map(|item| {
+                let slug = item["slug"].as_str().unwrap_or("").to_string();
+                if slug.is_empty() {
+                    return None;
+                }
+                let name = item["displayName"].as_str().unwrap_or(&slug).to_string();
+                let description = item["summary"].as_str().unwrap_or("").to_string();
+                let version = item["latestVersion"]["version"]
+                    .as_str()
+                    .unwrap_or("latest")
+                    .to_string();
+
+                // tags is an object { tag_name: versionId } in the list endpoint
+                let tags: Vec<String> = item["tags"]
+                    .as_object()
+                    .map(|obj| obj.keys().cloned().collect())
+                    .unwrap_or_default();
+
+                let stats = &item["stats"];
+                let downloads = stats["installsAllTime"]
+                    .as_u64()
+                    .or_else(|| stats["downloads"].as_u64())
+                    .unwrap_or(0);
+                let stars = stats["stars"].as_u64().unwrap_or(0);
+
+                // OS platform from metadata (clawdis.os field)
+                let platform: Vec<String> = item["metadata"]["os"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let skill_url = Some(format!(
+                    "{}/api/v1/skills/{}/file?path=SKILL.md",
+                    CLAWHUB_API, slug
+                ));
+                let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
+
+                Some(ClawHubSkill {
+                    slug,
+                    name,
+                    description,
+                    version,
+                    author: String::new(),
+                    downloads,
+                    stars,
+                    tags,
+                    skill_url,
+                    zip_url,
+                    platform,
+                    dependencies: vec![],
+                    compatible: None,
+                    compat_issues: vec![],
+                })
+            })
+            .collect()
+    };
+
+    let total = items.len();
+    Ok(ClawHubSearchResult {
+        items,
+        total,
+        query,
+    })
+}
+
+#[tauri::command]
+pub async fn harmony_market_search(
+    query: String,
+    limit: Option<u32>,
+) -> Result<ClawHubSearchResult, String> {
+    let limit = limit.unwrap_or(50).min(100) as usize;
+    let base = harmony_market_base_url();
+    let url = format!("{}/api/v1/skills", base);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent("Harmony-WorkBuddy/0.7")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    info!("Harmony skill market search: {}", url);
+    let resp = harmony_auth(client.get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("Harmony market request failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Harmony market returned HTTP {}: {}", status, body));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Harmony market response is not valid JSON: {}", e))?;
+    let q = query.trim().to_lowercase();
+    let raw_items = body["skills"].as_array().cloned().unwrap_or_default();
+    let mut items = Vec::new();
+    for item in raw_items {
+        let slug = item["id"].as_str().unwrap_or("").to_string();
+        if slug.is_empty() {
+            continue;
+        }
+        let name = item["name"].as_str().unwrap_or(&slug).to_string();
+        let description = item["description"].as_str().unwrap_or("").to_string();
+        let category = item["category"].as_str().unwrap_or("").to_string();
+        let author = item["author"].as_str().unwrap_or("Harmony").to_string();
+        let haystack = format!("{} {} {} {}", slug, name, description, category).to_lowercase();
+        if !q.is_empty() && !haystack.contains(&q) {
+            continue;
+        }
+        let version = item["version"].as_str().unwrap_or("latest").to_string();
+        let zip_url = item["download_url"]
+            .as_str()
+            .map(|u| harmony_abs_url(&base, u));
+        let tags = if category.is_empty() {
+            vec!["harmony".to_string()]
+        } else {
+            vec!["harmony".to_string(), category]
+        };
+        items.push(ClawHubSkill {
+            slug,
+            name,
+            description,
+            version,
+            author,
+            downloads: 0,
+            stars: 0,
+            tags,
+            skill_url: None,
+            zip_url,
+            platform: vec![],
+            dependencies: vec![],
+            compatible: None,
+            compat_issues: vec![],
+        });
+        if items.len() >= limit {
+            break;
+        }
+    }
+    let total = items.len();
+    Ok(ClawHubSearchResult {
+        items,
+        total,
+        query,
+    })
+}
+
+/// Pre-check whether a skill (from URL or local path) is compatible with the current system.
+/// Returns compatibility info without actually installing the skill.
+#[tauri::command]
+pub async fn check_skill_compat(
+    source: String,
+) -> Result<crate::skills::loader::CompatibilityCheck, String> {
+    let content = if source.starts_with("http://") || source.starts_with("https://") {
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
+        for pat in blocked {
+            if source.contains(pat) {
+                return Err(format!("Blocked URL: '{}'", source));
+            }
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get(&source)
+            .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {} when fetching: {}", resp.status(), source));
+        }
+        resp.text().await.map_err(|e| e.to_string())?
+    } else {
+        tokio::fs::read_to_string(&source)
+            .await
+            .map_err(|e| format!("Failed to read '{}': {}", source, e))?
+    };
+
+    let loader = crate::skills::loader::SkillLoader::new(std::path::Path::new("."));
+    let skill = loader
+        .parse_skill_from_content(&content)
+        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
+
+    Ok(check_skill_compatibility(&skill).await)
+}
+
+/// Install a skill from ClawHub by slug.
+/// Fetches SKILL.md via `/api/v1/skills/<slug>/file?path=SKILL.md`,
+/// falls back to the zip download if the file endpoint fails.
+#[tauri::command]
+pub async fn clawhub_install(
+    state: State<'_, AppState>,
+    slug: String,
+    version: Option<String>,
+) -> Result<SkillCatalogItem, String> {
+    // Validate slug — only allow alphanumeric, hyphens, underscores, dots
+    if !slug
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(format!("无效的技能 slug：'{}'", slug));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let normalized_version = version
+        .as_deref()
+        .map(str::trim)
+        .filter(|ver| !ver.is_empty() && *ver != "latest" && *ver != "null");
+
+    // Build the file URL, optionally pinning a concrete version
+    let file_url = if let Some(ver) = normalized_version {
+        format!(
+            "{}/api/v1/skills/{}/file?path=SKILL.md&version={}",
+            CLAWHUB_API, slug, ver
+        )
+    } else {
+        format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug)
+    };
+    info!(
+        "ClawHub install: fetching SKILL.md for '{}' from {}",
+        slug, file_url
+    );
+
+    let resp = clawhub_get_with_retry(&client, &file_url, 3)
+        .await
+        .map_err(|e| format!("下载失败：{}", e))?;
+
+    let content = if resp.status().is_success() {
+        resp.text()
+            .await
+            .map_err(|e| format!("读取 SKILL.md 失败：{}", e))?
+    } else {
+        let file_status = resp.status();
+        // Fallback: download the zip bundle and extract SKILL.md
+        let zip_url = if let Some(ver) = normalized_version {
+            format!(
+                "{}/api/v1/download?slug={}&version={}",
+                CLAWHUB_API, slug, ver
+            )
+        } else {
+            format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug)
+        };
+        info!(
+            "ClawHub: file endpoint returned {}, trying zip: {}",
+            file_status, zip_url
+        );
+        let zip_resp = clawhub_get_with_retry(&client, &zip_url, 3)
+            .await
+            .map_err(|e| format!("Zip 下载失败：{}", e))?;
+        if !zip_resp.status().is_success() {
+            let hint = if zip_resp.status().as_u16() == 429 {
+                "请求过于频繁，请稍后再试".to_string()
+            } else {
+                format!("HTTP {}", zip_resp.status())
+            };
+            return Err(format!("ClawHub：技能 '{}' 安装失败（{}）", slug, hint));
+        }
+        let zip_bytes = zip_resp.bytes().await.map_err(|e| e.to_string())?;
+        extract_skill_md_from_zip(&zip_bytes)
+            .map_err(|e| format!("从 zip 中提取 SKILL.md 失败：{}", e))?
+    };
+
+    let source_url = Some(format!("{}/skills/{}", CLAWHUB_API, slug));
+    install_skill_from_content_sourced(&state, content, "clawhub", source_url).await
+}
+
+#[tauri::command]
+pub async fn harmony_market_install(
+    state: State<'_, AppState>,
+    slug: String,
+) -> Result<SkillCatalogItem, String> {
+    if !slug
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(format!("Invalid Harmony skill id: '{}'", slug));
+    }
+
+    let base = harmony_market_base_url();
+    let url = format!("{}/api/v1/skills/{}/download", base, slug);
+    info!("Harmony market install: {}", url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .user_agent("Harmony-WorkBuddy/0.7")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = harmony_auth(client.get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("Harmony skill download failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Harmony skill download returned HTTP {}: {}",
+            status, body
+        ));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read Harmony skill package: {}", e))?;
+    let tmp_path = std::env::temp_dir().join(format!(
+        "harmony-skill-{}-{}.skill.zip",
+        slug.replace(['/', '\\'], "-"),
+        uuid::Uuid::new_v4()
+    ));
+    tokio::fs::write(&tmp_path, &bytes)
+        .await
+        .map_err(|e| format!("Failed to write temporary Harmony skill package: {}", e))?;
+    let tmp_string = tmp_path.to_string_lossy().to_string();
+    let result = install_skill_from_zip(&state, &tmp_string).await;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    result
+}
+
+/// Extract SKILL.md text from a zip archive bytes.
+fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor)?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_lowercase();
+        if name == "skill.md" || name.ends_with("/skill.md") {
+            let mut content = String::new();
+            file.read_to_string(&mut content)?;
+            return Ok(content);
+        }
+    }
+    anyhow::bail!("SKILL.md not found in zip archive")
+}
+
+/// Call Codex to generate bilingual (Chinese + English) trigger keywords for a skill,
+/// then merge them into the SKILL.md frontmatter and write the file back.
+///
+/// This runs as a background task after installation — failures are non-fatal.
+async fn enrich_triggers_with_codex(
+    state: &AppState,
+    skill: &crate::skills::loader::SkillDefinition,
+    skill_file: &std::path::Path,
+) -> anyhow::Result<()> {
+    use tokio::time::{timeout, Duration};
+
+    let existing_triggers = if skill.triggers.is_empty() {
+        String::new()
+    } else {
+        format!("\nExisting triggers: {}", skill.triggers.join(", "))
+    };
+
+    let prompt = format!(
+        "You are a multilingual keyword expert. Given this skill:\n\
+         Name: {name}\n\
+         Description: {desc}{existing}\n\n\
+         Generate 10-20 trigger keywords in both Chinese and English that a user might say \
+         when they need this skill. Include synonyms, abbreviations, and common phrases. \
+         Return ONLY a JSON array of strings, no explanation, no markdown fences.\n\
+         Example: [\"pptx\",\"PPT\",\"幻灯片\",\"演示文稿\",\"presentation\",\"slideshow\"]",
+        name = skill.name,
+        desc = skill.description,
+        existing = existing_triggers,
+    );
+
+    let response = timeout(
+        Duration::from_secs(20),
+        crate::codex_runtime::background::run_codex_transient(
+            state,
+            &prompt,
+            Some("Return only the requested JSON array. Do not call tools."),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Codex trigger enrichment timed out"))?
+    .map_err(|error| anyhow::anyhow!("Codex error: {}", error))?;
+
+    let text = response.final_message;
+
+    // Extract JSON array from response (may be wrapped in prose)
+    let json_start = text
+        .find('[')
+        .ok_or_else(|| anyhow::anyhow!("No JSON array in response"))?;
+    let json_end = text
+        .rfind(']')
+        .ok_or_else(|| anyhow::anyhow!("No closing ] in response"))?;
+    let json_str = &text[json_start..=json_end];
+
+    let new_triggers: Vec<String> = serde_json::from_str(json_str)
+        .map_err(|e| anyhow::anyhow!("Failed to parse trigger JSON: {}", e))?;
+
+    if new_triggers.is_empty() {
+        return Ok(());
+    }
+
+    // Merge with existing triggers, deduplicating case-insensitively
+    let mut merged: Vec<String> = skill.triggers.clone();
+    let existing_lower: std::collections::HashSet<String> =
+        merged.iter().map(|t| t.to_lowercase()).collect();
+    for t in new_triggers {
+        let t = t.trim().to_string();
+        if !t.is_empty() && !existing_lower.contains(&t.to_lowercase()) {
+            merged.push(t);
+        }
+    }
+
+    // Read current SKILL.md content
+    let current = tokio::fs::read_to_string(skill_file)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read SKILL.md: {}", e))?;
+
+    // Build the new triggers YAML block
+    let triggers_yaml = merged
+        .iter()
+        .map(|t| format!("  - \"{}\"", t.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let triggers_block = format!("triggers:\n{}", triggers_yaml);
+
+    // Replace or insert triggers block in frontmatter
+    let updated = if current.contains("triggers:") {
+        // Replace existing triggers block (handles multi-line list)
+        let re = regex::Regex::new(r"(?m)^triggers:(\n  - [^\n]*)*")
+            .map_err(|e| anyhow::anyhow!("Regex error: {}", e))?;
+        re.replace(&current, triggers_block.as_str()).into_owned()
+    } else {
+        // Insert before closing --- of frontmatter
+        if let Some(pos) = current.find("\n---\n") {
+            let (front, rest) = current.split_at(pos);
+            format!("{}\n{}{}", front, triggers_block, rest)
+        } else {
+            // No frontmatter end found, append to end of frontmatter section
+            current.replacen("---", &format!("---\n{}", triggers_block), 2)
+        }
+    };
+
+    tokio::fs::write(skill_file, updated)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to write enriched SKILL.md: {}", e))?;
+
+    info!(
+        "Enriched triggers for skill '{}': {} keywords",
+        skill.name,
+        merged.len()
+    );
+    Ok(())
+}
