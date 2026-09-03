@@ -1,0 +1,102 @@
+/* ============================================================
+   WorkBuddy — Design-token entry point
+   Theme files provide the authoritative semantic token values.
+   ============================================================ */
+
+@import "./themes/violet.css";
+@import "./themes/gold.css";
+@import "./themes/light.css";
+
+/* Fallback values. The active theme supplies the same semantic tokens. */
+:root {
+  --wb-bg-canvas: #f7f7f8;
+  --wb-bg-sidebar: #f1f1f3;
+  --wb-bg-surface: #ffffff;
+  --wb-bg-subtle: #f7f7f8;
+  --wb-bg-hover: #ececef;
+  --wb-text-primary: #242426;
+  --wb-text-secondary: #727278;
+  --wb-text-tertiary: #a5a5ac;
+  --wb-border: #e4e4e8;
+  --wb-interactive: #1d1d20;
+  --wb-interactive-hover: #36363a;
+  --wb-accent: #4285f4;
+  --wb-accent-soft: #e8f0fe;
+  --wb-success: #16836d;
+  --wb-warning: #ad721a;
+  --wb-danger: #c54747;
+
+  --bg-primary: var(--wb-bg-canvas);
+  --bg-secondary: var(--wb-bg-surface);
+  --bg-tertiary: var(--wb-bg-subtle);
+  --bg-hover: var(--wb-bg-hover);
+  --border: var(--wb-border);
+  --border-color: var(--border);
+  --accent: var(--wb-accent);
+  --accent-hover: #2469d8;
+  --accent-dim: var(--wb-accent-soft);
+  --accent-muted: var(--wb-accent-soft);
+  --accent-glow: 0 6px 18px rgba(66, 133, 244, 0.18);
+  --accent-color: var(--accent);
+  --text-primary: var(--wb-text-primary);
+  --text-secondary: var(--wb-text-secondary);
+  --text-muted: var(--wb-text-tertiary);
+  --success: var(--wb-success);
+  --warning: var(--wb-warning);
+  --error: var(--wb-danger);
+  --context-usage-caution: #5d8fe8;
+  --context-usage-warn: #b7791f;
+  --context-usage-hot: var(--wb-danger);
+  --msg-user-bg: #f1f1fa;
+  --msg-user-border: #dfdfee;
+  --msg-ai-bg: var(--wb-bg-surface);
+  --msg-ai-border: var(--wb-border);
+  --sidebar-bg: var(--wb-bg-sidebar);
+  --sidebar-border: var(--wb-border);
+  --topbar-bg: var(--wb-bg-surface);
+  --panel-sidebar-bg: var(--wb-bg-sidebar);
+  --chrome-header-height: 52px;
+  --control-height: 34px;
+  --control-font-size: 12px;
+  --scrollbar-thumb: #c7c7cf;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 18px 48px rgba(24, 24, 27, 0.10);
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  --font-scale: 1;
+  --motion-fast: 150ms;
+  --motion-standard: 220ms;
+  --motion-slow: 320ms;
+  --motion-ease: cubic-bezier(.2, .8, .2, 1);
+}
+
+/* Color transitions are short and do not animate geometry. */
+*, *::before, *::after {
+  transition:
+    background-color var(--motion-standard) ease,
+    border-color var(--motion-standard) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-standard) ease;
+}
+
+/* 排除不需要过渡的元素（避免动画干扰） */
+.loading-spinner,
+input,
+textarea,
+select {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.15s ease,
+    color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}
