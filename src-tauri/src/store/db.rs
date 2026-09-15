@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -138,6 +139,10 @@ pub struct ChatMessage {
     /// A "turn" starts with each user message.
     #[serde(default)]
     pub turn_index: Option<i64>,
+    /// Structured, non-visible context attached to the user message, such as
+    /// artifact annotations selected for a follow-up turn.
+    #[serde(default)]
+    pub context_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +156,17 @@ pub struct SessionArtifact {
     pub source_tool: Option<String>,
     pub tool_use_id: Option<String>,
     pub metadata_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnExecutionEventRecord {
+    pub id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub sequence: i64,
+    pub event_type: String,
+    pub payload: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -376,6 +392,20 @@ fn map_session_row(r: &Row<'_>) -> rusqlite::Result<Session> {
     })
 }
 
+fn map_chat_message_row(r: &Row<'_>) -> rusqlite::Result<ChatMessage> {
+    Ok(ChatMessage {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        role: r.get(2)?,
+        content: r.get(3)?,
+        created_at: parse_datetime(r.get::<_, String>(4)?),
+        tool_calls_json: r.get(5)?,
+        tool_results_json: r.get(6)?,
+        turn_index: r.get(7)?,
+        context_json: r.get(8)?,
+    })
+}
+
 fn map_im_session_binding_row(r: &Row<'_>) -> rusqlite::Result<ImSessionBinding> {
     Ok(ImSessionBinding {
         binding_key: r.get(0)?,
@@ -440,10 +470,26 @@ impl Database {
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                context_json TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS turn_execution_events (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(turn_id, sequence),
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_turn_execution_session
+                ON turn_execution_events(session_id, created_at, sequence);
 
             CREATE TABLE IF NOT EXISTS im_session_bindings (
                 binding_key TEXT PRIMARY KEY,
@@ -646,6 +692,9 @@ impl Database {
         let _ = self
             .conn
             .execute("ALTER TABLE messages ADD COLUMN turn_index INTEGER", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN context_json TEXT", []);
 
         // Agent checkpoints for crash recovery
         self.conn.execute_batch("
@@ -1649,7 +1698,25 @@ impl Database {
         role: &str,
         content: &str,
     ) -> Result<ChatMessage> {
-        self.append_message_full(session_id, role, content, None, None, None)
+        self.append_message_full_with_context(session_id, role, content, None, None, None, None)
+    }
+
+    pub fn append_message_with_context(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        context_json: Option<&str>,
+    ) -> Result<ChatMessage> {
+        self.append_message_full_with_context(
+            session_id,
+            role,
+            content,
+            None,
+            None,
+            None,
+            context_json,
+        )
     }
 
     /// Persist a message with optional tool call data and turn index.
@@ -1665,13 +1732,35 @@ impl Database {
         tool_results_json: Option<&str>,
         turn_index: Option<i64>,
     ) -> Result<ChatMessage> {
+        self.append_message_full_with_context(
+            session_id,
+            role,
+            content,
+            tool_calls_json,
+            tool_results_json,
+            turn_index,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_message_full_with_context(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        tool_calls_json: Option<&str>,
+        tool_results_json: Option<&str>,
+        turn_index: Option<i64>,
+        context_json: Option<&str>,
+    ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO messages (id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, session_id, role, content, now_str, tool_calls_json, tool_results_json, turn_index],
+            "INSERT INTO messages (id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, session_id, role, content, now_str, tool_calls_json, tool_results_json, turn_index, context_json],
         )?;
         // Update session message count and updated_at
         self.conn.execute(
@@ -1687,6 +1776,7 @@ impl Database {
             tool_calls_json: tool_calls_json.map(|s| s.to_string()),
             tool_results_json: tool_results_json.map(|s| s.to_string()),
             turn_index,
+            context_json: context_json.map(str::to_string),
         })
     }
 
@@ -1731,24 +1821,10 @@ impl Database {
         // Sort by rowid (insert order) rather than created_at to be robust against
         // system clock drift. See `get_messages_latest` for full rationale.
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
              FROM messages WHERE session_id = ?1 ORDER BY rowid ASC LIMIT ?2 OFFSET ?3"
         )?;
-        let rows = stmt.query_map(params![session_id, limit, offset], |r| {
-            Ok(ChatMessage {
-                id: r.get(0)?,
-                session_id: r.get(1)?,
-                role: r.get(2)?,
-                content: r.get(3)?,
-                created_at: r
-                    .get::<_, String>(4)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                tool_calls_json: r.get(5)?,
-                tool_results_json: r.get(6)?,
-                turn_index: r.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![session_id, limit, offset], map_chat_message_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -1763,28 +1839,14 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
              FROM ( \
-               SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+               SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json, rowid \
                FROM messages WHERE session_id = ?1 \
                ORDER BY rowid DESC LIMIT ?2 OFFSET ?3 \
              ) ORDER BY rowid ASC",
         )?;
-        let rows = stmt.query_map(params![session_id, limit, offset], |r| {
-            Ok(ChatMessage {
-                id: r.get(0)?,
-                session_id: r.get(1)?,
-                role: r.get(2)?,
-                content: r.get(3)?,
-                created_at: r
-                    .get::<_, String>(4)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                tool_calls_json: r.get(5)?,
-                tool_results_json: r.get(6)?,
-                turn_index: r.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![session_id, limit, offset], map_chat_message_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -1801,27 +1863,93 @@ impl Database {
     /// to clock skew.
     pub fn get_messages_latest(&self, session_id: &str, limit: i64) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
              FROM messages WHERE session_id = ?1 ORDER BY rowid DESC LIMIT ?2"
         )?;
-        let rows = stmt.query_map(params![session_id, limit], |r| {
-            Ok(ChatMessage {
-                id: r.get(0)?,
-                session_id: r.get(1)?,
-                role: r.get(2)?,
-                content: r.get(3)?,
-                created_at: r
-                    .get::<_, String>(4)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                tool_calls_json: r.get(5)?,
-                tool_results_json: r.get(6)?,
-                turn_index: r.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![session_id, limit], map_chat_message_row)?;
         let mut msgs: Vec<ChatMessage> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         msgs.reverse(); // Return in chronological order (oldest first)
         Ok(msgs)
+    }
+
+    pub fn append_turn_execution_event(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        sequence: i64,
+        event_type: &str,
+        payload_json: &str,
+    ) -> Result<TurnExecutionEventRecord> {
+        const MAX_EVENTS_PER_TURN: i64 = 500;
+        const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
+        if sequence < 1 {
+            return Err(anyhow::anyhow!("execution event sequence must be positive"));
+        }
+        if payload_json.len() > MAX_PAYLOAD_BYTES {
+            return Err(anyhow::anyhow!("execution event payload exceeds 16 KiB"));
+        }
+        let payload = serde_json::from_str::<Value>(payload_json)
+            .context("execution event payload must be valid JSON")?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM turn_execution_events WHERE turn_id = ?1",
+            params![turn_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_EVENTS_PER_TURN {
+            return Err(anyhow::anyhow!("execution event limit reached for turn"));
+        }
+
+        let record = TurnExecutionEventRecord {
+            id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            turn_id: turn_id.to_string(),
+            sequence,
+            event_type: event_type.to_string(),
+            payload,
+            created_at: Utc::now(),
+        };
+        self.conn.execute(
+            "INSERT INTO turn_execution_events (id, session_id, turn_id, sequence, event_type, payload_json, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                record.id,
+                record.session_id,
+                record.turn_id,
+                record.sequence,
+                record.event_type,
+                payload_json,
+                record.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(record)
+    }
+
+    pub fn list_turn_execution_events(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> Result<Vec<TurnExecutionEventRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, turn_id, sequence, event_type, payload_json, created_at FROM ( \
+                SELECT rowid AS event_order, id, session_id, turn_id, sequence, event_type, payload_json, created_at \
+                FROM turn_execution_events WHERE session_id = ?1 \
+                ORDER BY rowid DESC LIMIT ?2 \
+             ) ORDER BY event_order ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit.clamp(1, 500)], |row| {
+            let payload_json = row.get::<_, String>(5)?;
+            Ok(TurnExecutionEventRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                turn_id: row.get(2)?,
+                sequence: row.get(3)?,
+                event_type: row.get(4)?,
+                payload: serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+                created_at: parse_datetime(row.get::<_, String>(6)?),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     // ------------------------------------------------------------------
@@ -4961,6 +5089,81 @@ mod tests {
     use super::{
         is_disallowed_koi_name_char, normalize_koi_name, Database, ImSessionBindingUpsert,
     };
+
+    #[test]
+    fn execution_events_and_message_context_roundtrip() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = db.create_session(Some("Execution history")).expect("session");
+        let context = r#"[{"targetType":"artifact","artifactId":"report-1","comment":"标题更简洁"}]"#;
+
+        let message = db
+            .append_message_with_context(&session.id, "user", "请按批注修改", Some(context))
+            .expect("message with context");
+        db.append_turn_execution_event(
+            &session.id,
+            "turn-1",
+            1,
+            "reasoning_summary",
+            r#"{"text":"正在核对素材"}"#,
+        )
+        .expect("execution event");
+        db.append_turn_execution_event(
+            &session.id,
+            "turn-1",
+            2,
+            "done",
+            r#"{"total_input_tokens":12,"total_output_tokens":4}"#,
+        )
+        .expect("terminal event");
+
+        assert_eq!(message.content, "请按批注修改");
+        assert_eq!(message.context_json.as_deref(), Some(context));
+        let messages = db.get_messages(&session.id, 20, 0).expect("messages");
+        assert_eq!(messages[0].context_json.as_deref(), Some(context));
+
+        let events = db
+            .list_turn_execution_events(&session.id, 20)
+            .expect("execution history");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].turn_id, "turn-1");
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].event_type, "reasoning_summary");
+        assert_eq!(events[1].sequence, 2);
+    }
+
+    #[test]
+    fn execution_event_storage_enforces_payload_and_turn_limits() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = db.create_session(Some("Execution limits")).expect("session");
+
+        assert!(db
+            .append_turn_execution_event(&session.id, "invalid-json", 1, "tool_start", "not json")
+            .is_err());
+        let oversized = serde_json::json!({"text":"x".repeat(17 * 1024)}).to_string();
+        assert!(db
+            .append_turn_execution_event(&session.id, "oversized", 1, "tool_end", &oversized)
+            .is_err());
+
+        for sequence in 1..=500 {
+            db.append_turn_execution_event(
+                &session.id,
+                "bounded-turn",
+                sequence,
+                "plan_update",
+                r#"{"items":[]}"#,
+            )
+            .expect("event within limit");
+        }
+        assert!(db
+            .append_turn_execution_event(
+                &session.id,
+                "bounded-turn",
+                501,
+                "done",
+                r#"{}"#,
+            )
+            .is_err());
+    }
 
     #[test]
     fn session_artifacts_roundtrip_by_session() {

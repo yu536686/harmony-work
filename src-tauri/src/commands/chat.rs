@@ -5,7 +5,9 @@ pub mod fish;
 pub mod gateway;
 pub mod scheduler;
 
-use crate::store::{db::ChatMessage, db::Session, db::SessionArtifact, AppState};
+use crate::store::{
+    db::ChatMessage, db::Session, db::SessionArtifact, db::TurnExecutionEventRecord, AppState,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{Emitter, Manager, State};
@@ -120,6 +122,17 @@ pub async fn get_messages(
         db.get_messages_older(&session_id, limit, offset)
             .map_err(|error| error.to_string())
     }
+}
+
+#[tauri::command]
+pub async fn get_turn_execution_history(
+    state: State<'_, AppState>,
+    session_id: String,
+    limit: Option<i64>,
+) -> Result<Vec<TurnExecutionEventRecord>, String> {
+    let db = state.db.lock().await;
+    db.list_turn_execution_events(&session_id, limit.unwrap_or(500).clamp(1, 500))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

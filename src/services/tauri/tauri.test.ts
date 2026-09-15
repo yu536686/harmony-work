@@ -62,6 +62,15 @@ describe("sessionsApi", () => {
     await sessionsApi.rename("abc", "New Title");
     expect(mockInvoke).toHaveBeenCalledWith("rename_session", { sessionId: "abc", title: "New Title" });
   });
+
+  it("getExecutionHistory() loads the bounded session event stream", async () => {
+    mockInvoke.mockResolvedValueOnce([]);
+    await chatApi.getExecutionHistory("abc");
+    expect(mockInvoke).toHaveBeenCalledWith("get_turn_execution_history", {
+      sessionId: "abc",
+      limit: 500,
+    });
+  });
 });
 
 // ─── chatApi ──────────────────────────────────────────────────────────────────

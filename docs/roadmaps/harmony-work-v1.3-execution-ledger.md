@@ -66,6 +66,16 @@
 
 ## 最近检查点
 
+### 2026-09-15：持久化结构化执行历史与批注上下文（任务 5）
+
+- 新增向后兼容迁移：`messages.context_json` 可空列与 `turn_execution_events` 表（含 `UNIQUE(turn_id, sequence)` 与会话查询索引），旧数据库原地升级，不迁移用户数据目录。
+- `codex_chat_send` 分离用户可见正文与模型上下文：可见消息只保存原始 `content`，经 schema、数量与长度校验的批注 JSON 存入 `context_json`；`<workbuddy_user_context>` 不再出现在用户可见正文中。
+- 只持久化结构事件：`turn_started`、`reasoning_summary`、`plan_update`、`tool_start`/`tool_end`、`permission_request`、`done`/`cancelled`/`error`。`text_delta`、模型原始推理与高频命令输出增量一律不入库。
+- 容量上限：每轮 500 条事件，单条 payload 16 KiB，公开思考摘要 12 KiB；超限时以截断载荷落库并保留告警日志，不中断对话。
+- 新增 `get_turn_execution_history` 命令与 `chatApi.getExecutionHistory`（默认 500 条），`ChatMessage` 增加 `context_json` 字段。
+- 远端 Windows 验证：`store::db` 8/8、`codex_runtime::service` 12/12、`codex_runtime::event_adapter` 8/8、`npx vitest run src/services/tauri/tauri.test.ts` 24/24、全量 `cargo test` 174 passed / 0 failed、`npm test` 前端 106 项 + 脚本 9 项通过、`npx tsc --noEmit` 0 错误。
+- 对应提交见本检查点之后的 `feat: 持久化会话执行轨迹与批注上下文`。
+
 ### 2026-09-15：计划勾选同步与任务 1-4 远端复验
 
 - 实施计划的复选框首次与真实进度对齐：任务 1-4 共 26 个步骤已勾选，任务 5-12 保持未勾选，消除「已完成但显示未开始」的歧义。
@@ -122,7 +132,7 @@
 
 ## 当前下一步
 
-阶段 2 进行中：持久化结构化执行历史与消息批注上下文，为时间线重建和成果修改闭环提供数据基础。
+阶段 2 进行中：任务 5 已完成，正在推进任务 6「建立前端 TurnExecutionModel 聚合层」——纯函数聚合器已落地，剩余把模型接入 Redux 会话状态并通过 store 测试。任务 6 通过后阶段 2 可标记完成，才允许开始任务 7 的时间线 UI。
 
 ## 验证证据
 

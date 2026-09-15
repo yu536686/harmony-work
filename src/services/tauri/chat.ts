@@ -43,6 +43,18 @@ export interface ChatMessage {
   tool_results_json?: string | null;
   /** 1-based conversation turn index */
   turn_index?: number | null;
+  /** Structured context for follow-up annotations; never rendered as message text. */
+  context_json?: string | null;
+}
+
+export interface TurnExecutionEventRecord {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  sequence: number;
+  event_type: string;
+  payload: unknown;
+  created_at: string;
 }
 
 export interface SessionArtifact {
@@ -218,6 +230,8 @@ export const chatApi = {
   },
   cancel: (sessionId: string) =>
     invoke<void>("codex_chat_cancel", { sessionId }),
+  getExecutionHistory: (sessionId: string, limit = 500) =>
+    invoke<TurnExecutionEventRecord[]>("get_turn_execution_history", { sessionId, limit }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
     listen<AgentEventType>(`agent_event_${sessionId}`, (e) => handler(e.payload)),
 };

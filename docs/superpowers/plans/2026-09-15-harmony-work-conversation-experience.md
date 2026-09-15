@@ -357,7 +357,7 @@ git commit -m "feat: 接入 Codex 公开执行摘要事件"
 - 修改：`src-tauri/src/app/bootstrap.rs`
 - 修改：`src/services/tauri/chat.ts`
 
-- [ ] **步骤 1：编写数据库迁移与往返失败测试**
+- [x] **步骤 1：编写数据库迁移与往返失败测试**
 
 ```rust
 #[test]
@@ -371,13 +371,13 @@ fn execution_events_and_message_context_roundtrip() {
 }
 ```
 
-- [ ] **步骤 2：运行数据库测试并确认失败**
+- [x] **步骤 2：运行数据库测试并确认失败**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work\src-tauri; cargo test store::db::tests::execution_events_and_message_context_roundtrip"'`
 
 预期：FAIL，缺少迁移和方法。
 
-- [ ] **步骤 3：增加向后兼容迁移**
+- [x] **步骤 3：增加向后兼容迁移**
 
 为 `messages` 增加可空 `context_json TEXT`。新增：
 
@@ -397,15 +397,15 @@ CREATE INDEX IF NOT EXISTS idx_turn_execution_session
 ON turn_execution_events(session_id, created_at, sequence);
 ```
 
-- [ ] **步骤 4：分离可见用户内容和模型上下文**
+- [x] **步骤 4：分离可见用户内容和模型上下文**
 
 `codex_chat_send` 保存原始 `content` 到消息正文，把通过 schema/数量/长度校验的批注 JSON 保存到 `context_json`。传给 Codex 的内容仍由 `compose_turn_content` 合成，但不得把 `<workbuddy_user_context>` 写入用户可见正文。
 
-- [ ] **步骤 5：只持久化结构事件**
+- [x] **步骤 5：只持久化结构事件**
 
 保存 turn start、公开摘要完成片段、plan update、脱敏 tool start/end、done/cancel/error；不保存 `text_delta`、raw reasoning 和高频 command output delta。每轮事件上限 500 条，单 payload 上限 16 KiB。
 
-- [ ] **步骤 6：暴露历史查询 IPC**
+- [x] **步骤 6：暴露历史查询 IPC**
 
 ```ts
 export interface TurnExecutionEventRecord {
@@ -423,13 +423,13 @@ export const chatApi = {
 };
 ```
 
-- [ ] **步骤 7：运行数据库、Codex service 与 IPC 测试**
+- [x] **步骤 7：运行数据库、Codex service 与 IPC 测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; cargo test --manifest-path src-tauri\Cargo.toml store::db; cargo test --manifest-path src-tauri\Cargo.toml codex_runtime::service; npx vitest run src/services/tauri/tauri.test.ts"'`
 
 预期：全部 PASS，旧数据库迁移测试保留通过。
 
-- [ ] **步骤 8：提交检查点**
+- [x] **步骤 8：提交检查点**
 
 ```powershell
 git add src-tauri/src/store/db.rs src-tauri/src/codex_runtime/service.rs src-tauri/src/commands/chat.rs src-tauri/src/app/bootstrap.rs src/services/tauri/chat.ts

@@ -1335,6 +1335,7 @@ fn run_impl() {
             commands::chat::rename_session,
             commands::chat::set_session_workspace,
             commands::chat::get_messages,
+            commands::chat::get_turn_execution_history,
             commands::chat::list_session_artifacts,
             commands::chat::chat_cancel,
             commands::journal::journal_list_changes,

@@ -21,7 +21,7 @@ use crate::store::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1097,6 +1097,142 @@ fn attachment_staging_directory(workspace: &Path, session_id: &str) -> PathBuf {
         .join(safe_session)
 }
 
+const MAX_MESSAGE_CONTEXT_BYTES: usize = 16 * 1024;
+const MAX_MESSAGE_CONTEXT_ITEMS: usize = 50;
+const MAX_REASONING_SUMMARY_BYTES: usize = 12 * 1024;
+const MAX_EXECUTION_PAYLOAD_BYTES: usize = 16 * 1024;
+
+fn validated_message_context(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() || raw.len() > MAX_MESSAGE_CONTEXT_BYTES {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    let items = match &value {
+        Value::Array(items) => items,
+        Value::Object(object) => object.get("annotations")?.as_array()?,
+        _ => return None,
+    };
+    if items.len() > MAX_MESSAGE_CONTEXT_ITEMS
+        || !items.iter().all(|item| item.is_object() && valid_context_value(item, 0))
+    {
+        return None;
+    }
+    serde_json::to_string(&value)
+        .ok()
+        .filter(|serialized| serialized.len() <= MAX_MESSAGE_CONTEXT_BYTES)
+}
+
+fn valid_context_value(value: &Value, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match value {
+        Value::String(text) => text.len() <= 4 * 1024,
+        Value::Array(items) => {
+            items.len() <= MAX_MESSAGE_CONTEXT_ITEMS
+                && items
+                    .iter()
+                    .all(|item| valid_context_value(item, depth + 1))
+        }
+        Value::Object(object) => {
+            object.len() <= 64
+                && object
+                    .iter()
+                    .all(|(key, value)| key.len() <= 128 && valid_context_value(value, depth + 1))
+        }
+        _ => true,
+    }
+}
+
+fn append_reasoning_summary(target: &mut String, delta: &str) {
+    if target.len() >= MAX_REASONING_SUMMARY_BYTES {
+        return;
+    }
+    let remaining = MAX_REASONING_SUMMARY_BYTES - target.len();
+    let mut boundary = remaining.min(delta.len());
+    while boundary > 0 && !delta.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    target.push_str(&delta[..boundary]);
+}
+
+fn persisted_execution_event_type(event: &WorkBuddyEvent) -> Option<&'static str> {
+    match event {
+        WorkBuddyEvent::ToolStart { .. } => Some("tool_start"),
+        WorkBuddyEvent::ToolEnd { .. } => Some("tool_end"),
+        WorkBuddyEvent::PermissionRequest { .. } => Some("permission_request"),
+        WorkBuddyEvent::PlanUpdate { .. } => Some("plan_update"),
+        WorkBuddyEvent::Done { .. } => Some("done"),
+        WorkBuddyEvent::Cancelled => Some("cancelled"),
+        WorkBuddyEvent::Error { .. } => Some("error"),
+        _ => None,
+    }
+}
+
+async fn persist_execution_payload(
+    app_state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    sequence: &mut i64,
+    event_type: &str,
+    payload: Value,
+) {
+    let Ok(mut payload_json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    if payload_json.len() > MAX_EXECUTION_PAYLOAD_BYTES {
+        payload_json = serde_json::json!({
+            "type": event_type,
+            "id": payload.get("id").cloned().unwrap_or(Value::Null),
+            "name": payload.get("name").cloned().unwrap_or(Value::Null),
+            "is_error": payload.get("is_error").cloned().unwrap_or(Value::Null),
+            "truncated": true,
+        })
+        .to_string();
+    }
+    let result = app_state.db.lock().await.append_turn_execution_event(
+        session_id,
+        turn_id,
+        *sequence,
+        event_type,
+        &payload_json,
+    );
+    if let Err(error) = result {
+        tracing::warn!(%error, %session_id, %turn_id, %event_type, "Failed to persist Codex execution event");
+        return;
+    }
+    *sequence += 1;
+}
+
+async fn flush_reasoning_summaries(
+    app_state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    sequence: &mut i64,
+    summaries: &mut BTreeMap<(String, u32), String>,
+) {
+    for ((id, summary_index), text) in std::mem::take(summaries) {
+        if text.trim().is_empty() {
+            continue;
+        }
+        persist_execution_payload(
+            app_state,
+            session_id,
+            turn_id,
+            sequence,
+            "reasoning_summary",
+            serde_json::json!({
+                "type": "reasoning_summary",
+                "id": id,
+                "summary_index": summary_index,
+                "text": text,
+            }),
+        )
+        .await;
+    }
+}
+
 fn compose_turn_content(
     content: String,
     explicit_skills: Option<Vec<String>>,
@@ -1184,6 +1320,8 @@ pub async fn codex_chat_send(
         });
     let attachments =
         materialize_chat_attachments(&workspace_root, &session_id, attachment, attachments)?;
+    let visible_content = content.clone();
+    let message_context_json = validated_message_context(user_context.as_deref());
     let content = compose_turn_content(content, explicit_skills, user_context, &attachments);
     let mut developer_instructions =
         "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
@@ -1212,7 +1350,12 @@ pub async fn codex_chat_send(
     };
     {
         let db = app_state.db.lock().await;
-        db.append_message(&session_id, "user", &content)
+        db.append_message_with_context(
+            &session_id,
+            "user",
+            &visible_content,
+            message_context_json.as_deref(),
+        )
             .map_err(|error| error.to_string())?;
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
@@ -1229,14 +1372,75 @@ pub async fn codex_chat_send(
         thread_id: execution.thread_id.clone(),
         turn_id: execution.turn_id.clone(),
     };
+    let history_turn_id = execution.turn_id.clone();
     let event_name = format!("agent_event_{session_id}");
     let mut events = execution.events;
     let codex_state = codex_state.inner().clone();
     let app_state = app_state.inner().clone();
     tauri::async_runtime::spawn(async move {
         let mut transcript = CodexTurnTranscript::default();
+        let mut execution_sequence = 1_i64;
+        let mut reasoning_summaries = BTreeMap::<(String, u32), String>::new();
+        persist_execution_payload(
+            &app_state,
+            &session_id,
+            &history_turn_id,
+            &mut execution_sequence,
+            "turn_started",
+            serde_json::json!({"type":"turn_started"}),
+        )
+        .await;
         while let Some(event) = events.recv().await {
             transcript.observe(&event);
+            match &event {
+                WorkBuddyEvent::ReasoningSummaryStart { id, summary_index } => {
+                    reasoning_summaries
+                        .entry((id.clone(), *summary_index))
+                        .or_default();
+                }
+                WorkBuddyEvent::ReasoningSummaryDelta {
+                    id,
+                    summary_index,
+                    delta,
+                } => append_reasoning_summary(
+                    reasoning_summaries
+                        .entry((id.clone(), *summary_index))
+                        .or_default(),
+                    delta,
+                ),
+                _ => {}
+            }
+            if matches!(
+                &event,
+                WorkBuddyEvent::ToolStart { .. }
+                    | WorkBuddyEvent::PermissionRequest { .. }
+                    | WorkBuddyEvent::PlanUpdate { .. }
+                    | WorkBuddyEvent::Done { .. }
+                    | WorkBuddyEvent::Cancelled
+                    | WorkBuddyEvent::Error { .. }
+            ) {
+                flush_reasoning_summaries(
+                    &app_state,
+                    &session_id,
+                    &history_turn_id,
+                    &mut execution_sequence,
+                    &mut reasoning_summaries,
+                )
+                .await;
+            }
+            if let Some(event_type) = persisted_execution_event_type(&event) {
+                if let Ok(payload) = serde_json::to_value(&event) {
+                    persist_execution_payload(
+                        &app_state,
+                        &session_id,
+                        &history_turn_id,
+                        &mut execution_sequence,
+                        event_type,
+                        payload,
+                    )
+                    .await;
+                }
+            }
             if let WorkBuddyEvent::ToolEnd {
                 id,
                 name,
@@ -1519,6 +1723,27 @@ mod tests {
     }
 
     #[test]
+    fn annotation_context_is_validated_separately_from_visible_message_text() {
+        let raw = r#"[{"targetType":"artifact","artifactId":"report-1","comment":"标题更简洁"}]"#;
+        let context = validated_message_context(Some(raw)).expect("valid annotation context");
+        let prompt = compose_turn_content(
+            "请按批注修改".to_string(),
+            None,
+            Some(context.clone()),
+            &[],
+        );
+
+        assert_eq!(
+            serde_json::from_str::<Value>(&context).expect("normalized context"),
+            serde_json::from_str::<Value>(raw).expect("source context")
+        );
+        assert!(prompt.contains("<workbuddy_user_context>"));
+        assert!(prompt.ends_with("请按批注修改"));
+        assert!(validated_message_context(Some("登录用户：测试")).is_none());
+        assert!(validated_message_context(Some(r#"["not-an-object"]"#)).is_none());
+    }
+
+    #[test]
     fn external_attachment_is_copied_into_workspace_before_codex_receives_it() {
         let root =
             std::env::temp_dir().join(format!("workbuddy-attachment-{}", uuid::Uuid::new_v4()));
@@ -1560,6 +1785,14 @@ mod tests {
                 .ends_with("resources/workbuddy-mcp-host/workbuddy-mcp-host.exe")
         }));
         assert!(candidates.iter().any(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("Harmony Work/workbuddy-mcp-host.exe")
+        }));
+        let legacy_candidates = workbuddy_mcp_host_candidates_from(Path::new(
+            "C:/Program Files/Xiaoheng/xiaoheng-workbuddy.exe",
+        ));
+        assert!(legacy_candidates.iter().any(|path| {
             path.to_string_lossy()
                 .replace('\\', "/")
                 .ends_with("Xiaoheng/workbuddy-mcp-host.exe")
