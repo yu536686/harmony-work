@@ -122,7 +122,7 @@ export const AGENT_BRAND = {
 
 `scripts/branding-contract.test.mjs` 读取 `src/i18n`、`src/App.tsx`、Onboarding、About、Overlay、Bootstrapper、`tauri.conf.json` 和 `README.md`，断言用户可见区域不再包含 `小亨 WorkBuddy`、旧 GitHub 仓库 URL 或旧安装包名；允许 `小亨`、`Xiaoheng` 出现在 Agent 人格文案中，允许内部兼容路径和 Tauri identifier 保留旧标识。
 
-在 `package.json` 的 `test` 尾部加入：
+品牌迁移完成前先将扫描器作为独立预期失败测试运行；任务 3 清理完安装器与发行元数据后，再在 `package.json` 的 `test` 尾部加入：
 
 ```json
 "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs"
@@ -132,7 +132,7 @@ export const AGENT_BRAND = {
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/branding.test.ts; node --test scripts/branding-contract.test.mjs"'`
 
-预期：品牌单测 PASS；品牌扫描仍因尚未迁移的可见文案 FAIL，并准确列出文件。
+预期：品牌单测 PASS；独立执行品牌扫描时仍因尚未迁移的可见文案 FAIL，并准确列出文件。默认 `npm test` 暂不接入该扫描器，避免阶段检查点长期红灯。
 
 - [ ] **步骤 6：提交检查点**
 
@@ -256,6 +256,8 @@ private const string ApplicationExecutable = "harmony-work.exe";
 - [ ] **步骤 5：更新 README 和 GitHub 链接**
 
 仓库、issues、releases 全部指向 `yu536686/harmony-work`；下载与校验示例使用新安装包名。说明 Agent 仍名为小亨。
+
+将 `scripts/branding-contract.test.mjs` 接入 `package.json` 的默认 `test`，从本步骤开始全量测试必须同时满足品牌扫描。
 
 - [ ] **步骤 6：运行安装器测试和 WPF 编译**
 
