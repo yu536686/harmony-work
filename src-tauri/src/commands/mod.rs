@@ -18,6 +18,7 @@
 //! `scheduler`, `collab_trial`, `fish`).
 
 pub mod account_settings_sync;
+pub mod artifact_preview;
 pub mod chat;
 pub mod config;
 pub mod harvis_generate;

@@ -1224,6 +1224,8 @@ fn run_impl() {
             crate::codex_runtime::service::codex_runtime_diagnostic,
             crate::codex_runtime::service::codex_chat_send,
             crate::codex_runtime::service::codex_chat_cancel,
+            commands::artifact_preview::get_artifact_preview,
+            commands::artifact_preview::save_artifact_copy,
             // config/
             commands::config::settings::get_settings,
             commands::config::settings::get_default_workspace,

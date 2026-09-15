@@ -10,6 +10,7 @@ import {
   SendHorizontal,
   Sparkles,
   Square,
+  PanelRightOpen,
   UserRound,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
@@ -27,6 +28,7 @@ import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
 import ExecutionTimeline from "./ExecutionTimeline";
+import WorkbenchPanel from "./WorkbenchPanel";
 import GlobalSessionRail from "./GlobalSessionRail";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
@@ -908,7 +910,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const running = displaySessionId ? isRunning[displaySessionId] ?? false : false;
   const activePlan = displaySessionId ? planBySession[displaySessionId] ?? [] : [];
   const executionModel = displaySessionId ? executionBySession[displaySessionId] ?? null : null;
-  const [, setActiveArtifacts] = useState<SessionArtifact[]>([]);
+  const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
+  const [workbenchOpenBySession, setWorkbenchOpenBySession] = useState<Record<string, boolean>>({});
+  const workbenchOpen = displaySessionId
+    ? workbenchOpenBySession[displaySessionId] ?? false
+    : false;
   const latestRealUserMessageIndex = activeMessages.reduce(
     (latest, message, index) =>
       message.role === "user" && !message.tool_results_json ? index : latest,
@@ -2322,15 +2328,28 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   return (
     <>
       {sessionRail}
-      <div className="chat-layout">
+      <div className={`chat-layout${workbenchOpen ? " workbench-open" : ""}`}>
       {/* Main chat area */}
       <div className={`chat-main ${isDraft ? "is-draft" : ""}`}>
-        {/* Top bar: Workbench toggle is added in the next implementation stage. */}
         <div className="chat-topbar">
           <div className="chat-topbar-current">
             <span>{kindLabel(sessionFilter)}</span>
             {displaySession && <strong>{displaySession.title?.replace(/^Piscis CLI/, "小亨 CLI") ?? t("chat.defaultTitle")}</strong>}
           </div>
+          {displaySessionId && (
+            <button
+              type="button"
+              className={`chat-workbench-toggle${workbenchOpen ? " active" : ""}`}
+              onClick={() => setWorkbenchOpenBySession((current) => ({
+                ...current,
+                [displaySessionId]: !workbenchOpen,
+              }))}
+              aria-label={workbenchOpen ? t("chat.workbenchClose") : t("chat.workbenchOpen")}
+              title={workbenchOpen ? t("chat.workbenchClose") : t("chat.workbenchOpen")}
+            >
+              <PanelRightOpen size={17} strokeWidth={1.8} />
+            </button>
+          )}
         </div>
 
         {isDragging && !isImSession && (
@@ -2716,6 +2735,19 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           </div>
         )}
       </div>
+
+      {displaySessionId && (
+        <WorkbenchPanel
+          open={workbenchOpen}
+          sessionId={displaySessionId}
+          artifacts={activeArtifacts}
+          execution={executionModel}
+          onClose={() => setWorkbenchOpenBySession((current) => ({
+            ...current,
+            [displaySessionId]: false,
+          }))}
+        />
+      )}
 
       {projectDialogOpen && (
         <div className="permission-overlay" onClick={() => !projectCreating && setProjectDialogOpen(false)}>

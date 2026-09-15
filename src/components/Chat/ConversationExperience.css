@@ -175,6 +175,439 @@
   }
 }
 
+/* Right-side session workbench */
+.workbench-panel {
+  width: 420px;
+  min-width: 420px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border);
+}
+
+.workbench-header,
+.workbench-section-heading,
+.workbench-log-title {
+  display: flex;
+  align-items: center;
+}
+
+.workbench-header {
+  min-height: 56px;
+  padding: 0 14px 0 18px;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.workbench-header strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.workbench-icon-button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workbench-icon-button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.workbench-tabs {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 6px 10px;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workbench-tabs button {
+  min-width: 0;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workbench-tabs button:hover,
+.workbench-tabs button.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.workbench-tabs button.active {
+  font-weight: 650;
+}
+
+.workbench-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.workbench-artifact-list {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.workbench-artifact-list button {
+  max-width: 220px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workbench-artifact-list button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-artifact-list button:hover,
+.workbench-artifact-list button.active {
+  border-color: var(--border);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.workbench-artifact-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workbench-section-heading {
+  min-height: 58px;
+  padding: 8px 12px;
+  gap: 10px;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.workbench-section-heading > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.workbench-section-heading strong,
+.workbench-section-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-section-heading strong {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.workbench-section-heading span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.artifact-preview-canvas,
+.artifact-preview-frame,
+.artifact-preview-text-wrap,
+.artifact-preview-external,
+.artifact-preview-state {
+  flex: 1;
+  min-height: 0;
+}
+
+.artifact-preview-canvas {
+  padding: 16px;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: var(--bg-secondary);
+}
+
+.artifact-preview-canvas img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.artifact-preview-frame {
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-preview-text-wrap {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.artifact-preview-text {
+  flex: 1;
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font: 13px/1.65 inherit;
+}
+
+.artifact-preview-text.is-code,
+.workbench-log-command,
+.workbench-log-list pre {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.artifact-preview-truncated {
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.artifact-preview-state,
+.artifact-preview-external,
+.workbench-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.artifact-preview-state {
+  gap: 8px;
+  padding: 24px;
+  font-size: 12px;
+}
+
+.artifact-preview-state.is-error {
+  align-items: flex-start;
+  justify-content: flex-start;
+  color: var(--danger, #d9544d);
+}
+
+.artifact-preview-state p {
+  margin: 6px 0 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.artifact-preview-external {
+  padding: 28px;
+  flex-direction: column;
+  gap: 9px;
+  text-align: center;
+}
+
+.artifact-preview-external strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.artifact-preview-external p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.artifact-preview-external span {
+  font-size: 11px;
+}
+
+.workbench-primary-command,
+.workbench-secondary-command,
+.workbench-text-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.workbench-primary-command {
+  margin-top: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  background: var(--wb-interactive, #1d1d20);
+  color: #fff;
+}
+
+.workbench-secondary-command {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.artifact-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+
+.workbench-text-command {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+
+.workbench-summary,
+.workbench-log-list {
+  padding: 14px;
+}
+
+.workbench-final-summary {
+  margin: 0 0 16px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.workbench-summary ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.workbench-summary li {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workbench-summary li.is-completed svg {
+  color: var(--success, #3c9b69);
+}
+
+.workbench-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workbench-log-list section {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.workbench-log-title {
+  gap: 7px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.workbench-log-command {
+  margin-top: 8px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workbench-log-list pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.workbench-empty {
+  flex: 1;
+  min-height: 240px;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.workbench-spin {
+  animation: workbench-spin 0.9s linear infinite;
+}
+
+@keyframes workbench-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) {
+  .workbench-panel {
+    width: 360px;
+    min-width: 360px;
+  }
+}
+
+@media (max-width: 980px) {
+  .chat-layout {
+    position: relative;
+  }
+
+  .workbench-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(440px, 92vw);
+    min-width: 0;
+    z-index: 40;
+    box-shadow: -18px 0 44px rgba(0, 0, 0, 0.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-spin { animation: none; }
+}
+
 @media (max-width: 760px) {
   .execution-step-copy {
     display: grid;

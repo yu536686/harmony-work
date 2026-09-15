@@ -138,6 +138,27 @@
   white-space: nowrap;
 }
 
+.chat-workbench-toggle {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-workbench-toggle:hover,
+.chat-workbench-toggle.active {
+  color: var(--text-primary);
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
 .chat-topbar-sessions {
   display: flex;
   align-items: center;

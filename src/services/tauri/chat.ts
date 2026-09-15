@@ -70,6 +70,15 @@ export interface SessionArtifact {
   created_at: string;
 }
 
+export interface ArtifactPreviewPayload {
+  kind: "image" | "text" | "code" | "html" | "external";
+  uri: string;
+  content?: string | null;
+  media_type?: string | null;
+  truncated: boolean;
+  size_bytes: number;
+}
+
 export const sessionsApi = {
   create: (title?: string, source?: string) =>
     invoke<Session>("create_session", { title, source }),
@@ -232,6 +241,10 @@ export const chatApi = {
     invoke<void>("codex_chat_cancel", { sessionId }),
   getExecutionHistory: (sessionId: string, limit = 500) =>
     invoke<TurnExecutionEventRecord[]>("get_turn_execution_history", { sessionId, limit }),
+  getArtifactPreview: (sessionId: string, uri: string) =>
+    invoke<ArtifactPreviewPayload>("get_artifact_preview", { sessionId, uri }),
+  saveArtifactCopy: (sessionId: string, uri: string, destination: string) =>
+    invoke<number>("save_artifact_copy", { sessionId, uri, destination }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
     listen<AgentEventType>(`agent_event_${sessionId}`, (e) => handler(e.payload)),
 };

@@ -579,7 +579,7 @@ git commit -m "feat: 重构对话执行时间线"
 - 修改：`src/components/Chat/index.tsx`
 - 修改：`src/components/Chat/ConversationExperience.css`
 
-- [ ] **步骤 1：编写 Workbench 标签和空状态失败测试**
+- [x] **步骤 1：编写 Workbench 标签和空状态失败测试**
 
 ```tsx
 render(<WorkbenchPanel open artifacts={[artifact]} execution={execution} onClose={onClose} />);
@@ -588,11 +588,11 @@ await user.click(screen.getByRole("tab", { name: "终端" }));
 expect(screen.getByText(/Verification passed/)).toBeVisible();
 ```
 
-- [ ] **步骤 2：编写成果预览权限失败测试**
+- [x] **步骤 2：编写成果预览权限失败测试**
 
 Rust 测试覆盖：工作区内文本可读取；工作区外且未授权时拒绝；超过 1 MiB 返回摘要和 `truncated=true`；二进制不作为文本返回；路径不存在返回可操作错误。
 
-- [ ] **步骤 3：实现成果预览 IPC**
+- [x] **步骤 3：实现成果预览 IPC**
 
 ```ts
 export interface ArtifactPreviewPayload {
@@ -606,24 +606,24 @@ export interface ArtifactPreviewPayload {
 
 命令以会话工作区和 `allow_outside_workspace` 为权限边界，复用规范化路径校验。图片用 `convertFileSrc`；文本/代码最多读取 1 MiB；Office 显示摘要、路径及“打开/另存为/在文件夹中显示”，不承诺伪造 PPT 渲染。
 
-- [ ] **步骤 4：实现四区 Workbench**
+- [x] **步骤 4：实现四区 Workbench**
 
 - 成果：最近更新的 artifacts 列表和预览。
 - 摘要：从 `TurnExecutionModel` 纯函数生成目标、完成项、失败项和成果，不调用模型。
 - 浏览器：从 `web_search`、`web_fetch`、`browser` 工具步骤提取 URL、标题、状态和可用截图。
 - 终端：从 `shell`/`powershell` 步骤显示脱敏命令和最近输出，只读，不新建 Shell。
 
-- [ ] **步骤 5：实现响应式布局**
+- [x] **步骤 5：实现响应式布局**
 
 宽度大于 1180px 时为 `sidebar + chat + 420px panel`；980-1180px 使用 360px panel；小于 980px Workbench 作为右侧覆盖层并提供关闭按钮。面板开关状态按会话保留，不能改变主输入框宽高。
 
-- [ ] **步骤 6：运行前后端测试与构建**
+- [x] **步骤 6：运行前后端测试与构建**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; cargo test --manifest-path src-tauri\Cargo.toml artifact_preview; npx vitest run src/components/Chat/WorkbenchPanel.test.tsx; npm run build:web"'`
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：提交检查点**
+- [x] **步骤 7：提交检查点**
 
 ```powershell
 git add src/components/Chat src/services/tauri/chat.ts src-tauri/src/commands/artifact_preview.rs src-tauri/src/app/bootstrap.rs

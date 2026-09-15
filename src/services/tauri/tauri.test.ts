@@ -76,6 +76,25 @@ describe("sessionsApi", () => {
 // ─── chatApi ──────────────────────────────────────────────────────────────────
 
 describe("chatApi", () => {
+  it("getArtifactPreview() sends the session-scoped artifact path", async () => {
+    mockInvoke.mockResolvedValueOnce({ kind: "text", uri: "E:/work/result.md" });
+    await chatApi.getArtifactPreview("sess1", "E:/work/result.md");
+    expect(mockInvoke).toHaveBeenCalledWith("get_artifact_preview", {
+      sessionId: "sess1",
+      uri: "E:/work/result.md",
+    });
+  });
+
+  it("saveArtifactCopy() sends an explicit user-selected destination", async () => {
+    mockInvoke.mockResolvedValueOnce(128);
+    await chatApi.saveArtifactCopy("sess1", "E:/work/result.docx", "D:/exports/result.docx");
+    expect(mockInvoke).toHaveBeenCalledWith("save_artifact_copy", {
+      sessionId: "sess1",
+      uri: "E:/work/result.docx",
+      destination: "D:/exports/result.docx",
+    });
+  });
+
   it("send() routes the main chat through codex_chat_send", async () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.send("sess1", "hello");
