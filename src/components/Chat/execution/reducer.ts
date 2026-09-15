@@ -208,6 +208,16 @@ export function reduceExecutionEvent(
         return { ...model, state, steps: [...model.steps, step] };
       }
       const existing = model.steps[index];
+      if (isStepTerminal(existing.state)) {
+        const steps = [...model.steps];
+        steps[index] = {
+          ...existing,
+          name: event.name,
+          input: event.input,
+          startedAt: existing.startedAt ?? now,
+        };
+        return { ...model, steps };
+      }
       if (existing.state === "running" && existing.name === event.name) {
         return state === model.state ? model : { ...model, state };
       }
@@ -383,7 +393,11 @@ export function restoreExecutionHistory(
 
   if (ordered.length > 0 && !isTurnTerminal(model.state)) {
     // 会话已经不再由这个轮次驱动：结束态必须落地，否则时间线会一直显示运行中
-    model = { ...model, state: "cancelled" };
+    model = finishTurn(
+      model,
+      "cancelled",
+      ordered[ordered.length - 1]?.created_at ?? new Date(0).toISOString(),
+    );
   }
   return model;
 }

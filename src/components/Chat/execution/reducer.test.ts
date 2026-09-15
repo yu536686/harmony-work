@@ -89,6 +89,20 @@ describe("TurnExecutionModel 聚合", () => {
     expect(model.steps[0].expanded).toBe(false);
   });
 
+  it("迟到的 tool_start 不会把已结束步骤改回运行中", () => {
+    let model = reduce(
+      startTurn(createTurnExecutionModel("session-1")),
+      toolEnd("tool-9", "done"),
+    );
+
+    model = reduce(model, toolStart("tool-9", "shell", { command: "npm test" }));
+
+    expect(model.steps).toHaveLength(1);
+    expect(model.steps[0].state).toBe("completed");
+    expect(model.steps[0].result).toBe("done");
+    expect(model.steps[0].input).toEqual({ command: "npm test" });
+  });
+
   it("工具失败时步骤标记为 failed 且保持展开", () => {
     const running = reduce(startTurn(createTurnExecutionModel("session-1")), toolStart("tool-1"));
     const failed = reduce(running, toolEnd("tool-1", "boom", true));
@@ -251,6 +265,29 @@ describe("restoreExecutionHistory", () => {
     const model = restoreExecutionHistory("session-1", []);
     expect(model.state).toBe("idle");
     expect(model.turnId).toBeUndefined();
+  });
+
+  it("缺少终止事件的历史会收敛全部运行步骤", () => {
+    const model = restoreExecutionHistory("session-1", [
+      record(1, "turn_started", { type: "turn_started" }),
+      record(2, "tool_start", {
+        type: "tool_start",
+        id: "tool-1",
+        name: "shell",
+        input: { command: "npm test" },
+      }),
+      record(3, "reasoning_summary", {
+        type: "reasoning_summary",
+        id: "r1",
+        summary_index: 0,
+        text: "正在验证",
+      }),
+    ]);
+
+    expect(model.state).toBe("cancelled");
+    expect(model.steps[0].state).toBe("cancelled");
+    expect(model.steps[0].expanded).toBe(false);
+    expect(model.reasoning.every((segment) => !segment.streaming)).toBe(true);
   });
 });
 
