@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "小亨 WorkBuddy",
+        "title": "Harmony Work",
         "width": 1380,
         "height": 880,
         "minWidth": 980,
@@ -17,7 +17,7 @@
       },
       {
         "label": "overlay",
-        "title": "小亨 WorkBuddy Overlay",
+        "title": "Harmony Work Overlay",
         "url": "index.html?overlay=1",
         "width": 280,
         "height": 56,

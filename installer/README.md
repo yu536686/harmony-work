@@ -22,4 +22,4 @@
 ./scripts/build-full-installer.ps1 -SkipDownload
 ```
 
-最终文件为 `release\full\Xiaoheng-WorkBuddy-Setup.exe`。`runtime-lock.json` 固定每个第三方载荷的版本与 SHA-256；缓存和最终载荷均被 `.gitignore` 排除，不提交到仓库。
+最终文件为 `release\full\Harmony-Work-<version>-x64-setup.exe`。`runtime-lock.json` 固定每个第三方载荷的版本与 SHA-256；缓存和最终载荷均被 `.gitignore` 排除，不提交到仓库。

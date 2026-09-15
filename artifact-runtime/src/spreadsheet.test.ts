@@ -11,7 +11,7 @@ test("creates a verified XLSX with formulas, filters, and frozen headers", async
 
   const result = await generateSpreadsheet({
     path,
-    creator: "小亨 WorkBuddy",
+    creator: "Harmony Work",
     sheets: [
       {
         name: "汇总",

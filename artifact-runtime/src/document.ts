@@ -139,7 +139,7 @@ export async function generateDocument(spec: DocumentSpec): Promise<GenerationRe
   }
 
   const document = new Document({
-    creator: spec.author ?? "小亨 WorkBuddy",
+    creator: spec.author ?? "Harmony Work",
     title: spec.title,
     description: spec.subtitle,
     styles: {

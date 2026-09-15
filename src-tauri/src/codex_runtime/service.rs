@@ -1186,7 +1186,7 @@ pub async fn codex_chat_send(
         materialize_chat_attachments(&workspace_root, &session_id, attachment, attachments)?;
     let content = compose_turn_content(content, explicit_skills, user_context, &attachments);
     let mut developer_instructions =
-        "你是小亨 WorkBuddy。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
+        "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
             .to_string();
     if let Some(persona) = persona_koi_id.filter(|value| !value.trim().is_empty()) {
         developer_instructions.push_str(&format!(
@@ -1552,7 +1552,7 @@ mod tests {
     #[test]
     fn bundled_mcp_host_candidates_cover_build_and_installer_layouts() {
         let candidates = workbuddy_mcp_host_candidates_from(Path::new(
-            "C:/Program Files/Xiaoheng/xiaoheng-workbuddy.exe",
+            "C:/Program Files/Harmony Work/harmony-work.exe",
         ));
         assert!(candidates.iter().any(|path| {
             path.to_string_lossy()

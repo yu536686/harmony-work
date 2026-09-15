@@ -170,7 +170,7 @@ pub fn workbuddy_project_url(project_id: &str) -> String {
 fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
-        .user_agent("Xiaoheng-WorkBuddy/HarmonyCut")
+        .user_agent("Harmony-Work/HarmonyCut")
         .build()
         .map_err(|e| e.to_string())
 }

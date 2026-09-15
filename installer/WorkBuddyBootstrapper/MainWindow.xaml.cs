@@ -19,10 +19,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        InstallPathTextBox.Text = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs",
-            "小亨 WorkBuddy");
+        InstallPathTextBox.Text = InstallerEngine.ResolveDefaultInstallDirectory();
         Loaded += Window_Loaded;
     }
 
@@ -71,7 +68,7 @@ public partial class MainWindow : Window
     private void ChoosePath_Click(object sender, RoutedEventArgs e)
     {
         using var dialog = new FolderBrowserDialog {
-            Description = "选择小亨 WorkBuddy 安装位置",
+            Description = "选择 Harmony Work 安装位置",
             UseDescriptionForTitle = true,
             SelectedPath = InstallPathTextBox.Text,
         };
@@ -154,7 +151,7 @@ public partial class MainWindow : Window
             _engine.LaunchApplication(appPath);
             System.Windows.Application.Current.Shutdown();
         } catch (Exception error) {
-            ShowError($"无法启动小亨 WorkBuddy：{error.Message}");
+            ShowError($"无法启动 Harmony Work：{error.Message}");
         }
     }
 

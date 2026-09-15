@@ -342,7 +342,7 @@ pub async fn claude_plugins_list(
     let limit = limit.unwrap_or(40).min(100) as usize;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -381,7 +381,7 @@ pub async fn claude_plugins_list(
 pub async fn claude_plugins_detail(plugin_id: String) -> Result<ClaudePluginDetail, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -415,7 +415,7 @@ pub async fn claude_plugins_install(
 ) -> Result<ClaudePluginInstallResult, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 

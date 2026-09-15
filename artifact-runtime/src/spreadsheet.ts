@@ -103,8 +103,8 @@ export async function generateSpreadsheet(spec: SpreadsheetSpec): Promise<Genera
   if (new Set(normalizedNames).size !== normalizedNames.length) throw new Error("worksheet names must be unique");
 
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = spec.creator ?? "小亨 WorkBuddy";
-  workbook.lastModifiedBy = spec.creator ?? "小亨 WorkBuddy";
+  workbook.creator = spec.creator ?? "Harmony Work";
+  workbook.lastModifiedBy = spec.creator ?? "Harmony Work";
   workbook.created = new Date();
   workbook.modified = new Date();
   workbook.calcProperties.fullCalcOnLoad = true;

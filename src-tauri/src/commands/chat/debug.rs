@@ -99,7 +99,7 @@ fn scenarios() -> Vec<DebugScenario> {
             description: "验证 Codex exec 与小亨身份提示是否生效".into(),
             name_en: "Codex Main Path".into(),
             description_en: "Verify Codex exec and Xiaoheng identity".into(),
-            prompt: "只回复：小亨 WorkBuddy Codex 链路正常".into(),
+            prompt: "只回复：小亨（Harmony Work）Codex 链路正常".into(),
             expected_keywords: vec!["小亨".into(), "Codex".into()],
             expected_tools: vec![],
             requires_config: None,

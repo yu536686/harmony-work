@@ -71,7 +71,7 @@ pub(crate) fn marketing_base_url() -> String {
 pub(crate) fn marketing_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("Xiaoheng-WorkBuddy/0.7 Marketing")
+        .user_agent("Harmony-Work/0.7 Marketing")
         .build()
         .map_err(|e| e.to_string())
 }

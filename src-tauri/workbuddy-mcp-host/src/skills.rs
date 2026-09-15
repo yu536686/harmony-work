@@ -226,7 +226,7 @@ async fn download_source(source: &str) -> Result<DownloadedSource> {
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(45))
-        .user_agent("Xiaoheng-WorkBuddy-MCP/1.0")
+        .user_agent("Harmony-Work-MCP/1.0")
         .build()?)
 }
 

@@ -1,8 +1,8 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
-    "productName": "小亨 WorkBuddy",
-    "mainBinaryName": "xiaoheng-workbuddy",
-    "version": "1.2.0-alpha.7",
+    "productName": "Harmony Work",
+    "mainBinaryName": "harmony-work",
+    "version": "1.3.0-alpha.1",
     "identifier": "com.harmony.xiaoheng-workbuddy",
     "build": {
         "beforeDevCommand": "npm run dev",
@@ -14,7 +14,7 @@
         "windows": [
             {
                 "label": "main",
-                "title": "小亨 WorkBuddy",
+                "title": "Harmony Work",
                 "width": 1380,
                 "height": 880,
                 "minWidth": 980,
@@ -25,7 +25,7 @@
             },
             {
                 "label": "overlay",
-                "title": "小亨 WorkBuddy Overlay",
+                "title": "Harmony Work Overlay",
                 "url": "index.html?overlay=1",
                 "width": 280,
                 "height": 56,
@@ -76,7 +76,7 @@
         "publisher": "Harmony",
         "copyright": "Copyright 2026 Harmony",
         "shortDescription": "Harmony AI desktop work assistant",
-        "longDescription": "Xiaoheng WorkBuddy is a Harmony AI desktop assistant for conversations, projects, skills, tools, IM channels, and multi-agent collaboration.",
+        "longDescription": "Harmony Work is a desktop AI workbench for conversations, projects, skills, tools, IM channels, and multi-agent collaboration.",
         "windows": {
             "digestAlgorithm": "sha256",
             "webviewInstallMode": {

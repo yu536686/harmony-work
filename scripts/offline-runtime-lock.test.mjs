@@ -129,3 +129,30 @@ test("full installer reuses managed runtimes and reports generic user-facing pro
   assert.match(engine, /CopyPayloadArchiveAsync/);
   assert.match(engine, /ExtractPayloadArchiveAsync/);
 });
+
+test("Harmony Work release metadata and installer naming stay aligned", async () => {
+  const [packageJson, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
+    await Promise.all([
+      readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+      readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8").then(JSON.parse),
+      readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
+      readFile(new URL("../installer/WorkBuddyBootstrapper/WorkBuddyBootstrapper.csproj", import.meta.url), "utf8"),
+      readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
+      readFile(new URL("./stage-full-installer-payload.ps1", import.meta.url), "utf8"),
+      readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+    ]);
+
+  assert.equal(packageJson.name, "harmony-work");
+  assert.equal(packageJson.version, "1.3.0-alpha.1");
+  assert.equal(tauriConfig.productName, "Harmony Work");
+  assert.equal(tauriConfig.mainBinaryName, "harmony-work");
+  assert.equal(tauriConfig.version, packageJson.version);
+  assert.equal(tauriConfig.identifier, "com.harmony.xiaoheng-workbuddy");
+  assert.match(cargoToml, /name = "harmony-work"/);
+  assert.match(cargoToml, /default-run = "harmony-work"/);
+  assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
+  assert.match(engine, /private const string ProductName = "Harmony Work"/);
+  assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
+  assert.match(stageScript, /app\\harmony-work-setup\.exe/);
+  assert.match(buildScript, /Harmony-Work-\$Version-x64-setup\.exe/);
+});

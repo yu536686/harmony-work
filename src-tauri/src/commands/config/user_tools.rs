@@ -109,7 +109,7 @@ pub async fn install_user_tool(
             // Download zip, extract to user-tools/<name>/
             let bytes = client
                 .get(&source)
-                .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
+                .header("User-Agent", "Harmony-Work/1.0")
                 .send()
                 .await
                 .map_err(|e| format!("Download error: {}", e))?
@@ -129,7 +129,7 @@ pub async fn install_user_tool(
             // Treat as raw manifest.json URL
             let manifest_text = client
                 .get(&source)
-                .header("User-Agent", "Xiaoheng-WorkBuddy/1.0")
+                .header("User-Agent", "Harmony-Work/1.0")
                 .send()
                 .await
                 .map_err(|e| format!("Download error: {}", e))?

@@ -39,7 +39,7 @@ function validatePresentationImages(spec: PresentationSpec): void {
 function addPageChrome(slide: PptxGenJS.Slide, pptx: PptxGenJS, theme: Theme, index: number): void {
   slide.background = { color: theme.background };
   slide.addShape(pptx.ShapeType.line, { x: 0.55, y: 7.08, w: 12.25, h: 0, line: { color: theme.muted, transparency: 72, width: 1 } });
-  slide.addText("小亨 WorkBuddy", { x: 0.6, y: 7.13, w: 2.4, h: 0.16, fontFace: FONT, fontSize: 8, color: theme.muted, margin: 0 });
+  slide.addText("Harmony Work", { x: 0.6, y: 7.13, w: 2.4, h: 0.16, fontFace: FONT, fontSize: 8, color: theme.muted, margin: 0 });
   slide.addText(String(index).padStart(2, "0"), { x: 12.1, y: 7.1, w: 0.6, h: 0.2, fontFace: FONT, fontSize: 8, color: theme.muted, align: "right", margin: 0 });
 }
 
@@ -109,7 +109,7 @@ export async function generatePresentation(spec: PresentationSpec): Promise<Gene
   const pptx = new PptxGenJS();
   const theme = THEMES[spec.theme ?? "clean_light"];
   pptx.layout = "LAYOUT_WIDE";
-  pptx.author = spec.author ?? "小亨 WorkBuddy";
+  pptx.author = spec.author ?? "Harmony Work";
   pptx.subject = spec.subtitle ?? spec.title;
   pptx.title = spec.title;
   pptx.company = "Harmony";

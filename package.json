@@ -1,7 +1,7 @@
 {
-  "name": "xiaoheng-workbuddy",
+  "name": "harmony-work",
   "private": true,
-  "version": "1.2.0-alpha.7",
+  "version": "1.3.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,7 @@
     "stage:codex": "node scripts/stage-codex-sidecar.mjs",
     "stage:mcp-host": "node scripts/stage-workbuddy-mcp-host.mjs",
     "tauri": "tauri",
-    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs",
+    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs",
     "test:installer": "node --test scripts/offline-runtime-lock.test.mjs",
     "test:codex-sdk": "node --test scripts/codex-sdk-runner.test.mjs",
     "test:codex-sidecar": "node --test scripts/stage-codex-sidecar.test.mjs",

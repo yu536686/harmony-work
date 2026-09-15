@@ -111,7 +111,7 @@ impl<'a> HarvisClient<'a> {
             context,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(HARVIS_TIMEOUT_SECS))
-                .user_agent("Xiaoheng-WorkBuddy-MCP/1.0")
+                .user_agent("Harmony-Work-MCP/1.0")
                 .build()?,
         })
     }

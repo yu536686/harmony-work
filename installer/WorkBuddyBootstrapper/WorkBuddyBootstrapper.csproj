@@ -7,7 +7,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\src-tauri\icons\icon.ico</ApplicationIcon>
-    <AssemblyName>Xiaoheng-WorkBuddy-Setup</AssemblyName>
+    <AssemblyName>Harmony-Work-Setup</AssemblyName>
     <RootNamespace>WorkBuddyBootstrapper</RootNamespace>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

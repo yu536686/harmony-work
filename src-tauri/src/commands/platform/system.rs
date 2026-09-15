@@ -415,7 +415,7 @@ pub fn collect_system_dependencies(settings: &Settings) -> Vec<SystemDependencyI
             desktop_enabled,
             accessibility.map(|v| format!("System Events returned: {}", v)),
             "Required for controlling other apps via System Events / synthetic input.",
-            Some("Grant Accessibility access to Harmony WorkBuddy / terminal in System Settings → Privacy & Security → Accessibility."),
+            Some("Grant Accessibility access to Harmony Work / terminal in System Settings → Privacy & Security → Accessibility."),
             dependency_action_for_key("macos-accessibility"),
         ));
     }
@@ -572,7 +572,7 @@ pub fn collect_privilege_elevation_checks() -> Vec<PrivilegeElevationCheckItem> 
             true,
             graphical_session.map(|value| format!("Detected display session: {value}")),
             "Graphical privilege prompts require a logged-in desktop session.",
-            Some("Run Harmony WorkBuddy inside a normal desktop session; headless sessions and pure TTY shells cannot show privilege dialogs."),
+            Some("Run Harmony Work inside a normal desktop session; headless sessions and pure TTY shells cannot show privilege dialogs."),
             None,
         ));
 
@@ -583,7 +583,7 @@ pub fn collect_privilege_elevation_checks() -> Vec<PrivilegeElevationCheckItem> 
             true,
             session_bus.map(|value| format!("DBUS_SESSION_BUS_ADDRESS={value}")),
             "Polkit agents rely on the desktop session bus to coordinate authentication prompts.",
-            Some("Start Harmony WorkBuddy from a normal desktop login session so DBUS_SESSION_BUS_ADDRESS is populated."),
+            Some("Start Harmony Work from a normal desktop login session so DBUS_SESSION_BUS_ADDRESS is populated."),
             None,
         ));
     }
@@ -597,7 +597,7 @@ pub fn collect_privilege_elevation_checks() -> Vec<PrivilegeElevationCheckItem> 
             true,
             None,
             "Agent elevation uses AppleScript to trigger the native administrator password dialog.",
-            Some("macOS ships with osascript. If the admin dialog cannot be shown, verify system integrity and run Harmony WorkBuddy from a normal desktop session."),
+            Some("macOS ships with osascript. If the admin dialog cannot be shown, verify system integrity and run Harmony Work from a normal desktop session."),
             None,
         ));
     }

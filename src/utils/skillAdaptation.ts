@@ -34,7 +34,7 @@ export function buildSkillAdaptationPrompt(
         : "OpenAI curated skills market";
 
   if (language === "zh") {
-    return `请作为 Harmony WorkBuddy 的技能适配工程师，对以下来自「${marketLabel}」的技能包进行全面兼容性检查与适应性改写，并直接开始执行（无需等待我确认）。
+    return `请作为 Harmony Work 的技能适配工程师，对以下来自「${marketLabel}」的技能包进行全面兼容性检查与适应性改写，并直接开始执行（无需等待我确认）。
 
 ## 技能包
 - 来源标记：\`${target.sourceTag}\`
@@ -47,7 +47,7 @@ ${skillList}
 ## 你的任务
 1. 使用 \`skill_list\` 查看当前已安装技能，定位上述技能（config 中 source / lifecycle 对应 \`${target.sourceTag}\`）。若尚未安装，先明确提示用户返回技能页点击「安装」后再继续。
 2. 逐个读取对应 SKILL.md 及附属 scripts/references（如有）。
-3. 对照下方「小亨可用工具面」，检查每个技能引用的工具、CLI、平台假设、外部 API 是否与本机 Harmony WorkBuddy 桌面环境兼容。
+3. 对照下方「小亨可用工具面」，检查每个技能引用的工具、CLI、平台假设、外部 API 是否与本机 Harmony Work 桌面环境兼容。
 4. 输出问题清单：工具缺失、平台不符、依赖未满足、Codex/ChatGPT/Claude Code 专有流程无法复现等。
 5. 使用 \`skill_manage\` 对每个技能做适应性改写：保留业务意图，将步骤映射到小亨已有工具；补充 Windows/桌面说明；删除不可执行步骤；更新 frontmatter 的 \`tools\` 字段。
 6. 用 \`plan_todo\` 跟踪「检查 -> 改写 -> 验收」进度；完成后给出简短验收清单（已修复项 + 仍需用户手动配置项）。
@@ -57,11 +57,11 @@ ${toolSurface}
 
 ## 约束
 - 不要删除技能；优先 patch 改写。仅当完全无法适配时才建议卸载并说明原因。
-- 改写后的 SKILL.md 必须符合 Harmony WorkBuddy skill_manage 格式（frontmatter 含 name、description、tools 等）。
+- 改写后的 SKILL.md 必须符合 Harmony Work skill_manage 格式（frontmatter 含 name、description、tools 等）。
 - 不要编造本机不存在的工具或 MCP；缺失能力必须在验收清单中明确标注。`;
   }
 
-  return `Act as a Harmony WorkBuddy skill adaptation engineer. Perform a full compatibility review and adaptive rewrite for the following bundle from the **${marketLabel}**, then start executing immediately (no need to wait for my confirmation).
+  return `Act as a Harmony Work skill adaptation engineer. Perform a full compatibility review and adaptive rewrite for the following bundle from the **${marketLabel}**, then start executing immediately (no need to wait for my confirmation).
 
 ## Bundle
 - Source tag: \`${target.sourceTag}\`
@@ -83,6 +83,6 @@ ${toolSurface}
 
 ## Constraints
 - Do not delete skills unless truly unmappable; prefer patch rewrites.
-- Output SKILL.md must remain valid for Harmony WorkBuddy skill_manage.
+- Output SKILL.md must remain valid for Harmony Work skill_manage.
 - Do not invent tools or MCP servers that are not listed above.`;
 }

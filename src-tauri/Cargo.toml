@@ -38,11 +38,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Shared desktop automation dependencies.
 
 [package]
-name = "xiaoheng-workbuddy"
-version = "1.2.0-alpha.7"
+name = "harmony-work"
+version = "1.3.0-alpha.1"
 autobins = false
-default-run = "xiaoheng-workbuddy"
-description = "Harmony Xiaoheng AI desktop workbench"
+default-run = "harmony-work"
+description = "Harmony Work desktop AI workbench"
 authors = ["Harmony"]
 edition = "2021"
 rust-version = "1.77.2"
@@ -52,7 +52,7 @@ name = "xiaoheng_workbuddy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "xiaoheng-workbuddy"
+name = "harmony-work"
 path = "src/main.rs"
 
 [features]

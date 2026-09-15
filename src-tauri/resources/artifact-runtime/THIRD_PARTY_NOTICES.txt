@@ -1,4 +1,4 @@
-Xiaoheng WorkBuddy Artifact Runtime - Third Party Notices
+Harmony Work Artifact Runtime - Third Party Notices
 =========================================================
 
 This component bundles the following open source packages:

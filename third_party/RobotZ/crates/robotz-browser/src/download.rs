@@ -173,7 +173,7 @@ pub async fn download_chrome_for_testing(dest_dir: &Path) -> Result<PathBuf> {
     info!("Fetching Chrome for Testing version info from API...");
 
     let client = reqwest::Client::builder()
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 

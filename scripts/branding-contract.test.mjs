@@ -33,7 +33,13 @@ async function findLegacyBranding() {
     "src/App.tsx",
     ...(await collectFiles("src/components")),
     ...(await collectFiles("src/i18n")),
+    "index.html",
     "src-tauri/tauri.conf.json",
+    "src-tauri/tauri.windows.conf.json",
+    "src-tauri/src/app/bootstrap.rs",
+    "src-tauri/src/commands/platform/window.rs",
+    "src-tauri/src/codex_runtime/background.rs",
+    "src-tauri/src/codex_runtime/service.rs",
     "installer/WorkBuddyBootstrapper/MainWindow.xaml",
     "installer/WorkBuddyBootstrapper/MainWindow.xaml.cs",
     "installer/WorkBuddyBootstrapper/InstallerEngine.cs",
@@ -43,8 +49,10 @@ async function findLegacyBranding() {
   const forbidden = [
     /小亨\s*WorkBuddy/g,
     /Xiaoheng\s*WorkBuddy/g,
+    /Harmony\s*WorkBuddy/g,
     /github\.com\/yu536686\/xiaoheng-workbuddy/gi,
-    /Xiaoheng-WorkBuddy/gi,
+    /Xiaoheng-WorkBuddy-(?:Setup|<version>)/g,
+    /"mainBinaryName"\s*:\s*"xiaoheng-workbuddy"/g,
     /src=["']\/piscis\.png["']/g,
   ];
   const matches = [];
@@ -55,6 +63,10 @@ async function findLegacyBranding() {
       pattern.lastIndex = 0;
       for (const match of contents.matchAll(pattern)) {
         const line = contents.slice(0, match.index).split(/\r?\n/).length;
+        const sourceLine = contents.split(/\r?\n/)[line - 1] ?? "";
+        if (relativePath.endsWith("InstallerEngine.cs") && sourceLine.includes("Legacy")) {
+          continue;
+        }
         matches.push(`${relativePath}:${line}: ${match[0]}`);
       }
     }

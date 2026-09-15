@@ -69,7 +69,7 @@ pub fn thread_start_params(options: &CodexTurnOptions) -> Value {
         "modelProvider": options.provider,
         "personality": "pragmatic",
         "sandbox": options.sandbox_mode.sandbox(),
-        "threadSource": "xiaoheng-workbuddy"
+        "threadSource": "harmony-work"
     })
 }
 
@@ -147,7 +147,7 @@ mod tests {
             },
             confirm_shell_commands: false,
             confirm_file_writes: true,
-            developer_instructions: Some("你是小亨 WorkBuddy".to_string()),
+            developer_instructions: Some("你是小亨，运行于 Harmony Work".to_string()),
             attachments: vec![
                 CodexAttachment {
                     path: "/work/reference.png".to_string(),

@@ -339,7 +339,7 @@ fn compose_background_prompt(
     extra_context: Option<&str>,
 ) -> String {
     let mut sections = vec![
-        "<workbuddy_runtime_instructions>\n你是小亨 WorkBuddy，是用户的桌面 AI 工作伙伴。始终自称“小亨”，直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。\n</workbuddy_runtime_instructions>".to_string(),
+        "<workbuddy_runtime_instructions>\n你是小亨，运行于 Harmony Work，是用户的桌面 AI 工作伙伴。始终自称“小亨”，直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。\n</workbuddy_runtime_instructions>".to_string(),
         format!("<workbuddy_channel>{channel}</workbuddy_channel>"),
     ];
     if !prior_messages.is_empty() {
@@ -458,7 +458,7 @@ mod tests {
             &[("user".to_string(), "生成报告".to_string())],
             Some("企业微信入站任务"),
         );
-        assert!(prompt.contains("你是小亨 WorkBuddy"));
+        assert!(prompt.contains("你是小亨，运行于 Harmony Work"));
         assert!(prompt.contains("user: 生成报告"));
         assert!(prompt.contains("企业微信入站任务"));
         assert!(prompt.ends_with("继续生成报告"));

@@ -24,8 +24,8 @@ pub struct AppServerIdentity {
 impl AppServerIdentity {
     pub fn b1() -> Self {
         Self {
-            name: "xiaoheng-workbuddy".to_string(),
-            title: "Xiaoheng WorkBuddy".to_string(),
+            name: "harmony-work".to_string(),
+            title: "Harmony Work".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
@@ -346,7 +346,7 @@ mod tests {
             assert_eq!(request["method"], "initialize");
             assert_eq!(
                 request["params"]["clientInfo"]["name"],
-                "xiaoheng-workbuddy"
+                "harmony-work"
             );
             server_writer
                 .write_all(

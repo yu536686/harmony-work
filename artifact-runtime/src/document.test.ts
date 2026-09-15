@@ -13,7 +13,7 @@ test("creates a verified DOCX from structured sections", async () => {
     path,
     title: "季度工作简报",
     subtitle: "结构化 Artifact Runtime",
-    author: "小亨 WorkBuddy",
+    author: "Harmony Work",
     sections: [
       {
         heading: "核心结论",

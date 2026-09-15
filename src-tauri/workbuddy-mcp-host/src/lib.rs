@@ -114,7 +114,7 @@ fn initialize_result(request: &Value) -> Value {
         },
         "serverInfo": {
             "name": "workbuddy-mcp-host",
-            "title": "Xiaoheng WorkBuddy MCP Host",
+            "title": "Harmony Work MCP Host",
             "version": env!("CARGO_PKG_VERSION")
         }
     })

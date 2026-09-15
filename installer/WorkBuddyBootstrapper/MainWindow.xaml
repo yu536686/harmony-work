@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="安装小亨 WorkBuddy" Height="700" Width="520" MinHeight="700" MinWidth="520"
+        Title="安装 Harmony Work" Height="700" Width="520" MinHeight="700" MinWidth="520"
         WindowStyle="None" ResizeMode="NoResize" Background="#FFFDFCFB" FontFamily="Microsoft YaHei UI">
   <shell:WindowChrome.WindowChrome>
     <shell:WindowChrome CaptionHeight="44" CornerRadius="16" GlassFrameThickness="0" ResizeBorderThickness="0" />
@@ -15,7 +15,7 @@
       </Grid.RowDefinitions>
 
       <Grid Grid.Row="0" Margin="18,0,14,0">
-        <TextBlock VerticalAlignment="Center" Foreground="#78716B" FontSize="12" Text="小亨 WorkBuddy 安装器" />
+        <TextBlock VerticalAlignment="Center" Foreground="#78716B" FontSize="12" Text="Harmony Work 安装器" />
         <Button HorizontalAlignment="Right" Width="28" Height="28" BorderThickness="0" Background="Transparent"
                 Foreground="#9A948D" FontSize="18" Content="×" Click="Close_Click" />
       </Grid>
@@ -30,7 +30,7 @@
           <Border Width="96" Height="96" CornerRadius="25" Background="#FFF8EE" BorderBrush="#F0E5D3" BorderThickness="1" HorizontalAlignment="Center">
             <Image Source="pack://application:,,,/Assets/brand.png" Stretch="Uniform" Margin="14" />
           </Border>
-          <TextBlock Margin="0,18,0,0" HorizontalAlignment="Center" FontSize="29" FontWeight="SemiBold" Foreground="#1F1D1A" Text="小亨 WorkBuddy" />
+          <TextBlock Margin="0,18,0,0" HorizontalAlignment="Center" FontSize="29" FontWeight="SemiBold" Foreground="#1F1D1A" Text="Harmony Work" />
           <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="14" Foreground="#77716C" Text="让创作、协作与执行在一个工作台完成" />
 
           <Border x:Name="StatusPanel" Margin="0,30,0,0" Padding="16" Background="#FAF8F5" CornerRadius="10" Visibility="Visible">

@@ -3,12 +3,16 @@ param(
   [string]$OutputDirectory = (Join-Path $PSScriptRoot "..\release\full"),
   [switch]$SkipDownload,
   [switch]$SkipTauriBuild,
-  [string]$InnerInstaller
+  [string]$InnerInstaller,
+  [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+  $Version = (Get-Content -Raw (Join-Path $ProjectRoot "package.json") | ConvertFrom-Json).version
+}
 
 if (-not $SkipDownload) {
   # A cached fetch may not launch a native process, so reset any exit code
@@ -55,8 +59,14 @@ dotnet publish (Join-Path $ProjectRoot "installer\WorkBuddyBootstrapper\WorkBudd
   -r win-x64 `
   -p:PayloadDirectory="$(Join-Path $ProjectRoot 'installer\.build\payload')" `
   -p:PayloadArchive="$PayloadArchive" `
-  -p:Version="1.2.0-alpha.7" `
+  -p:Version="$Version" `
   -o $OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw "WPF bootstrapper publish failed." }
 
-Write-Host "Full offline installer: $(Join-Path $OutputDirectory 'Xiaoheng-WorkBuddy-Setup.exe')" -ForegroundColor Green
+$PublishedInstaller = Join-Path $OutputDirectory "Harmony-Work-Setup.exe"
+$FinalInstaller = Join-Path $OutputDirectory "Harmony-Work-$Version-x64-setup.exe"
+if (-not (Test-Path -LiteralPath $PublishedInstaller)) {
+  throw "Published bootstrapper not found: $PublishedInstaller"
+}
+Copy-Item -LiteralPath $PublishedInstaller -Destination $FinalInstaller -Force
+Write-Host "Full offline installer: $FinalInstaller" -ForegroundColor Green

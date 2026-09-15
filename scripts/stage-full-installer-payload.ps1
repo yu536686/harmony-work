@@ -15,7 +15,7 @@ Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination "app"), (Join-Path $Destination "runtime") | Out-Null
 $Destination = [System.IO.Path]::GetFullPath($Destination)
 
-Copy-Item -LiteralPath $InnerInstaller -Destination (Join-Path $Destination "app\xiaoheng-workbuddy-setup.exe")
+Copy-Item -LiteralPath $InnerInstaller -Destination (Join-Path $Destination "app\harmony-work-setup.exe")
 foreach ($Property in $Lock.components.PSObject.Properties) {
   $Source = Join-Path $PayloadCache "runtime\$($Property.Value.fileName)"
   if (-not (Test-Path -LiteralPath $Source)) { throw "Missing pinned runtime: $Source" }

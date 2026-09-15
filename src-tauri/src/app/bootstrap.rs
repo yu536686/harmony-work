@@ -1064,7 +1064,7 @@ fn run_impl() {
                         MenuItem::with_id(
                             &app_handle,
                             "tray_quit",
-                            "退出小亨 WorkBuddy",
+                            "退出 Harmony Work",
                             true,
                             None::<&str>,
                         ),
@@ -1075,11 +1075,11 @@ fn run_impl() {
                             }
                         }
                     }
-                    let _ = tray.set_tooltip(Some("小亨 WorkBuddy"));
+                    let _ = tray.set_tooltip(Some("Harmony Work"));
                 }
             }
 
-            info!("Harmony WorkBuddy started");
+            info!("Harmony Work started");
 
             #[cfg(debug_assertions)]
             {
@@ -1446,7 +1446,7 @@ fn run_impl() {
             commands::platform::window::set_window_theme_border,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Harmony WorkBuddy Desktop");
+        .expect("error while running Harmony Work Desktop");
 }
 
 #[cfg(test)]

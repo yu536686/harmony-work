@@ -1,19 +1,19 @@
 <div align="center">
 
-<img src="src-tauri/icons/icon.png" width="128" height="128" alt="小亨 WorkBuddy Logo">
+<img src="src-tauri/icons/icon.png" width="128" height="128" alt="Harmony Work Logo">
 
-# 小亨 WorkBuddy
+# Harmony Work
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.2.0--alpha.4-C69A55?style=flat-square)](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.4)
+[![Version](https://img.shields.io/badge/version-1.3.0--alpha.1-C69A55?style=flat-square)](https://github.com/yu536686/harmony-work/releases/tag/v1.3.0-alpha.1)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
-[下载 Windows 版](https://github.com/yu536686/xiaoheng-workbuddy/releases/latest) · [功能概览](#功能概览) · [安装与配置](#windows-安装) · [源码构建](#从源码构建) · [问题排查](#常见问题)
+[下载 Windows 版](https://github.com/yu536686/harmony-work/releases/latest) · [功能概览](#功能概览) · [安装与配置](#windows-安装) · [源码构建](#从源码构建) · [问题排查](#常见问题)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## 项目简介
 
-小亨 WorkBuddy 是一款面向 Windows 的桌面 AI Agent 工作台。它将对话、项目、任务、文件、长期记忆、技能、创作工具、办公文档和即时通讯整合到同一套工作流中，让模型能够理解目标、调用工具、请求批准、持续执行并交付可下载的成果。
+Harmony Work 是一款面向 Windows 的桌面 AI Agent 工作台。它将对话、项目、任务、文件、长期记忆、技能、创作工具、办公文档和即时通讯整合到同一套工作流中，让模型能够理解目标、调用工具、请求批准、持续执行并交付可下载的成果。
 
 主会话由 **Codex app-server** 驱动，无人值守任务通过 **Codex exec** 执行；Harvis、Office、技能、记忆、IM、StaffDeck 等业务能力由独立的 **WorkBuddy MCP Host** 提供。界面继续负责项目与会话管理、Todo、活动记录、权限审批和成果展示。
 
@@ -81,20 +81,20 @@ flowchart LR
 
 ### 全量离线安装包
 
-发行流程同时生成 `Xiaoheng-WorkBuddy-Setup.exe`。它使用原生 WPF 安装界面，内置离线 WebView2、Node.js、Python、PortableGit、WeCom CLI 和 Harmony Cut 的 Python 依赖；安装后这些运行时仅位于 WorkBuddy 私有目录，不会改写系统 PATH。企业微信 `auth init`、账号登录和 AI 密钥仍需由当前用户在首次启动后完成。
+发行流程同时生成 `Harmony-Work-1.3.0-alpha.1-x64-setup.exe`。它使用原生 WPF 安装界面，内置离线 WebView2、Node.js、Python、PortableGit、WeCom CLI 和 Harmony Cut 的 Python 依赖；安装后这些运行时仅位于 WorkBuddy 私有目录，不会改写系统 PATH。企业微信 `auth init`、账号登录和 AI 密钥仍需由当前用户在首次启动后完成。
 
 ### 1. 下载安装包
 
-进入 [Releases](https://github.com/yu536686/xiaoheng-workbuddy/releases) 页面，下载最新的 Windows x64 安装包：
+进入 [Releases](https://github.com/yu536686/harmony-work/releases) 页面，下载最新的 Windows x64 安装包：
 
 ```text
-Xiaoheng-WorkBuddy-<version>-x64-setup.exe
+Harmony-Work-<version>-x64-setup.exe
 ```
 
 需要核对文件完整性时，在安装包所在目录运行：
 
 ```powershell
-Get-FileHash .\Xiaoheng-WorkBuddy-<version>-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
 将输出与对应 Release 中公布的 SHA-256 摘要比较。
@@ -187,8 +187,8 @@ API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。�
 仓库当前为私有项目，拉取前需要具有访问权限并完成 GitHub 登录：
 
 ```powershell
-git clone https://github.com/yu536686/xiaoheng-workbuddy.git
-cd xiaoheng-workbuddy
+git clone https://github.com/yu536686/harmony-work.git
+cd harmony-work
 git switch main
 ```
 
@@ -234,8 +234,8 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 Windows 安装包在受控的 Windows 构建机上生成并验证后，再上传至 GitHub Release。发布示例：
 
 ```powershell
-git tag -a v1.2.0-alpha.4 -m "小亨 WorkBuddy 1.2.0 Alpha 4"
-git push origin v1.2.0-alpha.4
+git tag -a v1.3.0-alpha.1 -m "Harmony Work 1.3.0 Alpha 1"
+git push origin v1.3.0-alpha.1
 ```
 
 ## 路线图
@@ -249,7 +249,7 @@ git push origin v1.2.0-alpha.4
 ## 项目结构
 
 ```text
-xiaoheng-workbuddy/
+harmony-work/
 ├─ src/                              React 桌面界面与状态管理
 ├─ src-tauri/                        Tauri / Rust 应用宿主
 │  └─ workbuddy-mcp-host/            WorkBuddy 业务 MCP Host
@@ -318,13 +318,13 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.2.0-alpha.4`](https://github.com/yu536686/xiaoheng-workbuddy/releases/tag/v1.2.0-alpha.4)
-- 问题反馈：[GitHub Issues](https://github.com/yu536686/xiaoheng-workbuddy/issues)
+- 当前版本：[`v1.3.0-alpha.1`](https://github.com/yu536686/harmony-work/releases/tag/v1.3.0-alpha.1)
+- 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---
 
 <div align="center">
 
-**小亨 WorkBuddy · Codex-powered desktop AI work assistant**
+**Harmony Work · Codex-powered desktop AI work assistant**
 
 </div>

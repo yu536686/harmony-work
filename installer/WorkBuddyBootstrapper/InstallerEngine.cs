@@ -24,12 +24,33 @@ public sealed record InstallProgress(int Percent, string Title, string Detail);
 
 public sealed class InstallerEngine
 {
-    private const string ProductName = "小亨 WorkBuddy";
+    private const string ProductName = "Harmony Work";
+    private const string ApplicationExecutable = "harmony-work.exe";
+    private const string LegacyProductName = "小亨 WorkBuddy";
+    private const string LegacyRunValueName = "Harmony WorkBuddy";
+    private const string LegacyApplicationExecutable = "xiaoheng-workbuddy.exe";
+    private const string InnerInstallerName = "harmony-work-setup.exe";
     private readonly string _runtimeRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Harmony",
         "WorkBuddy",
         "runtime");
+
+    public static string ResolveDefaultInstallDirectory()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programs = Path.Combine(localAppData, "Programs");
+        var preferred = Path.Combine(programs, ProductName);
+        var existingCandidates = new[] {
+            preferred,
+            Path.Combine(programs, LegacyProductName),
+            Path.Combine(localAppData, "xiaoheng-workbuddy"),
+        };
+
+        return existingCandidates.FirstOrDefault(path =>
+            File.Exists(Path.Combine(path, ApplicationExecutable)) ||
+            File.Exists(Path.Combine(path, LegacyApplicationExecutable))) ?? preferred;
+    }
 
     public async Task<string> InstallAsync(
         InstallerOptions options,
@@ -55,10 +76,10 @@ public sealed class InstallerEngine
         progress.Report(new(64, "正在配置必要组件", ""));
         if (!HasWeComCliRuntime()) InstallWeComCli(payloadRoot);
 
-        progress.Report(new(78, "正在安装小亨 WorkBuddy", ""));
+        progress.Report(new(78, "正在安装 Harmony Work", ""));
         await InstallApplicationAsync(payloadRoot, options.InstallDirectory, cancellationToken);
 
-        var applicationPath = Path.Combine(options.InstallDirectory, "xiaoheng-workbuddy.exe");
+        var applicationPath = Path.Combine(options.InstallDirectory, ApplicationExecutable);
         if (!File.Exists(applicationPath)) {
             throw new InvalidOperationException($"主程序安装完成后未找到：{applicationPath}");
         }
@@ -251,13 +272,14 @@ public sealed class InstallerEngine
     private static async Task InstallApplicationAsync(string payloadRoot, string installDirectory, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(installDirectory);
-        var installer = PayloadPath(payloadRoot, "app", "xiaoheng-workbuddy-setup.exe");
+        var installer = PayloadPath(payloadRoot, "app", InnerInstallerName);
         // NSIS /D 必须是最后一个参数，且值不能加引号（即使路径含空格）
         await RunProcessAsync(installer, $"/S /D={installDirectory}", cancellationToken);
     }
 
     private static void ConfigureShortcuts(string appPath, InstallerOptions options)
     {
+        RemoveLegacyShortcuts();
         if (options.CreateDesktopShortcut) {
             CreateShortcut(Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
@@ -273,10 +295,24 @@ public sealed class InstallerEngine
         using var run = Registry.CurrentUser.OpenSubKey(
             "Software\\Microsoft\\Windows\\CurrentVersion\\Run", writable: true);
         if (options.StartWithWindows) {
-            run?.SetValue("Harmony WorkBuddy", $"\"{appPath}\"");
+            run?.SetValue(ProductName, $"\"{appPath}\"");
         } else {
-            run?.DeleteValue("Harmony WorkBuddy", throwOnMissingValue: false);
+            run?.DeleteValue(ProductName, throwOnMissingValue: false);
         }
+        run?.DeleteValue(LegacyRunValueName, throwOnMissingValue: false);
+    }
+
+    private static void RemoveLegacyShortcuts()
+    {
+        var legacyDesktop = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            $"{LegacyProductName}.lnk");
+        if (File.Exists(legacyDesktop)) File.Delete(legacyDesktop);
+
+        var legacyStartMenu = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+            LegacyProductName);
+        DeleteDirectory(legacyStartMenu);
     }
 
     private static void CreateShortcut(string shortcutPath, string targetPath)

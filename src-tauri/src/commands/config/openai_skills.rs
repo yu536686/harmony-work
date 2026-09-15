@@ -243,7 +243,7 @@ pub async fn openai_skills_list(
     let limit = limit.unwrap_or(60).min(120) as usize;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -287,7 +287,7 @@ pub async fn openai_skills_list(
 pub async fn openai_skills_detail(skill_id: String) -> Result<OpenAISkillDetail, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -323,7 +323,7 @@ pub async fn openai_skills_install(
 ) -> Result<OpenAISkillInstallResult, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        .user_agent("Xiaoheng-WorkBuddy/1.0")
+        .user_agent("Harmony-Work/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 
