@@ -24,10 +24,23 @@ pub enum WorkBuddyEvent {
     TextDelta {
         delta: String,
     },
+    ReasoningSummaryStart {
+        id: String,
+        summary_index: u32,
+    },
+    ReasoningSummaryDelta {
+        id: String,
+        summary_index: u32,
+        delta: String,
+    },
     ToolStart {
         id: String,
         name: String,
         input: Value,
+    },
+    ToolOutputDelta {
+        id: String,
+        delta: String,
     },
     ToolEnd {
         id: String,
@@ -90,6 +103,43 @@ impl CodexEventAdapter {
                     }]
                 })
                 .unwrap_or_default(),
+            "item/reasoning/summaryPartAdded" => {
+                let Some(id) = string_field(&notification.params, "itemId") else {
+                    return Vec::new();
+                };
+                vec![WorkBuddyEvent::ReasoningSummaryStart {
+                    id: id.to_string(),
+                    summary_index: u32_field(&notification.params, "summaryIndex"),
+                }]
+            }
+            "item/reasoning/summaryTextDelta" => {
+                let Some(id) = string_field(&notification.params, "itemId") else {
+                    return Vec::new();
+                };
+                let Some(delta) = string_field(&notification.params, "delta") else {
+                    return Vec::new();
+                };
+                vec![WorkBuddyEvent::ReasoningSummaryDelta {
+                    id: id.to_string(),
+                    summary_index: u32_field(&notification.params, "summaryIndex"),
+                    delta: sanitize_text(delta),
+                }]
+            }
+            // Codex raw reasoning is private model state. Harmony Work only exposes
+            // the public summary stream above.
+            "item/reasoning/textDelta" => Vec::new(),
+            "item/commandExecution/outputDelta" => {
+                let Some(id) = string_field(&notification.params, "itemId") else {
+                    return Vec::new();
+                };
+                let Some(delta) = string_field(&notification.params, "delta") else {
+                    return Vec::new();
+                };
+                vec![WorkBuddyEvent::ToolOutputDelta {
+                    id: id.to_string(),
+                    delta: sanitize_text(delta),
+                }]
+            }
             "item/started" => self.item_started(&notification.params),
             "item/completed" => self.item_completed(&notification.params),
             "turn/plan/updated" => self.plan_updated(&notification.params),
@@ -105,18 +155,19 @@ impl CodexEventAdapter {
             "item/fileChange/requestApproval" => "apply_patch",
             _ => return None,
         };
-        let description = request
-            .params
-            .get("reason")
-            .and_then(Value::as_str)
-            .or_else(|| request.params.get("command").and_then(Value::as_str))
-            .unwrap_or("需要用户批准后继续执行")
-            .to_string();
+        let description = sanitize_text(
+            request
+                .params
+                .get("reason")
+                .and_then(Value::as_str)
+                .or_else(|| request.params.get("command").and_then(Value::as_str))
+                .unwrap_or("需要用户批准后继续执行"),
+        );
 
         Some(WorkBuddyEvent::PermissionRequest {
             request_id: value_id(&request.id),
             tool_name: tool_name.to_string(),
-            tool_input: request.params.clone(),
+            tool_input: sanitize_value(&request.params),
             description,
         })
     }
@@ -147,7 +198,7 @@ impl CodexEventAdapter {
         vec![WorkBuddyEvent::ToolStart {
             id,
             name,
-            input: item.clone(),
+            input: sanitize_value(item),
         }]
     }
 
@@ -169,8 +220,8 @@ impl CodexEventAdapter {
         let result = item
             .get("aggregatedOutput")
             .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| item.to_string());
+            .map(sanitize_text)
+            .unwrap_or_else(|| sanitize_text(&sanitize_value(item).to_string()));
         vec![WorkBuddyEvent::ToolEnd {
             id,
             name,
@@ -299,6 +350,128 @@ fn u32_field(value: &Value, key: &str) -> u32 {
         .min(u32::MAX as u64) as u32
 }
 
+const MAX_EVENT_TEXT_BYTES: usize = 12_000;
+const REDACTED: &str = "[REDACTED]";
+const TRUNCATED: &str = "\n[TRUNCATED]";
+
+fn sanitize_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let value = if is_sensitive_key(key) {
+                        Value::String(REDACTED.to_string())
+                    } else {
+                        sanitize_value(value)
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(sanitize_value).collect()),
+        Value::String(text) => Value::String(sanitize_text(text)),
+        _ => value.clone(),
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "apikey"
+            | "authorization"
+            | "accesstoken"
+            | "refreshtoken"
+            | "token"
+            | "secret"
+            | "clientsecret"
+            | "password"
+            | "passwd"
+            | "cookie"
+            | "setcookie"
+            | "privatekey"
+    )
+}
+
+fn sanitize_text(text: &str) -> String {
+    let normalized = strip_ansi_and_controls(text)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let redacted = normalized
+        .lines()
+        .map(redact_sensitive_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    truncate_utf8(&redacted, MAX_EVENT_TEXT_BYTES)
+}
+
+fn strip_ansi_and_controls(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{001b}' {
+            if chars.next_if_eq(&'[').is_some() {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if !ch.is_control() || matches!(ch, '\n' | '\r' | '\t') {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn redact_sensitive_line(line: &str) -> String {
+    let lower = line.to_ascii_lowercase();
+    const MARKERS: [&str; 8] = [
+        "api_key=",
+        "api-key=",
+        "apikey=",
+        "access_token=",
+        "access-token=",
+        "authorization=",
+        "authorization:",
+        "bearer ",
+    ];
+    for marker in MARKERS {
+        if let Some(index) = lower.find(marker) {
+            let value_start = index + marker.len();
+            return format!(
+                "{}{}{}",
+                &line[..index],
+                &line[index..value_start],
+                REDACTED
+            );
+        }
+    }
+    line.to_string()
+}
+
+fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let content_bytes = max_bytes.saturating_sub(TRUNCATED.len());
+    let mut boundary = content_bytes.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let mut output = String::with_capacity(max_bytes);
+    output.push_str(&text[..boundary]);
+    output.push_str(TRUNCATED);
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +492,92 @@ mod tests {
                 delta: "你好".into()
             }]
         );
+    }
+
+    #[test]
+    fn streams_reasoning_summary_but_drops_raw_reasoning() {
+        let mut adapter = CodexEventAdapter::default();
+        let summary_start = adapter.adapt_notification(&RpcNotification {
+            method: "item/reasoning/summaryPartAdded".to_string(),
+            params: json!({"itemId":"reasoning-1","summaryIndex":0}),
+        });
+        let summary_delta = adapter.adapt_notification(&RpcNotification {
+            method: "item/reasoning/summaryTextDelta".to_string(),
+            params: json!({"itemId":"reasoning-1","summaryIndex":0,"delta":"正在核对素材"}),
+        });
+        let raw = adapter.adapt_notification(&RpcNotification {
+            method: "item/reasoning/textDelta".to_string(),
+            params: json!({"itemId":"reasoning-1","contentIndex":0,"delta":"hidden chain of thought"}),
+        });
+
+        assert_eq!(
+            summary_start,
+            vec![WorkBuddyEvent::ReasoningSummaryStart {
+                id: "reasoning-1".into(),
+                summary_index: 0,
+            }]
+        );
+        assert_eq!(
+            summary_delta,
+            vec![WorkBuddyEvent::ReasoningSummaryDelta {
+                id: "reasoning-1".into(),
+                summary_index: 0,
+                delta: "正在核对素材".into(),
+            }]
+        );
+        assert!(raw.is_empty());
+    }
+
+    #[test]
+    fn cleans_streaming_command_output() {
+        let mut adapter = CodexEventAdapter::default();
+        let events = adapter.adapt_notification(&RpcNotification {
+            method: "item/commandExecution/outputDelta".to_string(),
+            params: json!({
+                "itemId":"cmd-1",
+                "delta":"\u{001b}[32mok\u{001b}[0m\r\napi_key=top-secret"
+            }),
+        });
+
+        assert_eq!(
+            events,
+            vec![WorkBuddyEvent::ToolOutputDelta {
+                id: "cmd-1".into(),
+                delta: "ok\napi_key=[REDACTED]".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn redacts_sensitive_tool_fields_and_limits_output() {
+        let mut adapter = CodexEventAdapter::default();
+        let completed = adapter.adapt_notification(&RpcNotification {
+            method: "item/completed".to_string(),
+            params: json!({
+                "item": {
+                    "id":"mcp-1",
+                    "type":"mcpToolCall",
+                    "tool":"publish",
+                    "status":"completed",
+                    "arguments": {
+                        "api_key":"input-secret",
+                        "nested":{"authorization":"Bearer nested-secret"}
+                    },
+                    "result": {
+                        "content":"x".repeat(30_000),
+                        "access_token":"result-secret"
+                    }
+                }
+            }),
+        });
+        let serialized = serde_json::to_string(&completed).expect("serialize events");
+
+        assert!(!serialized.contains("input-secret"));
+        assert!(!serialized.contains("nested-secret"));
+        assert!(!serialized.contains("result-secret"));
+        assert!(serialized.contains("[REDACTED]"));
+        assert!(serialized.contains("[TRUNCATED]"));
+        assert!(serialized.len() < 20_000);
     }
 
     #[test]

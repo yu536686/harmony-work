@@ -66,6 +66,14 @@
 
 ## 最近检查点
 
+### 2026-09-15：Codex 公开执行事件与脱敏
+
+- 新增公开思考摘要开始/增量事件和命令输出增量事件，保持既有 `agent_event_<sessionId>` IPC 通道不变。
+- `item/reasoning/summaryPartAdded` 与 `summaryTextDelta` 可进入前端；`item/reasoning/textDelta` 明确丢弃，不向 UI 暴露模型原始推理。
+- 工具输入、审批参数、命令增量和工具结果统一执行递归敏感字段脱敏、ANSI/控制字符清理与 UTF-8 安全限长。
+- 远端 Windows 验证：`codex_runtime::event_adapter` 8/8 通过；`src/services/tauri/tauri.test.ts` 23/23 通过；定向 `rustfmt --check` 通过。
+- 全仓 `cargo fmt --check` 仍会报告既有未格式化文件，本检查点仅格式化本次修改的事件适配器，避免无关改动。
+
 ### 2026-09-15：Windows 发行品牌与版本
 
 - 版本统一为 `1.3.0-alpha.1`，npm、Cargo、Tauri 与 WPF Bootstrapper 的产品名、可执行文件名和安装包名统一为 Harmony Work。
@@ -106,7 +114,7 @@
 
 ## 当前下一步
 
-阶段 2 进行中：扩展 Codex app-server 公共执行事件，屏蔽原始推理，完成工具输出脱敏和前端事件类型契约。
+阶段 2 进行中：持久化结构化执行历史与消息批注上下文，为时间线重建和成果修改闭环提供数据基础。
 
 ## 验证证据
 

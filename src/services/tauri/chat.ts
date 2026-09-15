@@ -98,7 +98,10 @@ export type AgentEventType =
   | { type: "run_status"; iteration: number; phase: "thinking" | "executing_tools" | "retrying" | "closing"; detail: string }
   | { type: "text_segment_start"; iteration: number }
   | { type: "text_delta"; delta: string }
+  | { type: "reasoning_summary_start"; id: string; summary_index: number }
+  | { type: "reasoning_summary_delta"; id: string; summary_index: number; delta: string }
   | { type: "tool_start"; id: string; name: string; input: unknown }
+  | { type: "tool_output_delta"; id: string; delta: string }
   | { type: "tool_end"; id: string; name: string; result: string; is_error: boolean }
   | { type: "message_commit"; message: unknown }
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }

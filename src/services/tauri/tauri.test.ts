@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { settingsApi, sessionsApi, chatApi, skillsApi, schedulerApi, memoryApi, auditApi } from ".";
+import type { AgentEventType } from "./chat";
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -85,6 +87,34 @@ describe("chatApi", () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.cancel("sess1");
     expect(mockInvoke).toHaveBeenCalledWith("codex_chat_cancel", { sessionId: "sess1" });
+  });
+
+  it("keeps public execution events on the session-scoped agent channel", async () => {
+    const publicEvents: AgentEventType[] = [
+      { type: "reasoning_summary_start", id: "reasoning-1", summary_index: 0 },
+      {
+        type: "reasoning_summary_delta",
+        id: "reasoning-1",
+        summary_index: 0,
+        delta: "正在核对素材",
+      },
+      { type: "tool_output_delta", id: "command-1", delta: "读取 2 个文件" },
+    ];
+    const handler = vi.fn();
+    const mockListen = vi.mocked(listen);
+    mockListen.mockResolvedValueOnce(() => {});
+
+    await chatApi.onEvent("sess1", handler);
+    const registered = mockListen.mock.calls.at(-1);
+    expect(registered?.[0]).toBe("agent_event_sess1");
+
+    const listener = registered?.[1] as ((event: { payload: AgentEventType }) => void) | undefined;
+    publicEvents.forEach((event) => listener?.({ payload: event }));
+    expect(handler.mock.calls.map(([event]) => event.type)).toEqual([
+      "reasoning_summary_start",
+      "reasoning_summary_delta",
+      "tool_output_delta",
+    ]);
   });
 });
 
