@@ -127,6 +127,22 @@ describe("WorkbenchPanel", () => {
     }));
   });
 
+  it("does not accept new annotations while the current turn is running", async () => {
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={execution}
+        running
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "浏览器" }));
+    expect(screen.getByRole("button", { name: "批注页面" })).toBeDisabled();
+  });
+
   it("关闭按钮保持为明确命令", async () => {
     const onClose = vi.fn();
     render(

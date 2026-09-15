@@ -210,8 +210,9 @@ export default function AnnotationLayer({
             onChange={(event) => setComment(event.target.value)}
             placeholder={t("chat.annotationPlaceholder")}
             maxLength={2000}
+            disabled={!enabled}
           />
-          <button type="button" className="annotation-stage-button" disabled={!comment.trim()} onClick={stage}>
+          <button type="button" className="annotation-stage-button" disabled={!enabled || !comment.trim()} onClick={stage}>
             {t("chat.annotationStage")}
           </button>
         </div>

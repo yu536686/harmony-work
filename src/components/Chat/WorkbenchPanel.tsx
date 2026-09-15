@@ -178,7 +178,7 @@ export default function WorkbenchPanel({
                   <ArtifactPreview
                     sessionId={sessionId}
                     artifact={selectedArtifact}
-                    annotationMode={annotationMode}
+                    annotationMode={annotationMode && !running}
                     annotations={annotations}
                     focusedAnnotationId={focusedAnnotationId}
                     onStageAnnotation={onStageAnnotation}
@@ -249,6 +249,7 @@ export default function WorkbenchPanel({
                           onChange={(event) => setBrowserComment(event.target.value)}
                           placeholder={t("chat.annotationPlaceholder")}
                           maxLength={2000}
+                          disabled={running}
                         />
                         <div>
                           <button
@@ -265,7 +266,7 @@ export default function WorkbenchPanel({
                           <button
                             type="button"
                             className="workbench-primary-command"
-                            disabled={!browserComment.trim()}
+                            disabled={running || !browserComment.trim()}
                             onClick={() => {
                               onStageAnnotation({
                                 id: browserCommentAnnotationId ?? globalThis.crypto?.randomUUID?.() ?? `annotation-${Date.now()}`,
