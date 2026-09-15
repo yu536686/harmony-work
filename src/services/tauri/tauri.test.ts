@@ -107,8 +107,24 @@ describe("chatApi", () => {
       personaKoiId: null,
       modelOverride: null,
       userContext: null,
+      commentContexts: null,
       clearPlan: true,
     });
+  });
+
+  it("send() includes structured artifact comments separately from visible text", async () => {
+    mockInvoke.mockResolvedValueOnce(null);
+    const comments = [{
+      id: "annotation-1",
+      target: { type: "artifact" as const, id: "artifact-1", title: "方案.pptx", uri: "E:/work/方案.pptx" },
+      selection: { type: "point" as const, page: 1, x: 0.3, y: 0.4 },
+      comment: "标题缩小",
+    }];
+    await chatApi.send("sess1", "按批注修改", { commentContexts: comments });
+    expect(mockInvoke).toHaveBeenCalledWith("codex_chat_send", expect.objectContaining({
+      content: "按批注修改",
+      commentContexts: comments,
+    }));
   });
 
   it("cancel() interrupts the active Codex turn by WorkBuddy session id", async () => {

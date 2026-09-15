@@ -7,12 +7,14 @@ import {
   FileText,
   Globe2,
   ListChecks,
+  MessageSquarePlus,
   PanelRightClose,
   TerminalSquare,
 } from "lucide-react";
 import type { SessionArtifact } from "../../services/tauri";
 import type { ExecutionStep, TurnExecutionModel } from "./execution/types";
 import ArtifactPreview from "./ArtifactPreview";
+import type { WorkbenchAnnotation } from "./annotation/types";
 import "./ConversationExperience.css";
 
 type WorkbenchTab = "artifacts" | "summary" | "browser" | "terminal";
@@ -22,6 +24,10 @@ interface WorkbenchPanelProps {
   sessionId: string;
   artifacts: SessionArtifact[];
   execution: TurnExecutionModel | null;
+  annotations?: WorkbenchAnnotation[];
+  focusedAnnotationId?: string | null;
+  running?: boolean;
+  onStageAnnotation?: (annotation: WorkbenchAnnotation) => void;
   onClose: () => void;
 }
 
@@ -53,11 +59,19 @@ export default function WorkbenchPanel({
   sessionId,
   artifacts,
   execution,
+  annotations = [],
+  focusedAnnotationId,
+  running = false,
+  onStageAnnotation = () => {},
   onClose,
 }: WorkbenchPanelProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("artifacts");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [browserCommentStepId, setBrowserCommentStepId] = useState<string | null>(null);
+  const [browserCommentAnnotationId, setBrowserCommentAnnotationId] = useState<string | null>(null);
+  const [browserComment, setBrowserComment] = useState("");
 
   useEffect(() => {
     if (artifacts.length === 0) {
@@ -69,6 +83,22 @@ export default function WorkbenchPanel({
     }
   }, [artifacts, selectedArtifactId]);
 
+  useEffect(() => {
+    if (!focusedAnnotationId) return;
+    const annotation = annotations.find((item) => item.id === focusedAnnotationId);
+    if (!annotation) return;
+    if (annotation.target.type === "browser") {
+      setActiveTab("browser");
+      setBrowserCommentStepId(annotation.target.id);
+      setBrowserCommentAnnotationId(annotation.id);
+      setBrowserComment(annotation.comment);
+      return;
+    }
+    setActiveTab("artifacts");
+    setSelectedArtifactId(annotation.target.id);
+    setAnnotationMode(true);
+  }, [annotations, focusedAnnotationId]);
+
   const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
   const browserSteps = useMemo(() => execution?.steps.filter(isBrowserStep) ?? [], [execution]);
   const terminalSteps = useMemo(() => execution?.steps.filter(isTerminalStep) ?? [], [execution]);
@@ -79,9 +109,23 @@ export default function WorkbenchPanel({
     <aside className="workbench-panel" aria-label={t("chat.workbenchTitle")}>
       <header className="workbench-header">
         <strong>{t("chat.workbenchTitle")}</strong>
-        <button type="button" className="workbench-icon-button" onClick={onClose} aria-label={t("chat.workbenchClose")} title={t("chat.workbenchClose")}>
-          <PanelRightClose size={17} />
-        </button>
+        <div className="workbench-header-actions">
+          {activeTab === "artifacts" && selectedArtifact && (
+            <button
+              type="button"
+              className={`workbench-annotation-toggle${annotationMode ? " active" : ""}`}
+              onClick={() => setAnnotationMode((active) => !active)}
+              aria-pressed={annotationMode}
+              disabled={running}
+            >
+              <MessageSquarePlus size={14} />
+              <span>{annotationMode ? t("chat.annotationActive") : t("chat.annotationStart")}</span>
+            </button>
+          )}
+          <button type="button" className="workbench-icon-button" onClick={onClose} aria-label={t("chat.workbenchClose")} title={t("chat.workbenchClose")}>
+            <PanelRightClose size={17} />
+          </button>
+        </div>
       </header>
 
       <div className="workbench-tabs" role="tablist" aria-label={t("chat.workbenchViews")}>
@@ -131,7 +175,15 @@ export default function WorkbenchPanel({
                       </button>
                     )}
                   </div>
-                  <ArtifactPreview sessionId={sessionId} artifact={selectedArtifact} />
+                  <ArtifactPreview
+                    sessionId={sessionId}
+                    artifact={selectedArtifact}
+                    annotationMode={annotationMode}
+                    annotations={annotations}
+                    focusedAnnotationId={focusedAnnotationId}
+                    onStageAnnotation={onStageAnnotation}
+                    onCancelAnnotation={() => setAnnotationMode(false)}
+                  />
                 </section>
               )}
             </>
@@ -161,12 +213,78 @@ export default function WorkbenchPanel({
           browserSteps.length > 0 ? (
             <div className="workbench-log-list">
               {browserSteps.map((step) => {
-                const target = recordValue(step.input, "url") ?? recordValue(step.input, "query") ?? step.summary;
+                const url = recordValue(step.input, "url") ?? recordValue(step.input, "final_url");
+                const target = url ?? recordValue(step.input, "query") ?? step.summary;
+                const canAnnotatePage = Boolean(url && /^https?:\/\//i.test(url));
+                const isCommenting = browserCommentStepId === step.id;
                 return (
                   <section key={step.id}>
-                    <div className="workbench-log-title"><Globe2 size={15} /><strong>{step.summary || step.name}</strong></div>
+                    <div className="workbench-log-title">
+                      <div><Globe2 size={15} /><strong>{step.summary || step.name}</strong></div>
+                      {canAnnotatePage && (
+                        <button
+                          type="button"
+                          className="workbench-browser-annotation-button"
+                          disabled={running}
+                          onClick={() => {
+                            setBrowserCommentStepId(step.id);
+                            setBrowserCommentAnnotationId(null);
+                            setBrowserComment("");
+                          }}
+                          aria-label={t("chat.annotationPage")}
+                          title={t("chat.annotationPage")}
+                        >
+                          <MessageSquarePlus size={14} />
+                          <span>{t("chat.annotationPage")}</span>
+                        </button>
+                      )}
+                    </div>
                     <div className="workbench-log-command">{target}</div>
                     {step.result && <pre>{step.result}</pre>}
+                    {canAnnotatePage && isCommenting && url && (
+                      <div className="workbench-browser-comment">
+                        <textarea
+                          autoFocus
+                          value={browserComment}
+                          onChange={(event) => setBrowserComment(event.target.value)}
+                          placeholder={t("chat.annotationPlaceholder")}
+                          maxLength={2000}
+                        />
+                        <div>
+                          <button
+                            type="button"
+                            className="workbench-secondary-command"
+                            onClick={() => {
+                              setBrowserCommentStepId(null);
+                              setBrowserCommentAnnotationId(null);
+                              setBrowserComment("");
+                            }}
+                          >
+                            {t("chat.annotationCancel")}
+                          </button>
+                          <button
+                            type="button"
+                            className="workbench-primary-command"
+                            disabled={!browserComment.trim()}
+                            onClick={() => {
+                              onStageAnnotation({
+                                id: browserCommentAnnotationId ?? globalThis.crypto?.randomUUID?.() ?? `annotation-${Date.now()}`,
+                                sessionId,
+                                target: { type: "browser", id: step.id, title: step.summary || step.name, uri: url },
+                                selection: { type: "page", url },
+                                comment: browserComment.trim(),
+                                status: "staged",
+                              });
+                              setBrowserCommentStepId(null);
+                              setBrowserCommentAnnotationId(null);
+                              setBrowserComment("");
+                            }}
+                          >
+                            {t("chat.annotationStage")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </section>
                 );
               })}

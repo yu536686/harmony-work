@@ -206,6 +206,33 @@
   color: var(--text-primary);
 }
 
+.workbench-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.workbench-annotation-toggle {
+  min-height: 30px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workbench-annotation-toggle:hover,
+.workbench-annotation-toggle.active {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+}
+
 .workbench-icon-button {
   width: 30px;
   height: 30px;
@@ -461,6 +488,76 @@
   cursor: pointer;
 }
 
+.workbench-log-title {
+  justify-content: space-between;
+}
+
+.workbench-log-title > div {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workbench-browser-annotation-button {
+  min-height: 26px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workbench-browser-annotation-button:hover {
+  background: color-mix(in srgb, var(--accent) 17%, transparent);
+}
+
+.workbench-browser-annotation-button:disabled,
+.workbench-annotation-toggle:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.workbench-browser-comment {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-primary));
+}
+
+.workbench-browser-comment textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 7px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: 12px/1.5 inherit;
+}
+
+.workbench-browser-comment textarea:focus {
+  border-color: var(--accent);
+}
+
+.workbench-browser-comment > div {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
 .workbench-primary-command {
   margin-top: 6px;
   min-height: 32px;
@@ -483,6 +580,165 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 7px;
+}
+
+/* Direct-on-artifact annotation */
+.annotation-root {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.annotation-root.is-enabled {
+  cursor: crosshair;
+}
+
+.annotation-capture {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.annotation-capture.is-active {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.annotation-marker {
+  position: absolute;
+  z-index: 5;
+  padding: 0;
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: #fff;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.annotation-marker.is-image_region {
+  min-width: 8px;
+  min-height: 8px;
+}
+
+.annotation-marker.is-point {
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+}
+
+.annotation-marker span {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.annotation-marker.is-point span {
+  inset: -1px;
+  width: 22px;
+  height: 22px;
+}
+
+.annotation-marker.is-draft {
+  border-style: dashed;
+  pointer-events: none;
+}
+
+.annotation-popover {
+  position: absolute;
+  z-index: 8;
+  width: min(248px, calc(100% - 16px));
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.2);
+  cursor: default;
+}
+
+.annotation-popover-head {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.annotation-popover-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.annotation-popover-head button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.annotation-popover-head button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.annotation-popover textarea {
+  width: 100%;
+  min-height: 76px;
+  margin-top: 6px;
+  padding: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: 12px/1.5 inherit;
+}
+
+.annotation-popover textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.annotation-stage-button {
+  width: 100%;
+  min-height: 30px;
+  margin-top: 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wb-interactive, #1d1d20);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.annotation-stage-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .workbench-text-command {

@@ -5,13 +5,28 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, ExternalLink, FileText, FolderOpen, LoaderCircle, Save } from "lucide-react";
 import type { SessionArtifact } from "../../services/tauri";
 import { chatApi, openPath, type ArtifactPreviewPayload } from "../../services/tauri";
+import AnnotationLayer from "./AnnotationLayer";
+import type { WorkbenchAnnotation } from "./annotation/types";
 
 interface ArtifactPreviewProps {
   sessionId: string;
   artifact: SessionArtifact;
+  annotationMode?: boolean;
+  annotations?: WorkbenchAnnotation[];
+  focusedAnnotationId?: string | null;
+  onStageAnnotation?: (annotation: WorkbenchAnnotation) => void;
+  onCancelAnnotation?: () => void;
 }
 
-export default function ArtifactPreview({ sessionId, artifact }: ArtifactPreviewProps) {
+export default function ArtifactPreview({
+  sessionId,
+  artifact,
+  annotationMode = false,
+  annotations = [],
+  focusedAnnotationId,
+  onStageAnnotation = () => {},
+  onCancelAnnotation,
+}: ArtifactPreviewProps) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<ArtifactPreviewPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,16 +117,15 @@ export default function ArtifactPreview({ sessionId, artifact }: ArtifactPreview
     );
   }
 
+  let previewContent;
   if (preview.kind === "image") {
-    return (
+    previewContent = (
       <div className="artifact-preview-canvas">
         <img src={convertFileSrc(preview.uri)} alt={artifact.name} />
       </div>
     );
-  }
-
-  if (preview.kind === "html") {
-    return (
+  } else if (preview.kind === "html") {
+    previewContent = (
       <iframe
         className="artifact-preview-frame"
         src={convertFileSrc(preview.uri)}
@@ -119,10 +133,8 @@ export default function ArtifactPreview({ sessionId, artifact }: ArtifactPreview
         sandbox="allow-scripts allow-same-origin"
       />
     );
-  }
-
-  if (preview.kind === "text" || preview.kind === "code") {
-    return (
+  } else if (preview.kind === "text" || preview.kind === "code") {
+    previewContent = (
       <div className="artifact-preview-text-wrap">
         <pre className={`artifact-preview-text${preview.kind === "code" ? " is-code" : ""}`}>
           {preview.content || ""}
@@ -132,25 +144,41 @@ export default function ArtifactPreview({ sessionId, artifact }: ArtifactPreview
         )}
       </div>
     );
+  } else {
+    previewContent = (
+      <div className="artifact-preview-external">
+        <FileText size={28} />
+        <strong>{artifact.name}</strong>
+        <p>{artifact.content_summary || t("chat.workbenchExternalHint")}</p>
+        <span>{preview.size_bytes.toLocaleString()} bytes</span>
+        <div className="artifact-preview-actions">
+          <button type="button" className="workbench-primary-command" onClick={openArtifact}>
+            <ExternalLink size={14} /> {t("chat.workbenchOpenArtifact")}
+          </button>
+          <button type="button" className="workbench-secondary-command" onClick={() => void saveArtifactAs()}>
+            <Save size={14} /> {t("chat.workbenchSaveAs")}
+          </button>
+          <button type="button" className="workbench-secondary-command" onClick={revealArtifact}>
+            <FolderOpen size={14} /> {t("chat.workbenchReveal")}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="artifact-preview-external">
-      <FileText size={28} />
-      <strong>{artifact.name}</strong>
-      <p>{artifact.content_summary || t("chat.workbenchExternalHint")}</p>
-      <span>{preview.size_bytes.toLocaleString()} bytes</span>
-      <div className="artifact-preview-actions">
-        <button type="button" className="workbench-primary-command" onClick={openArtifact}>
-          <ExternalLink size={14} /> {t("chat.workbenchOpenArtifact")}
-        </button>
-        <button type="button" className="workbench-secondary-command" onClick={() => void saveArtifactAs()}>
-          <Save size={14} /> {t("chat.workbenchSaveAs")}
-        </button>
-        <button type="button" className="workbench-secondary-command" onClick={revealArtifact}>
-          <FolderOpen size={14} /> {t("chat.workbenchReveal")}
-        </button>
-      </div>
-    </div>
+    <AnnotationLayer
+      enabled={annotationMode && preview.kind !== "external"}
+      sessionId={sessionId}
+      artifact={artifact}
+      previewKind={preview.kind}
+      textContent={preview.content}
+      annotations={annotations}
+      focusedAnnotationId={focusedAnnotationId}
+      onStage={onStageAnnotation}
+      onCancelDraft={onCancelAnnotation}
+    >
+      {previewContent}
+    </AnnotationLayer>
   );
 }

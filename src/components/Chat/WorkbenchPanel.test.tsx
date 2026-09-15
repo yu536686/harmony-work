@@ -102,6 +102,31 @@ describe("WorkbenchPanel", () => {
     expect(screen.getByText("https://example.com/watch")).toBeVisible();
   });
 
+  it("can stage a URL-level browser annotation for the next turn", async () => {
+    const onStageAnnotation = vi.fn();
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={execution}
+        onStageAnnotation={onStageAnnotation}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "浏览器" }));
+    await userEvent.click(screen.getByRole("button", { name: "批注页面" }));
+    await userEvent.type(screen.getByPlaceholderText("描述希望小亨如何修改所选内容"), "以页面最新信息更新方案");
+    await userEvent.click(screen.getByRole("button", { name: "添加到对话" }));
+
+    expect(onStageAnnotation).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({ type: "browser", uri: "https://example.com/watch" }),
+      selection: { type: "page", url: "https://example.com/watch" },
+      comment: "以页面最新信息更新方案",
+    }));
+  });
+
   it("关闭按钮保持为明确命令", async () => {
     const onClose = vi.fn();
     render(

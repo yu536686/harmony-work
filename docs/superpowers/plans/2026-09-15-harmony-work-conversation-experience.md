@@ -644,7 +644,7 @@ git commit -m "feat: 增加会话右侧工作台与成果预览"
 - 修改：`src/components/Chat/WorkbenchPanel.tsx`
 - 修改：`src/components/Chat/ConversationExperience.css`
 
-- [ ] **步骤 1：定义批注数据模型测试**
+- [x] **步骤 1：定义批注数据模型测试**
 
 `WorkbenchAnnotation` 是前端可编辑草稿；`toCommentContext(annotation)` 在发送前把它转换为 IPC 使用的 `WorkbenchCommentContext`。两者共享 target、selection 和 comment 字段，但草稿额外包含 UI 状态，避免把界面状态发送给模型。
 
@@ -661,29 +661,29 @@ expect(addAnnotation(emptyDraft, annotation).items).toHaveLength(1);
 expect(toCommentContext(annotation)).not.toHaveProperty("status");
 ```
 
-- [ ] **步骤 2：测试选区边界**
+- [x] **步骤 2：测试选区边界**
 
 矩形从任意拖动方向计算，所有坐标 clamp 到 0-1；小于 4px 的拖动视为点注释；文本选择保存字符偏移、行号和最多 500 字 excerpt。
 
-- [ ] **步骤 3：测试交互闭环**
+- [x] **步骤 3：测试交互闭环**
 
 进入“注释”模式后按钮显示“正在注释”；框选成果后浮层贴近选区；“添加到对话”生成编号锚点和 composer 标签但不发送；`Esc` 只取消当前未确认选区；切换标签或关闭 Workbench 后已暂存批注仍存在。
 
-- [ ] **步骤 4：实现 AnnotationLayer**
+- [x] **步骤 4：实现 AnnotationLayer**
 
 图片/幻灯片/视频帧使用 Pointer Events 捕获拖动；文本和代码监听 `selectionchange` 并限制在预览根节点。浮层位置通过选区 bounding rect 与面板边界计算，不遮挡选区且不超出视口。
 
-- [ ] **步骤 5：实现多批注暂存**
+- [x] **步骤 5：实现多批注暂存**
 
 每条批注以 `批注 N · 页码/行号/目标` 标签显示在主 composer 上方。删除标签同时移除对应锚点；编辑标签重新定位预览并打开浮层；发送失败时标记 `failed` 但不丢失内容。
 
-- [ ] **步骤 6：运行批注单测和组件测试**
+- [x] **步骤 6：运行批注单测和组件测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/components/Chat/annotation src/components/Chat/AnnotationLayer.test.tsx"'`
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：提交检查点**
+- [x] **步骤 7：提交检查点**
 
 ```powershell
 git add src/components/Chat/annotation src/components/Chat/AnnotationLayer.tsx src/components/Chat/AnnotationLayer.test.tsx src/components/Chat/ArtifactPreview.tsx src/components/Chat/WorkbenchPanel.tsx src/components/Chat/ConversationExperience.css
@@ -696,12 +696,9 @@ git commit -m "feat: 支持成果直接选区与批注"
 - 修改：`src/services/tauri/chat.ts`
 - 修改：`src/services/tauri/tauri.test.ts`
 - 修改：`src/components/Chat/index.tsx`
-- 修改：`src/store/slices/chat.ts`
-- 修改：`src/store/slices/chat.test.ts`
 - 修改：`src-tauri/src/codex_runtime/service.rs`
-- 修改：`src-tauri/src/store/db.rs`
 
-- [ ] **步骤 1：编写前端发送失败测试**
+- [x] **步骤 1：编写前端发送失败测试**
 
 ```ts
 await expect(sendAnnotatedMessage({ content: "按批注修改", annotations })).rejects.toThrow();
@@ -709,7 +706,7 @@ expect(store.getState().chat.annotationDrafts["session-1"].items).toHaveLength(2
 expect(store.getState().chat.annotationDrafts["session-1"].sendState).toBe("failed");
 ```
 
-- [ ] **步骤 2：扩展 `ChatSendOptions`**
+- [x] **步骤 2：扩展 `ChatSendOptions`**
 
 ```ts
 export interface ChatSendOptions {
@@ -720,7 +717,7 @@ export interface ChatSendOptions {
 
 IPC 参数名使用 `commentContexts`，Rust 接收 `comment_contexts`。每轮最多 20 条，每条评论最多 2000 字，excerpt 最多 500 字，URI 最多 2048 字，坐标必须在 0-1。
 
-- [ ] **步骤 3：构造模型上下文但保持消息正文干净**
+- [x] **步骤 3：构造模型上下文但保持消息正文干净**
 
 模型收到：
 
@@ -732,17 +729,17 @@ IPC 参数名使用 `commentContexts`，Rust 接收 `comment_contexts`。每轮�
 
 数据库消息正文只保存用户输入“按批注修改”，结构数据保存到 `context_json`，历史消息通过批注标签展示来源但不展开内部 XML。
 
-- [ ] **步骤 4：成功后清理、失败后保留**
+- [x] **步骤 4：成功后清理、失败后保留**
 
-`chatApi.send` 成功返回后清空该会话已发送批注；同步抛错时保留全部草稿；运行期 error 不自动删除原批注，用户明确开始新请求或点击删除后才清理。
+`chatApi.send` 成功启动后将批注标记为发送中；收到本轮 `done` 才清空。同步抛错、运行期 `error` 或 `cancelled` 均保留全部草稿并标记失败，用户可直接重试或主动删除。
 
-- [ ] **步骤 5：运行前后端发送测试**
+- [x] **步骤 5：运行前后端发送测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/services/tauri/tauri.test.ts src/store/slices/chat.test.ts; cargo test --manifest-path src-tauri\Cargo.toml codex_runtime::service"'`
 
 预期：全部 PASS，持久化正文不包含 `<workbuddy_artifact_annotations>`。
 
-- [ ] **步骤 6：提交检查点**
+- [x] **步骤 6：提交检查点**
 
 ```powershell
 git add src/services/tauri/chat.ts src/services/tauri/tauri.test.ts src/components/Chat/index.tsx src/store/slices/chat.ts src/store/slices/chat.test.ts src-tauri/src/codex_runtime/service.rs src-tauri/src/store/db.rs

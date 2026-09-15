@@ -9,6 +9,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import type { WorkbenchCommentContext } from "../../components/Chat/annotation/types";
 
 // ---------------------------------------------------------------------------
 // Sessions
@@ -194,6 +195,7 @@ export interface ChatSendOptions {
   modelOverride?: string;
   userContext?: string;
   clearPlan?: boolean;
+  commentContexts?: WorkbenchCommentContext[];
 }
 
 export interface CodexRuntimeDiagnostic {
@@ -234,6 +236,7 @@ export const chatApi = {
       personaKoiId: options?.personaKoiId ?? null,
       modelOverride: options?.modelOverride ?? null,
       userContext: options?.userContext ?? null,
+      commentContexts: options?.commentContexts ?? null,
       clearPlan: options?.clearPlan ?? true,
     });
   },

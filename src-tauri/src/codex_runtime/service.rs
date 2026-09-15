@@ -1099,6 +1099,10 @@ fn attachment_staging_directory(workspace: &Path, session_id: &str) -> PathBuf {
 
 const MAX_MESSAGE_CONTEXT_BYTES: usize = 16 * 1024;
 const MAX_MESSAGE_CONTEXT_ITEMS: usize = 50;
+const MAX_ANNOTATION_ITEMS: usize = 20;
+const MAX_ANNOTATION_COMMENT_CHARS: usize = 2000;
+const MAX_ANNOTATION_EXCERPT_CHARS: usize = 500;
+const MAX_ANNOTATION_URI_CHARS: usize = 2048;
 const MAX_REASONING_SUMMARY_BYTES: usize = 12 * 1024;
 const MAX_EXECUTION_PAYLOAD_BYTES: usize = 16 * 1024;
 
@@ -1142,6 +1146,115 @@ fn valid_context_value(value: &Value, depth: usize) -> bool {
                     .all(|(key, value)| key.len() <= 128 && valid_context_value(value, depth + 1))
         }
         _ => true,
+    }
+}
+
+fn annotation_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    object.get(key)?.as_str().map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn normalized_coordinate(object: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
+    object
+        .get(key)?
+        .as_f64()
+        .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+}
+
+fn valid_annotation_item(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    if !matches!(annotation_string(object, "id"), Some(value) if value.chars().count() <= 128) {
+        return false;
+    }
+    let Some(comment) = annotation_string(object, "comment") else { return false; };
+    if comment.chars().count() > MAX_ANNOTATION_COMMENT_CHARS {
+        return false;
+    }
+    let Some(target) = object.get("target").and_then(Value::as_object) else { return false; };
+    let target_type = annotation_string(target, "type");
+    let target_uri = target
+        .get("uri")
+        .filter(|value| !value.is_null())
+        .and_then(Value::as_str);
+    if !matches!(target_type, Some("artifact") | Some("browser"))
+        || !matches!(annotation_string(target, "id"), Some(value) if value.chars().count() <= 256)
+        || !matches!(annotation_string(target, "title"), Some(value) if value.chars().count() <= 512)
+        || target_uri.is_some_and(|value| value.chars().count() > MAX_ANNOTATION_URI_CHARS)
+        || matches!(target_type, Some("browser"))
+            && !matches!(target_uri, Some(uri) if uri.starts_with("http://") || uri.starts_with("https://"))
+    {
+        return false;
+    }
+    let Some(selection) = object.get("selection").and_then(Value::as_object) else { return false; };
+    match annotation_string(selection, "type") {
+        Some("point") => {
+            normalized_coordinate(selection, "x").is_some()
+                && normalized_coordinate(selection, "y").is_some()
+        }
+        Some("image_region") => {
+            let (Some(x), Some(y), Some(width), Some(height)) = (
+                normalized_coordinate(selection, "x"),
+                normalized_coordinate(selection, "y"),
+                normalized_coordinate(selection, "width"),
+                normalized_coordinate(selection, "height"),
+            ) else { return false; };
+            width > 0.0 && height > 0.0 && x + width <= 1.000_001 && y + height <= 1.000_001
+        }
+        Some("text_range") => {
+            let start = selection.get("start").and_then(Value::as_u64);
+            let end = selection.get("end").and_then(Value::as_u64);
+            let start_line = selection.get("startLine").and_then(Value::as_u64);
+            let end_line = selection.get("endLine").and_then(Value::as_u64);
+            let excerpt = selection.get("excerpt").and_then(Value::as_str);
+            matches!((start, end, start_line, end_line, excerpt),
+                (Some(start), Some(end), Some(start_line), Some(end_line), Some(excerpt))
+                    if end >= start && start_line >= 1 && end_line >= start_line
+                        && excerpt.chars().count() <= MAX_ANNOTATION_EXCERPT_CHARS)
+        }
+        Some("page") => target_type == Some("browser")
+            && selection
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| {
+                url.starts_with("http://")
+                    || url.starts_with("https://")
+            })
+            && selection
+                .get("url")
+                .and_then(Value::as_str)
+            .is_some_and(|url| url.chars().count() <= MAX_ANNOTATION_URI_CHARS)
+            && selection.get("url").and_then(Value::as_str) == target_uri,
+        _ => false,
+    }
+}
+
+fn validated_annotation_context(items: Option<&[Value]>) -> Result<Option<String>, String> {
+    let Some(items) = items.filter(|items| !items.is_empty()) else { return Ok(None); };
+    if items.len() > MAX_ANNOTATION_ITEMS {
+        return Err(format!("单轮最多添加 {MAX_ANNOTATION_ITEMS} 条批注。"));
+    }
+    if !items.iter().all(valid_annotation_item) {
+        return Err("批注结构无效或内容超出限制，请检查选区和修改要求。".to_string());
+    }
+    let serialized = serde_json::to_string(items).map_err(|error| format!("批注序列化失败：{error}"))?;
+    if serialized.len() > MAX_MESSAGE_CONTEXT_BYTES {
+        return Err("批注内容过长，请精简后重试。".to_string());
+    }
+    Ok(Some(serialized))
+}
+
+fn merge_message_context(user_context: Option<String>, annotation_context: Option<String>) -> Option<String> {
+    match (user_context, annotation_context) {
+        (None, None) => None,
+        (Some(user), None) => Some(user),
+        (None, Some(annotations)) => Some(annotations),
+        (Some(user), Some(annotations)) => {
+            let user = serde_json::from_str::<Value>(&user).ok()?;
+            let annotations = serde_json::from_str::<Value>(&annotations).ok()?;
+            serde_json::to_string(&serde_json::json!({
+                "userContext": user,
+                "annotations": annotations,
+            })).ok()
+        }
     }
 }
 
@@ -1237,12 +1350,18 @@ fn compose_turn_content(
     content: String,
     explicit_skills: Option<Vec<String>>,
     user_context: Option<String>,
+    annotation_context: Option<String>,
     attachments: &[CodexAttachment],
 ) -> String {
     let mut sections = Vec::new();
     if let Some(context) = user_context.filter(|value| !value.trim().is_empty()) {
         sections.push(format!(
             "<workbuddy_user_context>\n{context}\n</workbuddy_user_context>"
+        ));
+    }
+    if let Some(context) = annotation_context.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!(
+            "<workbuddy_artifact_annotations>\n{context}\n</workbuddy_artifact_annotations>"
         ));
     }
     if let Some(skills) = explicit_skills.filter(|items| !items.is_empty()) {
@@ -1293,6 +1412,7 @@ pub async fn codex_chat_send(
     persona_koi_id: Option<String>,
     model_override: Option<String>,
     user_context: Option<String>,
+    comment_contexts: Option<Vec<Value>>,
     clear_plan: Option<bool>,
 ) -> Result<CodexTurnStarted, String> {
     let settings = app_state.settings.lock().await.clone();
@@ -1321,8 +1441,19 @@ pub async fn codex_chat_send(
     let attachments =
         materialize_chat_attachments(&workspace_root, &session_id, attachment, attachments)?;
     let visible_content = content.clone();
-    let message_context_json = validated_message_context(user_context.as_deref());
-    let content = compose_turn_content(content, explicit_skills, user_context, &attachments);
+    let user_context_json = validated_message_context(user_context.as_deref());
+    let annotation_context_json = validated_annotation_context(comment_contexts.as_deref())?;
+    let message_context_json = merge_message_context(
+        user_context_json,
+        annotation_context_json.clone(),
+    );
+    let content = compose_turn_content(
+        content,
+        explicit_skills,
+        user_context,
+        annotation_context_json,
+        &attachments,
+    );
     let mut developer_instructions =
         "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
             .to_string();
@@ -1711,6 +1842,7 @@ mod tests {
             "请分析附件".to_string(),
             None,
             None,
+            None,
             &[CodexAttachment {
                 path: "/workspace/.workbuddy/attachments/session/report.csv".to_string(),
                 name: "report.csv".to_string(),
@@ -1730,6 +1862,7 @@ mod tests {
             "请按批注修改".to_string(),
             None,
             Some(context.clone()),
+            None,
             &[],
         );
 
@@ -1741,6 +1874,58 @@ mod tests {
         assert!(prompt.ends_with("请按批注修改"));
         assert!(validated_message_context(Some("登录用户：测试")).is_none());
         assert!(validated_message_context(Some(r#"["not-an-object"]"#)).is_none());
+    }
+
+    #[test]
+    fn structured_artifact_annotations_are_bounded_and_wrapped_separately() {
+        let annotations = vec![serde_json::json!({
+            "id": "annotation-1",
+            "target": {"type":"artifact","id":"artifact-1","title":"方案.pptx","uri":"E:/work/方案.pptx"},
+            "selection": {"type":"image_region","page":1,"x":0.18,"y":0.27,"width":0.62,"height":0.47},
+            "comment": "标题更简洁"
+        })];
+        let normalized = validated_annotation_context(Some(&annotations))
+            .expect("validation")
+            .expect("context");
+        let prompt = compose_turn_content(
+            "按批注修改".to_string(),
+            None,
+            None,
+            Some(normalized.clone()),
+            &[],
+        );
+        assert!(prompt.contains("<workbuddy_artifact_annotations>"));
+        assert!(prompt.contains("标题更简洁"));
+        assert!(prompt.ends_with("按批注修改"));
+        assert!(!"按批注修改".contains("workbuddy_artifact_annotations"));
+
+        let mut invalid = annotations.clone();
+        invalid[0]["selection"]["x"] = serde_json::json!(1.2);
+        assert!(validated_annotation_context(Some(&invalid)).is_err());
+        assert!(validated_annotation_context(Some(&vec![annotations[0].clone(); 21])).is_err());
+    }
+
+    #[test]
+    fn browser_page_annotations_keep_the_url_without_accepting_non_web_targets() {
+        let annotations = vec![serde_json::json!({
+            "id": "annotation-browser-1",
+            "target": {
+                "type": "browser",
+                "id": "browser-step-1",
+                "title": "品牌官网",
+                "uri": "https://example.com/watch"
+            },
+            "selection": {"type": "page", "url": "https://example.com/watch"},
+            "comment": "根据这个页面的最新信息更新方案"
+        })];
+        let normalized = validated_annotation_context(Some(&annotations))
+            .expect("browser page annotation should be valid")
+            .expect("context");
+        assert!(normalized.contains("https://example.com/watch"));
+
+        let mut invalid = annotations.clone();
+        invalid[0]["selection"]["url"] = serde_json::json!("file:///private/data");
+        assert!(validated_annotation_context(Some(&invalid)).is_err());
     }
 
     #[test]

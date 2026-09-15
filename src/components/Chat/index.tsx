@@ -11,6 +11,7 @@ import {
   Sparkles,
   Square,
   PanelRightOpen,
+  MessageSquareText,
   UserRound,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
@@ -29,6 +30,16 @@ import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
 import ExecutionTimeline from "./ExecutionTimeline";
 import WorkbenchPanel from "./WorkbenchPanel";
+import {
+  addAnnotation,
+  annotationAnchor,
+  emptyAnnotationDraft,
+  markAnnotationSendFailed,
+  markAnnotationSending,
+  removeAnnotation,
+  toCommentContext,
+} from "./annotation/reducer";
+import type { AnnotationDraftState, WorkbenchAnnotation, WorkbenchCommentContext } from "./annotation/types";
 import GlobalSessionRail from "./GlobalSessionRail";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
@@ -111,6 +122,45 @@ function parsePersistedBlocks(raw?: string | null): Array<Record<string, unknown
   } catch {
     return [];
   }
+}
+
+function parsePersistedAnnotations(raw?: string | null): WorkbenchCommentContext[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray(parsed.annotations)
+        ? parsed.annotations
+        : [];
+    return items.filter((item: unknown): item is WorkbenchCommentContext => {
+      if (!item || typeof item !== "object") return false;
+      const candidate = item as Partial<WorkbenchCommentContext>;
+      return typeof candidate.id === "string"
+        && typeof candidate.comment === "string"
+        && (candidate.target?.type === "artifact" || candidate.target?.type === "browser")
+        && typeof candidate.selection?.type === "string";
+    });
+  } catch {
+    return [];
+  }
+}
+
+function persistedAnnotationLabel(annotation: WorkbenchCommentContext, index: number): string {
+  const selection = annotation.selection;
+  if (selection.type === "text_range") {
+    const lines = selection.startLine === selection.endLine
+      ? `第 ${selection.startLine} 行`
+      : `第 ${selection.startLine}-${selection.endLine} 行`;
+    return `批注 ${index + 1} · ${lines}`;
+  }
+  if (selection.type === "image_region" || selection.type === "point") {
+    return selection.page
+      ? `批注 ${index + 1} · 第 ${selection.page} 页`
+      : `批注 ${index + 1} · ${annotation.target.title}`;
+  }
+  if (selection.type === "page") return `批注 ${index + 1} · 网页`;
+  return `批注 ${index + 1} · ${annotation.target.title}`;
 }
 
 function mergePlanItems(existing: PlanTodoItem[], updates: PlanTodoItem[]): PlanTodoItem[] {
@@ -912,9 +962,39 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const executionModel = displaySessionId ? executionBySession[displaySessionId] ?? null : null;
   const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
   const [workbenchOpenBySession, setWorkbenchOpenBySession] = useState<Record<string, boolean>>({});
+  const [annotationDraftsBySession, setAnnotationDraftsBySession] = useState<Record<string, AnnotationDraftState>>({});
+  const [focusedAnnotationId, setFocusedAnnotationId] = useState<string | null>(null);
   const workbenchOpen = displaySessionId
     ? workbenchOpenBySession[displaySessionId] ?? false
     : false;
+  const activeAnnotationDraft = displaySessionId
+    ? annotationDraftsBySession[displaySessionId] ?? emptyAnnotationDraft
+    : emptyAnnotationDraft;
+  const stageAnnotation = useCallback((annotation: WorkbenchAnnotation) => {
+    setAnnotationDraftsBySession((current) => ({
+      ...current,
+      [annotation.sessionId]: addAnnotation(
+        current[annotation.sessionId] ?? emptyAnnotationDraft,
+        annotation,
+      ),
+    }));
+    setFocusedAnnotationId(null);
+  }, []);
+  const discardAnnotation = useCallback((annotationId: string) => {
+    if (!displaySessionId) return;
+    setAnnotationDraftsBySession((current) => ({
+      ...current,
+      [displaySessionId]: removeAnnotation(
+        current[displaySessionId] ?? emptyAnnotationDraft,
+        annotationId,
+      ),
+    }));
+    setFocusedAnnotationId((current) => current === annotationId ? null : current);
+  }, [displaySessionId]);
+
+  useEffect(() => {
+    setFocusedAnnotationId(null);
+  }, [displaySessionId]);
   const latestRealUserMessageIndex = activeMessages.reduce(
     (latest, message, index) =>
       message.role === "user" && !message.tool_results_json ? index : latest,
@@ -1300,6 +1380,13 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
           dispatch(chatActions.freezeStreaming(boundSessionId));
           dispatch(chatActions.removeOptimisticMessages(boundSessionId));
+          setAnnotationDraftsBySession((current) => {
+            if (current[boundSessionId]?.sendState !== "sending") return current;
+            const next = { ...current };
+            delete next[boundSessionId];
+            return next;
+          });
+          setFocusedAnnotationId(null);
           // Keep the last live ContextUsage snapshot after a run finishes.
           // During a run the ring shows "the request we just sent / were about
           // to send"; seeding from get_context_preview here would immediately
@@ -1345,6 +1432,14 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
           dispatch(chatActions.clearStreaming(boundSessionId));
           dispatch(chatActions.removeOptimisticMessages(boundSessionId));
+          setAnnotationDraftsBySession((current) => {
+            const draft = current[boundSessionId];
+            if (draft?.sendState !== "sending") return current;
+            return {
+              ...current,
+              [boundSessionId]: markAnnotationSendFailed(draft),
+            };
+          });
           break;
         case "fish_progress":
           dispatch(chatActions.updateFishProgress({
@@ -1363,6 +1458,14 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
           dispatch(chatActions.clearStreaming(boundSessionId));
           setSendError((event as { type: "error"; message: string }).message ?? "Unknown error");
+          setAnnotationDraftsBySession((current) => {
+            const draft = current[boundSessionId];
+            if (draft?.sendState !== "sending") return current;
+            return {
+              ...current,
+              [boundSessionId]: markAnnotationSendFailed(draft),
+            };
+          });
           break;
       }
     }).then((unlisten) => {
@@ -2007,6 +2110,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         ? `${content}\n${hints.join("\n")}`
         : hints.join("\n")
       : content;
+    const commentContexts = (annotationDraftsBySession[targetSessionId]?.items ?? [])
+      .map(toCommentContext);
 
     dispatch(chatActions.appendMessage({
       sessionId: targetSessionId,
@@ -2016,10 +2121,20 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         role: "user",
         content: displayContent,
         created_at: new Date().toISOString(),
+        context_json: commentContexts.length ? JSON.stringify(commentContexts) : null,
       },
     }));
 
     dispatch(chatActions.setRunning({ sessionId: targetSessionId, running: true }));
+
+    if (commentContexts.length > 0) {
+      setAnnotationDraftsBySession((current) => ({
+        ...current,
+        [targetSessionId]: markAnnotationSending(
+          current[targetSessionId] ?? emptyAnnotationDraft,
+        ),
+      }));
+    }
 
     try {
       await chatApi.send(targetSessionId, content, {
@@ -2027,27 +2142,37 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         explicitSkills: skills.map((s) => s.id),
         personaKoiId: koi?.id,
         modelOverride: selectedModelOverride || undefined,
+        commentContexts,
         clearPlan,
       });
     } catch (e) {
       console.error('[Chat] send error:', e);
       dispatch(chatActions.setRunning({ sessionId: targetSessionId, running: false }));
       dispatch(chatActions.clearStreaming(targetSessionId));
+      if (commentContexts.length > 0) {
+        setAnnotationDraftsBySession((current) => ({
+          ...current,
+          [targetSessionId]: markAnnotationSendFailed(
+            current[targetSessionId] ?? emptyAnnotationDraft,
+          ),
+        }));
+      }
       setSendError(`${e}`);
     }
-  }, [displaySessionId, messagesBySession, dispatch, t, selectedModelOverride]);
+  }, [displaySessionId, messagesBySession, dispatch, t, selectedModelOverride, annotationDraftsBySession]);
 
   const canSend = Boolean(
     input.trim() ||
     pendingAttachments.length ||
     selectedSkills.length ||
-    selectedKoi,
+    selectedKoi ||
+    activeAnnotationDraft.items.length,
   );
 
   const handleSend = useCallback(async () => {
     if (!canSend || running) return;
 
-    const content = input.trim();
+    const content = input.trim() || (activeAnnotationDraft.items.length > 0 ? t("chat.annotationDefaultPrompt") : "");
     setInput("");
     setSendError(null);
     const pending = pendingAttachments;
@@ -2103,7 +2228,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
 
     await doSend(content, pending, skills, koi, true, targetSessionId);
-  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t]);
+  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t, activeAnnotationDraft.items.length]);
 
   // The event listener for a newly created session is registered by an earlier
   // effect in this component. Sending from this later effect prevents losing
@@ -2388,6 +2513,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               {activeMessages.map((msg, messageIndex) => {
                 const timelineBefore =
                   messageIndex === executionTimelineInsertIndex ? executionTimelineNode : null;
+                const persistedAnnotations = parsePersistedAnnotations(msg.context_json);
                 // Render historical chat_ui tool calls as interactive cards
                 if (chatUiToolCallIds.has(msg.id)) {
                   const cards = Object.values(historicalCards).filter((c) => c.afterMessageId === msg.id);
@@ -2426,6 +2552,16 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                       </div>
                       <div className="message-content">
                         <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
+                        {persistedAnnotations.length > 0 && (
+                          <div className="message-annotation-badges" aria-label="成果批注">
+                            {persistedAnnotations.map((annotation, index) => (
+                              <span key={annotation.id} title={annotation.comment}>
+                                <MessageSquareText size={12} />
+                                {persistedAnnotationLabel(annotation, index)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </Fragment>
@@ -2571,7 +2707,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                   </ul>
                 </div>
               )}
-              {(selectedKoi || selectedSkills.length > 0 || pendingAttachments.length > 0) && (
+              {(selectedKoi || selectedSkills.length > 0 || pendingAttachments.length > 0 || activeAnnotationDraft.items.length > 0) && (
                 <div className="pending-composer-strip">
                   {selectedKoi && (
                     <div className="pending-chip pending-chip-koi" title={t("chat.personaKoi")}>
@@ -2598,6 +2734,31 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                         {item.attachment.filename ?? item.attachment.path}
                       </span>
                       <button type="button" className="pending-chip-remove" onClick={() => removeAttachment(item.id)} title={t("chat.removeAttachment")}>✕</button>
+                    </div>
+                  ))}
+                  {activeAnnotationDraft.items.map((annotation, index) => (
+                    <div key={annotation.id} className={`pending-chip pending-chip-annotation${annotation.status === "failed" ? " is-failed" : ""}`} title={annotation.comment}>
+                      <button
+                        type="button"
+                        className="pending-annotation-anchor"
+                        onClick={() => {
+                          if (!displaySessionId) return;
+                          setWorkbenchOpenBySession((current) => ({ ...current, [displaySessionId]: true }));
+                          setFocusedAnnotationId(null);
+                          requestAnimationFrame(() => setFocusedAnnotationId(annotation.id));
+                        }}
+                        aria-label={`${t("chat.annotationEdit")}：${annotationAnchor(annotation, index)}`}
+                      >
+                        <MessageSquareText size={13} />
+                        <span>{annotationAnchor(annotation, index)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="pending-chip-remove"
+                        onClick={() => discardAnnotation(annotation.id)}
+                        title={t("chat.annotationRemove")}
+                        aria-label={`${t("chat.annotationRemove")}：${annotationAnchor(annotation, index)}`}
+                      >✕</button>
                     </div>
                   ))}
                 </div>
@@ -2742,6 +2903,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           sessionId={displaySessionId}
           artifacts={activeArtifacts}
           execution={executionModel}
+      annotations={activeAnnotationDraft.items}
+      focusedAnnotationId={focusedAnnotationId}
+      running={running}
+          onStageAnnotation={stageAnnotation}
           onClose={() => setWorkbenchOpenBySession((current) => ({
             ...current,
             [displaySessionId]: false,
