@@ -38,7 +38,7 @@
 | --- | --- | --- | --- |
 | 0. 规格与实施计划 | 已完成 | 固化范围、组件边界、验收条件和恢复协议 | 规格自检、用户审查 |
 | 1. 品牌资产与名称迁移 | 已完成 | Harmony Work 文字标识、全套图标、窗口/安装器/页面品牌 | 文案扫描、图标尺寸检查、升级安装 |
-| 2. 执行事件聚合层 | 进行中 | TurnExecutionModel、历史重建、状态归并与脱敏 | TS/Rust 单测、乱序/重复事件测试 |
+| 2. 执行事件聚合层 | 已完成 | TurnExecutionModel、历史重建、状态归并与脱敏 | TS/Rust 单测、乱序/重复事件测试 |
 | 3. 对话时间线 UI | 未开始 | 流式摘要、步骤折叠、状态图标、最终回复样式 | 组件测试、运行/完成/失败截图 |
 | 4. 右侧工具面板 | 未开始 | 成果、摘要、浏览器、终端、响应式布局 | 面板状态与预览回归 |
 | 5. 注释与下一轮修改 | 未开始 | 成果内直接选区、锚点、批注暂存与组合发送 | 选区/多批注/失败恢复/权限测试 |
@@ -65,6 +65,17 @@
 6. 用一句话写明下一轮的第一步，避免重复探索。
 
 ## 最近检查点
+
+### 2026-09-15：前端 TurnExecutionModel 聚合层（任务 6）
+
+- 新增 `src/components/Chat/execution/`：`types.ts`（模型与状态类型）、`reducer.ts`（纯函数聚合器）、`presentation.ts`（工具名、摘要与脱敏投影），配套 2 个测试文件共 35 项用例。
+- 聚合器为纯函数，时间戳通过第三个参数注入，默认取系统时间；对无影响的事件原样返回入参模型，上层可直接用引用比较跳过重渲染。
+- 覆盖计划要求的全部边界：重复事件幂等、`tool_end` 先于 `tool_start`、工具失败、取消、权限等待、轮次结束清除运行状态、多轮隔离不泄漏、历史事件重放、工具输出截断。
+- 计划项与执行步骤分属 `plan` 与 `steps` 两个集合，避免计划项挤占步骤下标（对齐计划任务 6 步骤 1 的夹具断言）。
+- 规格 §8.2 与本计划的任务 6 类型定义存在差异：本实现以计划的 `state`/`reasoning`/`plan`/`finalText` 为准，同时保留规格要求的 `publicSummary` 与 `artifacts` 字段，两者语义一致，仅命名不同。
+- 修正一处真实缺陷：轮次终止（done/cancelled/error）时，仍未收到 `tool_end` 的步骤原先会永久停在「运行中」，违反规格 §5.5 与 §11.2。已按终止原因收敛为 completed/cancelled/failed，并补充 2 项回归测试。
+- Redux 接入：`executionBySession` 状态 + `applyExecutionEvent`、`restoreExecutionHistory`、`toggleExecutionStep` 三个 reducer；旧 `toolSteps` 与 `planBySession` 保留供未迁移组件兼容。
+- 远端 Windows 验证：`npx vitest run src/components/Chat/execution src/store/slices/chat.test.ts` 40 项通过；`npm test` 前端 106 项 + 脚本 9 项通过；`npx tsc --noEmit` 0 错误。
 
 ### 2026-09-15：持久化结构化执行历史与批注上下文（任务 5）
 
@@ -132,7 +143,7 @@
 
 ## 当前下一步
 
-阶段 2 进行中：任务 5 已完成，正在推进任务 6「建立前端 TurnExecutionModel 聚合层」——纯函数聚合器已落地，剩余把模型接入 Redux 会话状态并通过 store 测试。任务 6 通过后阶段 2 可标记完成，才允许开始任务 7 的时间线 UI。
+阶段 2 已完成：任务 4-6 全部通过验证，事件适配层、持久化层与前端聚合层均已就绪。下一步进入阶段 3（任务 7「实现对话内执行时间线」）：在 `src/components/Chat/` 下新增 `ExecutionTimeline.tsx` 与 `ExecutionStepRow.tsx`，把 `executionBySession` 的模型渲染为可折叠时间线，并在 `Chat/index.tsx` 的事件分发中接入 `applyExecutionEvent`。
 
 ## 验证证据
 

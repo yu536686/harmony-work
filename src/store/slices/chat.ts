@@ -13,8 +13,22 @@
  * they all map to `commands/chat/*` on the Rust side.
  */
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import type { Session, ChatMessage, ScheduledTask, ChatAttachment } from "../../services/tauri";
+import type {
+  Session,
+  ChatMessage,
+  ScheduledTask,
+  ChatAttachment,
+  AgentEventType,
+  TurnExecutionEventRecord,
+} from "../../services/tauri";
 import { isInternalSession, type MainChatSessionKind } from "../../utils/session";
+import {
+  createTurnExecutionModel,
+  reduceExecutionEvent,
+  restoreExecutionHistory as rebuildExecutionHistory,
+  toggleExecutionStep as toggleExecutionStepModel,
+} from "../../components/Chat/execution/reducer";
+import type { TurnExecutionModel } from "../../components/Chat/execution/types";
 
 // ---------------------------------------------------------------------------
 // Sessions slice
@@ -224,6 +238,10 @@ interface ChatState {
   contextUsage: Record<string, ContextUsageSnapshot>;
   /** Latest explicit runtime phase for the expandable activity timeline. */
   runStatusBySession: Record<string, RunStatusSnapshot>;
+  /** 当前轮次的结构化执行模型，由 `components/Chat/execution` 的纯函数聚合，
+   *  供对话内执行时间线与右侧工作面板只读消费。
+   *  旧的 `toolSteps` / `planBySession` 暂时保留，供尚未迁移的组件兼容。 */
+  executionBySession: Record<string, TurnExecutionModel>;
 }
 
 export const chatSlice = createSlice({
@@ -239,6 +257,7 @@ export const chatSlice = createSlice({
     pendingSummary: {},
     contextUsage: {},
     runStatusBySession: {},
+    executionBySession: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
@@ -545,6 +564,38 @@ export const chatSlice = createSlice({
     clearToolSteps: (state, action: PayloadAction<string>) => {
       delete state.toolSteps[action.payload];
       delete state.toolStepsTurnDone[action.payload];
+    },
+    /** 把一个实时 Agent 事件折叠进当前轮次的执行模型。
+     *
+     *  聚合逻辑本身是纯函数，放在 `components/Chat/execution/reducer.ts`；
+     *  这里只负责按 sessionId 定位模型并写回。
+     *  新一轮开始时会重置该会话的执行模型，但不会触碰历史消息。 */
+    applyExecutionEvent: (
+      state,
+      action: PayloadAction<{ sessionId: string; event: AgentEventType }>,
+    ) => {
+      const { sessionId, event } = action.payload;
+      const current = state.executionBySession[sessionId] ?? createTurnExecutionModel(sessionId);
+      state.executionBySession[sessionId] = reduceExecutionEvent(current, event);
+    },
+    /** 从持久化执行事件重建静态时间线（打开历史会话时调用）。
+     *  未指定 turnId 时返回该会话最后一次执行的轮次。 */
+    restoreExecutionHistory: (
+      state,
+      action: PayloadAction<{ sessionId: string; records: TurnExecutionEventRecord[]; turnId?: string }>,
+    ) => {
+      const { sessionId, records, turnId } = action.payload;
+      state.executionBySession[sessionId] = rebuildExecutionHistory(sessionId, records, turnId);
+    },
+    /** 展开/收起一个执行步骤（用户手动操作，覆盖默认折叠规则）。 */
+    toggleExecutionStep: (
+      state,
+      action: PayloadAction<{ sessionId: string; stepId: string }>,
+    ) => {
+      const { sessionId, stepId } = action.payload;
+      const current = state.executionBySession[sessionId];
+      if (!current) return;
+      state.executionBySession[sessionId] = toggleExecutionStepModel(current, stepId);
     },
     setRunning: (state, action: PayloadAction<{ sessionId: string; running: boolean }>) => {
       state.isRunning[action.payload.sessionId] = action.payload.running;

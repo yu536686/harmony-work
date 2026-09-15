@@ -447,7 +447,7 @@ git commit -m "feat: 持久化会话执行轨迹与批注上下文"
 - 修改：`src/store/slices/chat.ts`
 - 修改：`src/store/slices/chat.test.ts`
 
-- [ ] **步骤 1：定义执行模型测试夹具**
+- [x] **步骤 1：定义执行模型测试夹具**
 
 ```ts
 const initial = createTurnExecutionModel("session-1");
@@ -460,17 +460,17 @@ expect(done.steps[0].state).toBe("completed");
 expect(done.steps[0].expanded).toBe(false);
 ```
 
-- [ ] **步骤 2：增加边界测试**
+- [x] **步骤 2：增加边界测试**
 
 覆盖：重复事件幂等、tool end 先于 start、失败、取消、权限等待、结束后清除运行状态、多轮隔离、历史事件重放、工具输出截断。
 
-- [ ] **步骤 3：运行测试并确认失败**
+- [x] **步骤 3：运行测试并确认失败**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/components/Chat/execution/*.test.ts"'`
 
 预期：FAIL，聚合模块不存在。
 
-- [ ] **步骤 4：实现纯函数状态机**
+- [x] **步骤 4：实现纯函数状态机**
 
 核心类型：
 
@@ -492,17 +492,17 @@ export interface TurnExecutionModel {
 }
 ```
 
-- [ ] **步骤 5：接入 Redux 会话状态**
+- [x] **步骤 5：接入 Redux 会话状态**
 
 增加 `executionBySession`，新增 `applyExecutionEvent`、`restoreExecutionHistory`、`toggleExecutionStep`。旧 `toolSteps`、`planBySession` 暂时保留供其他组件兼容，但主会话 UI 改读新模型；下一轮开始只重置当前执行模型，不影响历史消息。
 
-- [ ] **步骤 6：运行聚合层和 store 测试**
+- [x] **步骤 6：运行聚合层和 store 测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/components/Chat/execution src/store/slices/chat.test.ts"'`
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：提交检查点**
+- [x] **步骤 7：提交检查点**
 
 ```powershell
 git add src/components/Chat/execution src/store/slices/chat.ts src/store/slices/chat.test.ts
