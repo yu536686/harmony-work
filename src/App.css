@@ -301,26 +301,11 @@ body {
 }
 
 .app-name {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  color: var(--text-primary);
-  line-height: 1.05;
+  display: inline-flex;
+  font-size: 15px;
+  line-height: 1;
   overflow: hidden;
   min-width: 0;
-}
-
-.app-name strong {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.app-name small {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  letter-spacing: 0;
-  text-transform: lowercase;
 }
 
 .sidebar-body {

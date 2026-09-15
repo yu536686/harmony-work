@@ -41,6 +41,7 @@ import {
   pickMainChatActiveSession,
 } from "../../utils/session";
 import { composerSelectableSkills } from "../../utils/skills";
+import { PRODUCT_BRAND } from "../../branding";
 import {
   buildChatProjects,
   isLegacyInternalProjectPath,
@@ -2645,7 +2646,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                     <button className="error-dismiss" onClick={() => setSendError(null)}>✕</button>
                   </div>
                 )}
-                <img src="/piscis.png" alt="" className="chat-draft-logo" aria-hidden="true" />
+                <img src={PRODUCT_BRAND.iconPath} alt="" className="chat-draft-logo" aria-hidden="true" />
                 <h1>{t("chat.draftTitle")}</h1>
                 <p>{t("chat.draftDesc", { project: workspaceTriggerLabel })}</p>
               </div>

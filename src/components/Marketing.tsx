@@ -359,7 +359,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     onNavigateToChat();
     const prompt = [
       `当前登录用户：${user?.name}（${user?.email}，${user?.userRole}）`,
-      "请作为线上营销数据分析 Agent，基于以下 WorkBuddy 原生数据看板摘要，输出风险、机会、下一步投放/内容动作，并给出优先级。",
+      "请作为线上营销数据分析 Agent，基于以下 Harmony Work 原生数据看板摘要，输出风险、机会、下一步投放/内容动作，并给出优先级。",
       "",
       `素材总数：${metric(totals.total_count)}，视频：${metric(totals.video_count)}，图片：${metric(totals.image_count)}，近 7 天新增：${metric(totals.week_count)}`,
       `素材总容量：${formatBytes(totals.total_size as number)}`,
@@ -466,7 +466,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       <header className="feature-topbar">
         <div>
           <h1 className="feature-topbar-title">线上营销工作台</h1>
-          <p className="marketing-subtitle">{view === "assets" ? "素材库文件、信息和预览已接入 WorkBuddy。" : "数据看板可直接发起小亨分析会话。"}</p>
+          <p className="marketing-subtitle">{view === "assets" ? "素材库文件、信息和预览已接入 Harmony Work。" : "数据看板可直接发起小亨分析会话。"}</p>
         </div>
         <div className="marketing-actions">
           <span className="marketing-pill">{user.name} · {user.userRole}</span>

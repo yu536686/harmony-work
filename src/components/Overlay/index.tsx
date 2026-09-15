@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { PRODUCT_BRAND } from "../../branding";
 import { windowApi } from "../../services/tauri";
 import "./Overlay.css";
 
@@ -221,7 +222,7 @@ export default function OverlayApp() {
           <span className={`hud-dot ${status === "running" ? "hud-dot-running" : ""}`} />
 
           {/* Label */}
-          <span className="hud-title" data-tauri-drag-region>小亨 WorkBuddy</span>
+          <span className="hud-title" data-tauri-drag-region>{PRODUCT_BRAND.displayName}</span>
 
           {/* Current tool name (when running) */}
           {lastTool && (

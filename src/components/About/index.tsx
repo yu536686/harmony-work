@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
+import { PRODUCT_BRAND } from "../../branding";
+import BrandWordmark from "../BrandWordmark";
 import "./About.css";
 
 const HARMONY_SITE_URL = "https://www.harmonywatch.cn";
@@ -31,8 +33,8 @@ export default function About() {
   return (
     <div className="about-page">
       <div className="about-hero">
-        <img src="/piscis.png" className="about-logo" alt="小亨 WorkBuddy" />
-        <h1 className="about-title">小亨 WorkBuddy</h1>
+        <img src={PRODUCT_BRAND.iconPath} className="about-logo" alt="" aria-hidden="true" />
+        <h1 className="about-title"><BrandWordmark /></h1>
         <p className="about-tagline">{t("about.tagline")}</p>
         <span className="about-version">v{version}</span>
       </div>

@@ -8,6 +8,7 @@ import {
   type EnvironmentBootstrapResult,
   type MarketingUser,
 } from "../../services/tauri";
+import { PRODUCT_BRAND } from "../../branding";
 import "./style.css";
 
 import { REGISTER_URL } from "../../services/serviceUrls";
@@ -105,11 +106,11 @@ export default function Bootstrap({
     <main className="bootstrap-screen">
       <section className="bootstrap-shell">
         <header className="bootstrap-hero">
-          <span className="eyebrow">Xiaoheng WorkBuddy Setup</span>
-          <h1>{step === "environment" ? "初始化运行环境" : "登录小亨账号"}</h1>
+          <span className="eyebrow">{PRODUCT_BRAND.displayName} Setup</span>
+          <h1>{step === "environment" ? "初始化运行环境" : `登录 ${PRODUCT_BRAND.displayName} 账号`}</h1>
           <p>
             {step === "environment"
-              ? "请逐项安装 Git、Node.js、Python 和 WeCom CLI。WorkBuddy 会优先使用安装目录旁边的本地安装包，找不到时才尝试在线安装。"
+              ? "请逐项安装 Git、Node.js、Python 和 WeCom CLI。安装程序会优先使用安装目录旁边的本地安装包，找不到时才尝试在线安装。"
               : "登录后可访问线上营销工作台、素材库、技能市场和团队等高阶内容；跳过后仍可进入基础对话。"}
           </p>
           <div className="bootstrap-steps" aria-label="setup progress">

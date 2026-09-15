@@ -10,6 +10,7 @@ import SearchPanel from "./SearchPanel";
 import { ideApi, onFileChanged } from "../../../services/tauri/ide";
 import { sameProjectPath } from "../../../utils/projectPath";
 import { openPath } from "../../../services/tauri";
+import { PRODUCT_BRAND } from "../../../branding";
 import type { FileNode, OpenTab, GitFileStatus } from "./types";
 import "./IDE.css";
 
@@ -691,7 +692,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
             />
           ) : (
             <div className="ide-editor-welcome">
-              <img src="/piscis.png" alt="小亨 WorkBuddy" className="welcome-logo" />
+              <img src={PRODUCT_BRAND.iconPath} alt={PRODUCT_BRAND.displayName} className="welcome-logo" />
               <div className="welcome-title">
                 {t("ide.welcome") || "Select a file to start editing"}
               </div>

@@ -1,0 +1,19 @@
+.brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.brand-wordmark-harmony {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.brand-wordmark-work {
+  color: #8b5cf6;
+  font-weight: 750;
+}

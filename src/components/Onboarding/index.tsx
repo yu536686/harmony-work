@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { PRODUCT_BRAND } from "../../branding";
 import { settingsActions } from "../../store";
 import { openPath, settingsApi } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
@@ -265,7 +266,7 @@ export default function Onboarding({ onComplete }: Props) {
       <div style={{ maxWidth: 520, width: "100%" }}>
         {step === "welcome" && (
           <div style={{ textAlign: "center" }}>
-            <img src="/logo.png" alt="小亨 WorkBuddy" style={{ width: 96, height: 96, objectFit: "contain", borderRadius: 24, marginBottom: 18 }} />
+            <img src={PRODUCT_BRAND.iconPath} alt="" aria-hidden="true" style={{ width: 96, height: 96, objectFit: "contain", borderRadius: 24, marginBottom: 18 }} />
             <h1 style={{ fontSize: 28, fontWeight: 700, color: "var(--text-primary)", marginBottom: 12 }}>
               {t("onboarding.welcomeTitle")}
             </h1>

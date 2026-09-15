@@ -28,8 +28,10 @@ import { store, RootState, settingsActions, sessionsActions, chatActions } from 
 import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type ChatAttachment, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
+import { PRODUCT_BRAND } from "./branding";
 import i18n, { setLanguage } from "./i18n";
 import Chat from "./components/Chat";
+import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
 import "./theme.css";
 import "./App.css";
@@ -421,11 +423,8 @@ function AppContent() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <img src="/piscis.png" className="logo" alt="小亨 WorkBuddy" />
-            <span className="app-name">
-              <strong>小亨</strong>
-              <small>workbuddy</small>
-            </span>
+            <img src={PRODUCT_BRAND.iconPath} className="logo" alt="" aria-hidden="true" />
+            <BrandWordmark className="app-name" />
           </div>
           <button
             type="button"
