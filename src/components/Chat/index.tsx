@@ -1,20 +1,16 @@
-import { Component, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, type ErrorInfo, type ReactNode } from "react";
+import { Component, Fragment, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, type ErrorInfo, type ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
-  Activity,
-  Archive,
   BrainCircuit,
   FolderOpen,
-  ListTodo,
   Paperclip,
   Search,
   SendHorizontal,
   Sparkles,
   Square,
   UserRound,
-  Wrench,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -30,6 +26,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
+import ExecutionTimeline from "./ExecutionTimeline";
 import GlobalSessionRail from "./GlobalSessionRail";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
@@ -439,7 +436,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streaming, toolSteps, planBySession, isRunning, contextUsage, runStatusBySession } = useSelector(
+  const { messagesBySession, streaming, planBySession, isRunning, contextUsage, executionBySession } = useSelector(
     (s: RootState) => s.chat
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
@@ -720,7 +717,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   contextUsageRef.current = contextUsage;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
-  const toolStepsScrollRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const artifactsUnlistenRef = useRef<UnlistenFn | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -910,29 +906,25 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const streamingState: StreamingState | null = displaySessionId ? streaming[displaySessionId] ?? null : null;
   const streamingCurrent = streamingState?.current ?? "";
   const running = displaySessionId ? isRunning[displaySessionId] ?? false : false;
-  const steps = displaySessionId ? toolSteps[displaySessionId] ?? [] : [];
   const activePlan = displaySessionId ? planBySession[displaySessionId] ?? [] : [];
-  const runStatus = displaySessionId ? runStatusBySession[displaySessionId] ?? null : null;
-  const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
-
-  const hasTaskPanel = activePlan.length > 0 || steps.length > 0 || activeArtifacts.length > 0 || runStatus !== null;
-  const [taskPanelOpen, setTaskPanelOpen] = useState(true);
-  const [taskPanelTab, setTaskPanelTab] = useState<"activity" | "todo" | "tools" | "artifacts">("activity");
-  // Top-bar task tab click: toggle the panel when re-selecting the active tab,
-  // otherwise switch to the tab and make sure the panel is open.
-  const selectTaskTab = useCallback(
-    (tab: "activity" | "todo" | "tools" | "artifacts") => {
-      setTaskPanelTab((prev) => {
-        if (prev === tab) {
-          setTaskPanelOpen((open) => !open);
-        } else {
-          setTaskPanelOpen(true);
-        }
-        return tab;
-      });
-    },
-    [],
+  const executionModel = displaySessionId ? executionBySession[displaySessionId] ?? null : null;
+  const [, setActiveArtifacts] = useState<SessionArtifact[]>([]);
+  const latestRealUserMessageIndex = activeMessages.reduce(
+    (latest, message, index) =>
+      message.role === "user" && !message.tool_results_json ? index : latest,
+    -1,
   );
+  const executionTimelineInsertIndex = executionModel
+    ? Math.max(0, latestRealUserMessageIndex + 1)
+    : -1;
+  const executionTimelineNode = executionModel && displaySessionId ? (
+    <ExecutionTimeline
+      model={executionModel}
+      onToggleStep={(stepId) =>
+        dispatch(chatActions.toggleExecutionStep({ sessionId: displaySessionId, stepId }))
+      }
+    />
+  ) : null;
 
   // Plan resume dialog: shown when user sends a message while unfinished todos exist
   const [planResumeDialog, setPlanResumeDialog] = useState<{
@@ -943,14 +935,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   } | null>(null);
   const prevRunningRef = useRef(false);
   useEffect(() => {
-    if (running && !prevRunningRef.current) {
-      setTaskPanelOpen(true);
-      if (activePlan.length === 0 && steps.length > 0) {
-        setTaskPanelTab("tools");
-      } else if (activePlan.length === 0 && steps.length === 0 && activeArtifacts.length > 0) {
-        setTaskPanelTab("artifacts");
-      }
-    }
     // When a run finishes (true → false), automatically re-focus the chat
     // input so the user can keep typing without an extra mouse click.
     if (!running && prevRunningRef.current) {
@@ -961,27 +945,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       });
     }
     prevRunningRef.current = running;
-  }, [running, activePlan.length, steps.length, activeArtifacts.length]);
-  useEffect(() => {
-    if (!hasTaskPanel) return;
-    if (taskPanelTab === "activity" && !runStatus) {
-      if (activePlan.length > 0) setTaskPanelTab("todo");
-      else if (steps.length > 0) setTaskPanelTab("tools");
-      else if (activeArtifacts.length > 0) setTaskPanelTab("artifacts");
-    } else if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length > 0) {
-      setTaskPanelTab("tools");
-    } else if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length === 0 && activeArtifacts.length > 0) {
-      setTaskPanelTab("artifacts");
-    } else if (taskPanelTab === "tools" && steps.length === 0 && activePlan.length > 0) {
-      setTaskPanelTab("todo");
-    } else if (taskPanelTab === "tools" && steps.length === 0 && activePlan.length === 0 && activeArtifacts.length > 0) {
-      setTaskPanelTab("artifacts");
-    } else if (taskPanelTab === "artifacts" && activeArtifacts.length === 0 && activePlan.length > 0) {
-      setTaskPanelTab("todo");
-    } else if (taskPanelTab === "artifacts" && activeArtifacts.length === 0 && steps.length > 0) {
-      setTaskPanelTab("tools");
-    }
-  }, [taskPanelTab, activePlan.length, steps.length, activeArtifacts.length, hasTaskPanel, runStatus]);
+  }, [running]);
   const activeSessionKind = classifySession(displaySession);
   const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
@@ -1010,10 +974,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
 
     const load = async () => {
       try {
-        const [messages, { sessions: fresh }, artifacts] = await Promise.all([
+        const [messages, { sessions: fresh }, artifacts, executionHistory] = await Promise.all([
           sessionsApi.getMessages(displaySessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
           artifactsApi.list(displaySessionId),
+          chatApi.getExecutionHistory(displaySessionId),
         ]);
         setActiveArtifacts(artifacts);
         seedContextUsage(displaySessionId);
@@ -1031,6 +996,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           toolSteps: restored.toolSteps,
           planItems: restored.planItems,
           turnDone: s?.status !== "running",
+        }));
+        dispatch(chatActions.restoreExecutionHistory({
+          sessionId: displaySessionId,
+          records: executionHistory,
         }));
         setHasMoreHistory(messages.length >= CHAT_INITIAL_SIZE);
         // Correct stale running state from DB
@@ -1199,22 +1168,16 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     console.log('[Chat] registering event listener for session:', boundSessionId);
     chatApi.onEvent(displaySessionId, (event: AgentEventType) => {
       console.log('[Chat] received event:', event.type, 'for session:', boundSessionId);
-      // For streaming deltas: write to the currently visible session (ref) so the user
-      // sees live output even if they switched sessions mid-stream.
-      // For session-scoped finalization (done, error): always use boundSessionId so we
-      // don't corrupt another session's frozenBubble or message state.
-      const sid = activeSessionIdRef.current;
-      if (!sid) return;
+      // Every listener is session-scoped. Keep background events attached to that
+      // session even when the user switches conversations while a turn is running.
+      const sid = boundSessionId;
+      dispatch(chatActions.applyExecutionEvent({ sessionId: boundSessionId, event }));
       switch (event.type) {
         case "run_status":
           dispatch(chatActions.setRunStatus({
             sessionId: sid,
             status: { iteration: event.iteration, phase: event.phase, detail: event.detail },
           }));
-          if (event.iteration === 1) {
-            setTaskPanelOpen(true);
-            setTaskPanelTab("activity");
-          }
           break;
         case "text_segment_start":
           // Flush any buffered delta before starting a new segment
@@ -1484,14 +1447,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       setUnreadCount((n) => n + 1);
     }
   }, [rawMessages, streamingCurrent, capacity, displaySessionId, dispatch, scrollToBottom]);
-
-  // Scroll the tool-steps area to the bottom when a new step is added or toggled open
-  useEffect(() => {
-    const el = toolStepsScrollRef.current;
-    if (!el) return;
-    // Scroll to bottom of the steps scroll container so the latest step is always visible
-    el.scrollTop = el.scrollHeight;
-  }, [steps]);
 
   // Refresh the full session list when opening Pond CLI so assistant / headless
   // sessions created outside the main chat flow appear in the sidebar.
@@ -2370,65 +2325,12 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       <div className="chat-layout">
       {/* Main chat area */}
       <div className={`chat-main ${isDraft ? "is-draft" : ""}`}>
-        {/* Top bar: task tabs */}
+        {/* Top bar: Workbench toggle is added in the next implementation stage. */}
         <div className="chat-topbar">
           <div className="chat-topbar-current">
             <span>{kindLabel(sessionFilter)}</span>
             {displaySession && <strong>{displaySession.title?.replace(/^Piscis CLI/, "小亨 CLI") ?? t("chat.defaultTitle")}</strong>}
           </div>
-
-          {hasTaskPanel && (
-            <div className="chat-topbar-tasks" role="tablist" aria-label="Task panel tabs">
-              <button
-                className={`chat-topbar-task-tab ${taskPanelTab === "activity" && taskPanelOpen ? "active" : ""}`}
-                onClick={() => selectTaskTab("activity")}
-                disabled={!runStatus}
-                role="tab"
-                aria-selected={taskPanelTab === "activity"}
-                aria-label={t("chat.taskActivity")}
-                title={t("chat.taskActivity")}
-              >
-                <Activity size={15} strokeWidth={1.8} aria-hidden="true" />
-                {runStatus && <span className="chat-topbar-task-count">{runStatus.iteration}</span>}
-              </button>
-              <button
-                className={`chat-topbar-task-tab ${taskPanelTab === "todo" && taskPanelOpen ? "active" : ""}`}
-                onClick={() => selectTaskTab("todo")}
-                disabled={activePlan.length === 0}
-                role="tab"
-                aria-selected={taskPanelTab === "todo"}
-                aria-label={t("chat.taskTodo")}
-                title={t("chat.taskTodo")}
-              >
-                <ListTodo size={15} strokeWidth={1.8} aria-hidden="true" />
-                {activePlan.length > 0 && <span className="chat-topbar-task-count">{activePlan.length}</span>}
-              </button>
-              <button
-                className={`chat-topbar-task-tab ${taskPanelTab === "tools" && taskPanelOpen ? "active" : ""}`}
-                onClick={() => selectTaskTab("tools")}
-                disabled={steps.length === 0}
-                role="tab"
-                aria-selected={taskPanelTab === "tools"}
-                aria-label={t("chat.taskTools")}
-                title={t("chat.taskTools")}
-              >
-                <Wrench size={15} strokeWidth={1.8} aria-hidden="true" />
-                {steps.length > 0 && <span className="chat-topbar-task-count">{steps.length}</span>}
-              </button>
-              <button
-                className={`chat-topbar-task-tab ${taskPanelTab === "artifacts" && taskPanelOpen ? "active" : ""}`}
-                onClick={() => selectTaskTab("artifacts")}
-                disabled={activeArtifacts.length === 0}
-                role="tab"
-                aria-selected={taskPanelTab === "artifacts"}
-                aria-label={t("chat.taskArtifacts")}
-                title={t("chat.taskArtifacts")}
-              >
-                <Archive size={15} strokeWidth={1.8} aria-hidden="true" />
-                {activeArtifacts.length > 0 && <span className="chat-topbar-task-count">{activeArtifacts.length}</span>}
-              </button>
-            </div>
-          )}
         </div>
 
         {isDragging && !isImSession && (
@@ -2453,58 +2355,6 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               </div>
             )}
 
-            {hasTaskPanel && taskPanelOpen && (
-              <div className="session-task-panel">
-                <div className="session-task-panel-content">
-                      {taskPanelTab === "activity" && runStatus && (
-                        <div className={`agent-run-status phase-${runStatus.phase}`}>
-                          <span className="agent-run-status-dot" aria-hidden="true" />
-                          <div>
-                            <strong>{runStatus.phase === "thinking" ? "正在规划" : runStatus.phase === "executing_tools" ? "正在执行" : "正在调整"}</strong>
-                            <span>{runStatus.detail}</span>
-                          </div>
-                          <small>第 {runStatus.iteration} 轮</small>
-                        </div>
-                      )}
-                      {taskPanelTab === "todo" && activePlan.length > 0 && (
-                        <div className="tool-steps-scroll">
-                          <PlanPanel items={activePlan} />
-                        </div>
-                      )}
-                      {taskPanelTab === "tools" && steps.length > 0 && (
-                        <div className="tool-steps-scroll" ref={toolStepsScrollRef}>
-                          {steps.map((step) => (
-                            <ToolStepCard
-                              key={step.id}
-                              step={step}
-                              onToggle={() => {
-                                dispatch(chatActions.toggleToolStep({ sessionId: displaySessionId!, id: step.id }));
-                                if (!step.expanded) {
-                                  requestAnimationFrame(() => {
-                                    const el = toolStepsScrollRef.current;
-                                    if (el) {
-                                      const cards = el.querySelectorAll<HTMLElement>(".tool-step-card");
-                                      const idx = steps.findIndex((s) => s.id === step.id);
-                                      if (idx >= 0 && cards[idx]) {
-                                        cards[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
-                                      }
-                                    }
-                                  });
-                                }
-                              }}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      {taskPanelTab === "artifacts" && activeArtifacts.length > 0 && (
-                        <div className="tool-steps-scroll">
-                          <ArtifactsPanel artifacts={activeArtifacts} />
-                        </div>
-                      )}
-                </div>
-              </div>
-            )}
-
             <div className="messages-area" ref={messagesAreaRef}>
               {hasMoreHistory && (
                 <button
@@ -2516,42 +2366,54 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                   {loadingMoreHistory ? t("common.loading") : t("chat.loadMoreHistory")}
                 </button>
               )}
-              {activeMessages.map((msg) => {
+              {activeMessages.map((msg, messageIndex) => {
+                const timelineBefore =
+                  messageIndex === executionTimelineInsertIndex ? executionTimelineNode : null;
                 // Render historical chat_ui tool calls as interactive cards
                 if (chatUiToolCallIds.has(msg.id)) {
                   const cards = Object.values(historicalCards).filter((c) => c.afterMessageId === msg.id);
                   if (cards.length > 0) {
-                    return cards.map((card) => (
-                      <div key={card.requestId} className="message message-assistant">
-                        <div className="message-role">{t("chat.piscis")}</div>
-                        <div className="message-content">
-                          {msg.content.trim() && <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />}
-                          <InteractiveCard
-                            requestId={card.requestId}
-                            uiDefinition={card.uiDefinition}
-                            submittedValues={card.submittedValues}
-                            onSubmitted={
-                              displaySessionId
-                                ? () => markInteractiveSubmitted(displaySessionId, card.requestId)
-                                : undefined
-                            }
-                          />
-                        </div>
-                      </div>
-                    ));
+                    return (
+                      <Fragment key={msg.id}>
+                        {timelineBefore}
+                        {cards.map((card) => (
+                          <div key={card.requestId} className="message message-assistant">
+                            <div className="message-role">{t("chat.piscis")}</div>
+                            <div className="message-content">
+                              {msg.content.trim() && <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />}
+                              <InteractiveCard
+                                requestId={card.requestId}
+                                uiDefinition={card.uiDefinition}
+                                submittedValues={card.submittedValues}
+                                onSubmitted={
+                                  displaySessionId
+                                    ? () => markInteractiveSubmitted(displaySessionId, card.requestId)
+                                    : undefined
+                                }
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </Fragment>
+                    );
                   }
                 }
                 return (
-                  <div key={msg.id} className={`message message-${msg.role}`}>
-                    <div className="message-role">
-                      {msg.role === "user" ? t("chat.you") : t("chat.piscis")}
+                  <Fragment key={msg.id}>
+                    {timelineBefore}
+                    <div className={`message message-${msg.role}`}>
+                      <div className="message-role">
+                        {msg.role === "user" ? t("chat.you") : t("chat.piscis")}
+                      </div>
+                      <div className="message-content">
+                        <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
+                      </div>
                     </div>
-                    <div className="message-content">
-                      <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
-                    </div>
-                  </div>
+                  </Fragment>
                 );
               })}
+
+              {executionTimelineInsertIndex === activeMessages.length && executionTimelineNode}
 
               {/* Single streaming bubble — shows thinking dots until first text arrives,
                   then displays the latest streamed text. Disappears when running stops.
@@ -3340,259 +3202,6 @@ function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpen
           {processed}
         </ReactMarkdown>
       </RenderErrorBoundary>
-    </div>
-  );
-}
-
-// ─── Tool step card ───────────────────────────────────────────────────────────
-
-const TOOL_ICONS: Record<string, string> = {
-  shell: "💻", powershell: "💻", powershell_query: "💻",
-  file_read: "📄", file_write: "📝",
-  web_search: "🔍",
-  web_fetch: "📰",
-  browser: "🌐",
-  screen_capture: "📸",
-  harmony_cut: "CUT",
-  uia: "🖱️",
-  wmi: "🔧",
-  com: "📋",
-  office: "📊",
-  plan_todo: "🗂️",
-};
-
-function toolIcon(name: string): string {
-  return TOOL_ICONS[name] ?? "⚙️";
-}
-
-/** Summarise tool input into a one-line description */
-function toolSummary(name: string, input: unknown): string {
-  const i = input as Record<string, unknown>;
-  if (!i) return name;
-  if (name === "browser") {
-    const parts = [i["action"]];
-    if (i["url"]) parts.push(String(i["url"]).slice(0, 60));
-    else if (i["selector"]) parts.push(String(i["selector"]).slice(0, 40));
-    return parts.filter(Boolean).join(" → ");
-  }
-  if (name === "shell" || name === "powershell") return String(i["command"] ?? "").slice(0, 80);
-  if (name === "file_read" || name === "file_write") return String(i["path"] ?? "").slice(0, 80);
-  if (name === "web_search") return String(i["query"] ?? "").slice(0, 80);
-  if (name === "web_fetch") return String(i["url"] ?? "").slice(0, 80);
-  if (name === "harmony_cut") return [i["action"], i["media_dir"] ?? i["project_id"]].filter(Boolean).join(" ");
-  if (name === "screen_capture") return String(i["mode"] ?? "fullscreen");
-  return Object.entries(i).slice(0, 2).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(" ");
-}
-
-function planStatusLabel(t: ReturnType<typeof useTranslation>["t"], status: PlanTodoItem["status"]): string {
-  switch (status) {
-    case "pending":
-      return t("chat.planPending");
-    case "in_progress":
-      return t("chat.planInProgress");
-    case "completed":
-      return t("chat.planCompleted");
-    case "cancelled":
-      return t("chat.planCancelled");
-    default:
-      return status;
-  }
-}
-
-function PlanPanel({ items }: { items: PlanTodoItem[] }) {
-  const { t } = useTranslation();
-  return (
-    <div className="plan-panel">
-      {items.map((item, index) => (
-        <div key={item.id} className={`plan-item plan-${item.status}`}>
-          <div className="plan-item-left">
-            <span className="plan-item-index">{index + 1}</span>
-            <span className="plan-item-content">{item.content}</span>
-          </div>
-          <div className="plan-item-right">
-            <span className="plan-item-id">{item.id}</span>
-            <span className={`plan-item-status plan-status-${item.status}`}>
-              {item.status === "in_progress" && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
-              {planStatusLabel(t, item.status)}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function artifactIcon(type: string): string {
-  switch (type.toLowerCase()) {
-    case "image":
-      return "IMG";
-    case "link":
-    case "url":
-      return "URL";
-    case "report":
-      return "RPT";
-    case "document":
-      return "DOC";
-    default:
-      return "FILE";
-  }
-}
-
-function formatArtifactTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function isWebUri(value: string): boolean {
-  return /^https?:\/\//i.test(value);
-}
-
-function ArtifactsPanel({ artifacts }: { artifacts: SessionArtifact[] }) {
-  return (
-    <div className="artifacts-panel">
-      {artifacts.map((artifact) => (
-        <div key={artifact.id} className="artifact-card">
-          <div className="artifact-icon" aria-hidden="true">{artifactIcon(artifact.artifact_type)}</div>
-          <div className="artifact-main">
-            <div className="artifact-title-row">
-              <span className="artifact-title">{artifact.name}</span>
-              <span className="artifact-type">{artifact.artifact_type}</span>
-            </div>
-            {artifact.content_summary && (
-              <div className="artifact-summary">{artifact.content_summary}</div>
-            )}
-            {artifact.uri && (
-              isWebUri(artifact.uri) ? (
-                <a className="artifact-uri" href={artifact.uri} target="_blank" rel="noreferrer">
-                  {artifact.uri}
-                </a>
-              ) : (
-                <button className="artifact-uri artifact-uri-button" onClick={() => openPath(artifact.uri!)}>
-                  {artifact.uri}
-                </button>
-              )
-            )}
-            <div className="artifact-meta">
-              {artifact.source_tool && <span>{artifact.source_tool}</span>}
-              <span>{formatArtifactTime(artifact.created_at)}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FishProgressBadge({ progress }: { progress: NonNullable<ToolStep["fishProgress"]> }) {
-  const { t } = useTranslation();
-  const statusLabel: Record<string, string> = {
-    thinking: t("chat.fishProgressThinking"),
-    thinking_text: t("chat.fishProgressThinking"),
-    tool_call: t("chat.fishProgressToolCall"),
-    tool_done: t("chat.fishProgressToolDone"),
-    done: t("chat.fishProgressDone"),
-  };
-  const label = statusLabel[progress.status] ?? progress.status;
-  const isRunning = progress.status !== "done";
-  const showThinking = isRunning && progress.thinkingText;
-
-  return (
-    <div className="fish-progress-badge">
-      <span className="fish-progress-icon">🐠</span>
-      <span className="fish-progress-name">{progress.fishName}</span>
-      {progress.iteration > 0 && (
-        <span className="fish-progress-iter">{t("chat.fishProgressStep", { n: progress.iteration })}</span>
-      )}
-      {progress.toolName && (
-        <span className="fish-progress-tool">{progress.toolName}</span>
-      )}
-      <span className={`fish-progress-status ${isRunning ? "fish-status-running" : "fish-status-done"}`}>
-        {isRunning && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
-        {label}
-      </span>
-      {showThinking && (
-        <span className="fish-progress-thinking">{progress.thinkingText}</span>
-      )}
-    </div>
-  );
-}
-
-function ToolStepCard({ step, onToggle }: { step: ToolStep; onToggle: () => void }) {
-  const { t } = useTranslation();
-  const maxResultLen = 400;
-  const result = step.result ?? "";
-  const truncated = result.length > maxResultLen;
-  const [showFull, setShowFull] = useState(false);
-
-  const statusClass = !step.completed
-    ? "step-running"
-    : step.isError
-    ? "step-error"
-    : "step-ok";
-
-  const statusIcon = !step.completed ? (
-    <span className="step-spinner" aria-label="running" />
-  ) : step.isError ? (
-    <span className="step-status-icon">✕</span>
-  ) : (
-    <span className="step-status-icon">✓</span>
-  );
-
-  return (
-    <div className={`tool-step-card ${statusClass}`}>
-      <button className="tool-step-header" onClick={onToggle} aria-expanded={step.expanded}>
-        <span className="tool-step-icon">{toolIcon(step.name)}</span>
-        <span className="tool-step-name">{step.name}</span>
-        <span className="tool-step-summary">{toolSummary(step.name, step.input)}</span>
-        <span className={`tool-step-status ${statusClass}`}>{statusIcon}</span>
-        <span className="tool-step-chevron">{step.expanded ? "▲" : "▼"}</span>
-      </button>
-
-      {/* Fish progress inline — shown even when step is collapsed */}
-      {step.fishProgress && step.fishProgress.status !== "done" && (
-        <FishProgressBadge progress={step.fishProgress} />
-      )}
-
-      {step.expanded && (
-        <div className="tool-step-body">
-          {/* Fish progress detail when expanded */}
-          {step.fishProgress && (
-            <div className="tool-step-section">
-              <span className="tool-step-section-label">🐠 {t("chat.fishProgressSection")}</span>
-              <FishProgressBadge progress={step.fishProgress} />
-            </div>
-          )}
-          <div className="tool-step-section">
-            <span className="tool-step-section-label">{t("chat.toolStepInput")}</span>
-            <pre className="tool-step-pre">
-              {typeof step.input === "string"
-                ? step.input
-                : JSON.stringify(step.input, null, 2)}
-            </pre>
-          </div>
-          {step.completed && (
-            <div className="tool-step-section">
-              <span className={`tool-step-section-label ${step.isError ? "label-error" : ""}`}>
-                {step.isError ? t("chat.toolStepError") : t("chat.toolStepOutput")}
-              </span>
-              <pre className={`tool-step-pre ${step.isError ? "pre-error" : ""}`}>
-                {showFull || !truncated ? result : result.slice(0, maxResultLen) + "…"}
-              </pre>
-              {truncated && (
-                <button
-                  className="tool-step-show-more"
-                  onClick={(e) => { e.stopPropagation(); setShowFull(!showFull); }}
-                >
-                  {showFull
-                    ? t("chat.toolStepCollapse")
-                    : t("chat.toolStepExpand", { count: result.length })}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

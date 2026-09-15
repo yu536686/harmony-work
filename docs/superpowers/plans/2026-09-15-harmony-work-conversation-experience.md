@@ -520,7 +520,7 @@ git commit -m "feat: 建立统一会话执行状态模型"
 - 修改：`src/i18n/zh.ts`
 - 修改：`src/i18n/en.ts`
 
-- [ ] **步骤 1：编写运行态和完成态组件测试**
+- [x] **步骤 1：编写运行态和完成态组件测试**
 
 ```tsx
 render(<ExecutionTimeline model={modelWithRunningAndCompletedSteps} onToggleStep={onToggle} />);
@@ -532,35 +532,35 @@ await user.click(screen.getByRole("button", { name: /生成并验证/ }));
 expect(screen.getByText("npm test -- --run")).toBeVisible();
 ```
 
-- [ ] **步骤 2：测试公开摘要而非隐藏推理**
+- [x] **步骤 2：测试公开摘要而非隐藏推理**
 
 组件只接受 `model.reasoning[].text`；测试夹具中的 raw 字段即使存在于未知对象，也不能渲染。完成后摘要折叠为“思考过程”，当前流式摘要带轻量动画并尊重 `prefers-reduced-motion`。
 
-- [ ] **步骤 3：实现时间线和状态图标**
+- [x] **步骤 3：实现时间线和状态图标**
 
 使用 Lucide `CircleCheck`、`LoaderCircle`、`CircleX`、`ShieldAlert`、`CircleStop`、`ChevronRight`。图标按钮均有中文 `aria-label` 和 `title`。完成步骤默认折叠，当前步骤默认展开，用户手动状态在该回合内保持。
 
-- [ ] **步骤 4：替换旧顶部 Activity/Todo/Tools/Artifacts 面板**
+- [x] **步骤 4：替换旧顶部 Activity/Todo/Tools/Artifacts 面板**
 
 删除 `chat-topbar-tasks` 作为主入口，将 plan、tools、run status 统一放入消息流中的 `ExecutionTimeline`。顶部右侧只保留 Workbench 开关。审批弹窗沿用现有状态和协议，不嵌入时间线内部。
 
-- [ ] **步骤 5：接入实时和历史执行事件**
+- [x] **步骤 5：接入实时和历史执行事件**
 
 `onEvent` 首先 dispatch `applyExecutionEvent`，然后保留现有消息、审批、artifact 刷新副作用。会话切换时并发获取 messages、artifacts、execution history，并通过 `restoreExecutionHistory` 重建静态时间线。
 
-- [ ] **步骤 6：运行组件和主 store 测试**
+- [x] **步骤 6：运行组件和主 store 测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/components/Chat/ExecutionTimeline.test.tsx src/store/slices/chat.test.ts"'`
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：执行前端构建**
+- [x] **步骤 7：执行前端构建**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npm run build:web"'`
 
 预期：构建成功，无未使用旧任务面板状态。
 
-- [ ] **步骤 8：提交检查点**
+- [x] **步骤 8：提交检查点**
 
 ```powershell
 git add src/components/Chat src/i18n src/store/slices/chat.ts
