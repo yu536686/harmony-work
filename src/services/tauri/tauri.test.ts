@@ -105,7 +105,9 @@ describe("chatApi", () => {
     mockListen.mockResolvedValueOnce(() => {});
 
     await chatApi.onEvent("sess1", handler);
-    const registered = mockListen.mock.calls.at(-1);
+    // 不能用 Array.prototype.at：tsconfig 的 lib 是 ES2020，.at 需要 ES2022
+    const calls = mockListen.mock.calls;
+    const registered = calls[calls.length - 1];
     expect(registered?.[0]).toBe("agent_event_sess1");
 
     const listener = registered?.[1] as ((event: { payload: AgentEventType }) => void) | undefined;
