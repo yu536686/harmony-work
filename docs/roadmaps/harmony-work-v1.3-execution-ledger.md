@@ -66,6 +66,14 @@
 
 ## 最近检查点
 
+### 2026-09-15：计划勾选同步与任务 1-4 远端复验
+
+- 实施计划的复选框首次与真实进度对齐：任务 1-4 共 26 个步骤已勾选，任务 5-12 保持未勾选，消除「已完成但显示未开始」的歧义。
+- 未轻信台账既有结论，逐项在远端 Windows 复验阶段 0-1 与任务 4 的成果：品牌单测 1/1、品牌扫描 1/1、安装器离线运行时 8/8、Tauri IPC 24/24 通过。
+- 修复任务 4 遗留的 TypeScript 编译错误：`src/services/tauri/tauri.test.ts` 使用了 `Array.prototype.at`，而 `tsconfig.json` 的 `lib` 为 ES2020，导致 `npm run build:web`（`tsc && vite build`）无法通过。改为下标访问后 `npx tsc --noEmit` 为 0 错误。
+- 固化远端构建环境：非交互 SSH 会话没有 MSVC 环境变量，`cargo test` 会因找不到 `cl.exe` 而失败，且管道会吞掉非零退出码造成「假成功」。已在 `E:\xiaoheng-tools\winbuild.cmd` 固化 `vcvars64` + `CARGO_HOME`/`RUSTUP_HOME` 包装脚本，后续 Rust 验证统一经由该脚本执行。
+- 未完成项：任务 5 的持久化代码已就位但仍需 Rust 侧 `store::db` 与 `codex_runtime::service` 测试确认后才可勾选。
+
 ### 2026-09-15：Codex 公开执行事件与脱敏
 
 - 新增公开思考摘要开始/增量事件和命令输出增量事件，保持既有 `agent_event_<sessionId>` IPC 通道不变。

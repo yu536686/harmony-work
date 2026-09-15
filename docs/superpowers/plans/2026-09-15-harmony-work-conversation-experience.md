@@ -79,7 +79,7 @@
 - 修改：`package.json`
 - 修改：`docs/roadmaps/harmony-work-v1.3-execution-ledger.md`
 
-- [ ] **步骤 1：为品牌常量编写失败测试**
+- [x] **步骤 1：为品牌常量编写失败测试**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -94,13 +94,13 @@ describe("branding contract", () => {
 });
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/branding.test.ts"'`
 
 预期：FAIL，提示无法解析 `./branding`。
 
-- [ ] **步骤 3：实现唯一品牌常量**
+- [x] **步骤 3：实现唯一品牌常量**
 
 ```ts
 export const PRODUCT_BRAND = {
@@ -118,7 +118,7 @@ export const AGENT_BRAND = {
 } as const;
 ```
 
-- [ ] **步骤 4：增加仓库级可见品牌扫描**
+- [x] **步骤 4：增加仓库级可见品牌扫描**
 
 `scripts/branding-contract.test.mjs` 读取 `src/i18n`、`src/App.tsx`、Onboarding、About、Overlay、Bootstrapper、`tauri.conf.json` 和 `README.md`，断言用户可见区域不再包含 `小亨 WorkBuddy`、旧 GitHub 仓库 URL 或旧安装包名；允许 `小亨`、`Xiaoheng` 出现在 Agent 人格文案中，允许内部兼容路径和 Tauri identifier 保留旧标识。
 
@@ -128,13 +128,13 @@ export const AGENT_BRAND = {
 "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs"
 ```
 
-- [ ] **步骤 5：运行测试并确认通过**
+- [x] **步骤 5：运行测试并确认通过**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/branding.test.ts; node --test scripts/branding-contract.test.mjs"'`
 
 预期：品牌单测 PASS；独立执行品牌扫描时仍因尚未迁移的可见文案 FAIL，并准确列出文件。默认 `npm test` 暂不接入该扫描器，避免阶段检查点长期红灯。
 
-- [ ] **步骤 6：提交检查点**
+- [x] **步骤 6：提交检查点**
 
 ```powershell
 git add src/branding.ts src/branding.test.ts scripts/branding-contract.test.mjs package.json docs/roadmaps/harmony-work-v1.3-execution-ledger.md
@@ -159,7 +159,7 @@ git commit -m "test: 固化 Harmony Work 品牌命名契约"
 - 创建：`public/harmony-work-wordmark.png`
 - 修改：`src-tauri/icons/*`
 
-- [ ] **步骤 1：复制并校验用户确认的品牌源文件**
+- [x] **步骤 1：复制并校验用户确认的品牌源文件**
 
 源文件：
 
@@ -170,7 +170,7 @@ git commit -m "test: 固化 Harmony Work 品牌命名契约"
 
 将原始 RGBA 图标保存为 `public/harmony-work-icon.png`，文字标识保存为 `public/harmony-work-wordmark.png`。用 `npx tauri icon public/harmony-work-icon.png` 生成 Windows ICO、托盘与各尺寸图标，再将兼容 URL `public/logo.png`、`public/piscis.png` 指向同一视觉资产内容。
 
-- [ ] **步骤 2：更新应用壳层品牌**
+- [x] **步骤 2：更新应用壳层品牌**
 
 `App.tsx` 左上角使用图标和可缩放文字标识；可访问文本为 `Harmony Work`。About、Onboarding、Bootstrap 和 IDE 欢迎页使用 `PRODUCT_BRAND`，Overlay 标题显示 `Harmony Work`。
 
@@ -181,7 +181,7 @@ Agent 对话相关字符串继续使用 `AGENT_BRAND`：
 <div className="message-role">{AGENT_BRAND.displayNameZh}</div>
 ```
 
-- [ ] **步骤 3：迁移中英文文案**
+- [x] **步骤 3：迁移中英文文案**
 
 规则：
 
@@ -191,19 +191,19 @@ Agent 对话相关字符串继续使用 `AGENT_BRAND`：
 内部 WorkBuddy MCP Host：保留协议名，不作为用户主品牌展示
 ```
 
-- [ ] **步骤 4：运行品牌、设计和应用测试**
+- [x] **步骤 4：运行品牌、设计和应用测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npx vitest run src/branding.test.ts src/utils/designTokens.test.ts"'`
 
 预期：全部 PASS，品牌扫描仅剩安装器与发行元数据项。
 
-- [ ] **步骤 5：执行前端构建**
+- [x] **步骤 5：执行前端构建**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npm run build:web"'`
 
 预期：TypeScript 和 Vite 构建成功，`dist` 中包含新品牌资产。
 
-- [ ] **步骤 6：提交检查点**
+- [x] **步骤 6：提交检查点**
 
 ```powershell
 git add src public src-tauri/icons
@@ -228,21 +228,21 @@ git commit -m "feat: 更新 Harmony Work 应用品牌与图标"
 - 修改：`scripts/offline-runtime-lock.test.mjs`
 - 修改：`README.md`
 
-- [ ] **步骤 1：扩展安装器失败测试**
+- [x] **步骤 1：扩展安装器失败测试**
 
 在 `scripts/offline-runtime-lock.test.mjs` 增加断言：最终文件名为 `Harmony-Work-1.3.0-alpha.1-x64-setup.exe`，WPF AssemblyName 为 `Harmony-Work-Setup`，快捷方式名和卸载项为 `Harmony Work`，载荷启动文件存在且使用绝对路径。
 
-- [ ] **步骤 2：运行安装器测试并确认失败**
+- [x] **步骤 2：运行安装器测试并确认失败**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npm run test:installer"'`
 
 预期：FAIL，显示旧 `Xiaoheng-WorkBuddy` 文件名或旧产品名。
 
-- [ ] **步骤 3：更新版本和用户可见元数据**
+- [x] **步骤 3：更新版本和用户可见元数据**
 
 统一版本为 `1.3.0-alpha.1`。`tauri.conf.json` 的 `productName`、窗口标题、描述改为 Harmony Work；保留 `identifier: com.harmony.xiaoheng-workbuddy`。将 `Cargo.toml` 的 package/bin 名称和 `tauri.conf.json` 的 `mainBinaryName` 统一为 `harmony-work`，Rust library crate 名保持兼容。内部数据库目录不迁移，安装器同时识别 `harmony-work.exe` 与旧 `xiaoheng-workbuddy.exe`，复用现有安装目录并在升级完成后移除失效快捷方式。
 
-- [ ] **步骤 4：更新 WPF Bootstrapper**
+- [x] **步骤 4：更新 WPF Bootstrapper**
 
 `InstallerEngine` 使用：
 
@@ -253,19 +253,19 @@ private const string ApplicationExecutable = "harmony-work.exe";
 
 完成页“立即启动”启动新可执行文件后调用 `Application.Current.Shutdown()`；旧版本可执行文件仅作为升级检测兼容项，不创建旧品牌快捷方式。
 
-- [ ] **步骤 5：更新 README 和 GitHub 链接**
+- [x] **步骤 5：更新 README 和 GitHub 链接**
 
 仓库、issues、releases 全部指向 `yu536686/harmony-work`；下载与校验示例使用新安装包名。说明 Agent 仍名为小亨。
 
 将 `scripts/branding-contract.test.mjs` 接入 `package.json` 的默认 `test`，从本步骤开始全量测试必须同时满足品牌扫描。
 
-- [ ] **步骤 6：运行安装器测试和 WPF 编译**
+- [x] **步骤 6：运行安装器测试和 WPF 编译**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npm run test:installer; dotnet build installer\WorkBuddyBootstrapper\WorkBuddyBootstrapper.csproj -c Release -p:Platform=x64"'`
 
 预期：Node 安装器测试 PASS，WPF 0 error。
 
-- [ ] **步骤 7：提交检查点**
+- [x] **步骤 7：提交检查点**
 
 ```powershell
 git add package.json package-lock.json src-tauri installer scripts README.md
@@ -279,7 +279,7 @@ git commit -m "feat: 升级 Harmony Work 1.3 安装与发行品牌"
 - 修改：`src/services/tauri/chat.ts`
 - 修改：`src/services/tauri/tauri.test.ts`
 
-- [ ] **步骤 1：为公开 reasoning summary 编写 Rust 失败测试**
+- [x] **步骤 1：为公开 reasoning summary 编写 Rust 失败测试**
 
 ```rust
 #[test]
@@ -299,7 +299,7 @@ fn streams_reasoning_summary_but_drops_raw_reasoning() {
 }
 ```
 
-- [ ] **步骤 2：为命令输出增量和脱敏编写失败测试**
+- [x] **步骤 2：为命令输出增量和脱敏编写失败测试**
 
 ```rust
 #[test]
@@ -313,13 +313,13 @@ fn redacts_sensitive_tool_fields_and_limits_output() {
 }
 ```
 
-- [ ] **步骤 3：运行 Rust 测试并确认失败**
+- [x] **步骤 3：运行 Rust 测试并确认失败**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work\src-tauri; cargo test codex_runtime::event_adapter -- --nocapture"'`
 
 预期：FAIL，缺少 `ReasoningSummaryDelta`。
 
-- [ ] **步骤 4：实现公开事件映射**
+- [x] **步骤 4：实现公开事件映射**
 
 新增事件：
 
@@ -331,17 +331,17 @@ ToolOutputDelta { id: String, delta: String },
 
 映射 `item/reasoning/summaryPartAdded`、`item/reasoning/summaryTextDelta`、`item/commandExecution/outputDelta`。`item/reasoning/textDelta` 明确返回空数组。对工具参数、结果、命令输出执行递归敏感键脱敏、UTF-8 安全截断和 ANSI 控制符清理。
 
-- [ ] **步骤 5：同步 TypeScript 事件联合类型和 IPC 测试**
+- [x] **步骤 5：同步 TypeScript 事件联合类型和 IPC 测试**
 
 `AgentEventType` 增加同名 snake_case 事件，`tauri.test.ts` 断言 `chatApi.onEvent` 不改变通道名且 `chatApi.send` 保持现有参数兼容。
 
-- [ ] **步骤 6：运行 Rust 与前端服务测试**
+- [x] **步骤 6：运行 Rust 与前端服务测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; cargo test --manifest-path src-tauri\Cargo.toml codex_runtime::event_adapter; npx vitest run src/services/tauri/tauri.test.ts"'`
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：提交检查点**
+- [x] **步骤 7：提交检查点**
 
 ```powershell
 git add src-tauri/src/codex_runtime/event_adapter.rs src/services/tauri/chat.ts src/services/tauri/tauri.test.ts
