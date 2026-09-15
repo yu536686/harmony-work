@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [package]
 name = "xiaoheng-workbuddy"
-version = "1.2.0-alpha.5"
+version = "1.2.0-alpha.7"
 autobins = false
 default-run = "xiaoheng-workbuddy"
 description = "Harmony Xiaoheng AI desktop workbench"
@@ -96,6 +96,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
 toml = "0.8"
+toml_edit = "0.20"
 
 # SQLite (bundled - no external dll needed)
 rusqlite = { version = "0.31", features = ["bundled"] }

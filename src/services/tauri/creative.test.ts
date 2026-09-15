@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReferenceSelection, resolveCanvasRequest } from "./creative";
+import { loadHarvisTasks, normalizeReferenceSelection, resolveCanvasRequest } from "./creative";
+
+it("migrates cached public result URLs without changing supplier signed URLs", () => {
+  const key = "workbuddy.harvis.tasks";
+  const tasks = [
+    { taskId: "old", resultUrl: "https://api.harmonywatch.cn:13001/output/a.png?token=x%2Fy" },
+    { taskId: "supplier", resultUrl: "https://cdn.example.com/a.mp3?signature=x%2Fy" }
+  ];
+  localStorage.setItem(key, JSON.stringify(tasks));
+  try {
+    expect(loadHarvisTasks().map(task => task.resultUrl)).toEqual([
+      "https://api.harmonywatch.cn/output/a.png?token=x%2Fy",
+      tasks[1].resultUrl
+    ]);
+  } finally {
+    localStorage.removeItem(key);
+  }
+});
 
 describe("resolveCanvasRequest", () => {
   it("maps a store poster to the supported 3:4 provider composition and exact archive size", () => {

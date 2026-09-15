@@ -137,7 +137,7 @@ fn responses_endpoint(provider: &str, base_url: Option<&str>) -> String {
     let default_base = match provider.to_lowercase().as_str() {
         "deepseek" => "https://api.deepseek.com",
         "openai" => "https://api.openai.com/v1",
-        "harmony" => "https://api.harmonywatch.cn:13001/v1",
+        "harmony" => crate::service_urls::HARMONY_API_BASE,
         _ => "https://api.openai.com/v1",
     };
     let base = base_url
@@ -145,6 +145,7 @@ fn responses_endpoint(provider: &str, base_url: Option<&str>) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(default_base)
         .trim_end_matches('/');
+    let base = crate::service_urls::migrate_public_service_url(base);
     if base.ends_with("/responses") {
         base.to_string()
     } else {

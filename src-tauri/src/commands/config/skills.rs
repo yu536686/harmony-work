@@ -21,12 +21,13 @@ async fn clawhub_get_with_retry(
     url: &str,
     max_retries: u32,
 ) -> Result<reqwest::Response, String> {
+    let url = crate::service_urls::migrate_public_service_url(url);
     let base_delay_ms: u64 = 1000;
     let mut attempt = 0u32;
 
     loop {
         let resp = client
-            .get(url)
+            .get(&url)
             .send()
             .await
             .map_err(|e| format!("网络请求失败：{}", e))?;
@@ -402,7 +403,7 @@ pub async fn install_skill(
     state: State<'_, AppState>,
     source: String,
 ) -> Result<SkillCatalogItem, String> {
-    let source_trimmed = sanitize_source(&source);
+    let source_trimmed = crate::service_urls::migrate_public_service_url(&sanitize_source(&source));
 
     // ── Detect zip: local path ending in .zip, or URL ending in .zip ──────────
     let is_zip_url = (source_trimmed.starts_with("http://")
@@ -794,7 +795,7 @@ pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> 
 
 /// ClawHub public API base URL.
 const CLAWHUB_API: &str = "https://clawhub.ai";
-const HARMONY_MARKET_API: &str = "http://61.150.31.150:8787";
+const HARMONY_MARKET_API: &str = crate::service_urls::MARKET_BASE;
 
 /// A skill entry from the ClawHub registry.
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
@@ -832,7 +833,7 @@ pub struct ClawHubSearchResult {
 fn harmony_market_base_url() -> String {
     std::env::var("HARMONY_MARKET_URL")
         .ok()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .map(|s| crate::service_urls::migrate_public_service_url(s.trim()).trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| HARMONY_MARKET_API.to_string())
 }
@@ -851,7 +852,7 @@ fn harmony_auth(mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 
 fn harmony_abs_url(base: &str, path_or_url: &str) -> String {
     if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
-        path_or_url.to_string()
+        crate::service_urls::migrate_public_service_url(path_or_url)
     } else if path_or_url.starts_with('/') {
         format!("{}{}", base.trim_end_matches('/'), path_or_url)
     } else {

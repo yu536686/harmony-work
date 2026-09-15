@@ -19,7 +19,6 @@ use std::sync::OnceLock;
 use tauri::State;
 use tokio::sync::Mutex;
 
-const DEFAULT_MARKETING_BASE: &str = "http://61.150.31.150:8090";
 static MARKETING_COOKIE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn cookie_store() -> &'static Mutex<Option<String>> {
@@ -66,11 +65,7 @@ async fn clear_persisted_cookie() {
 }
 
 pub(crate) fn marketing_base_url() -> String {
-    std::env::var("WORKBUDDY_MARKETING_URL")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_MARKETING_BASE.to_string())
+    crate::service_urls::marketing_base_url()
 }
 
 pub(crate) fn marketing_client() -> Result<reqwest::Client, String> {

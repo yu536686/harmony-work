@@ -58,8 +58,7 @@ const FORMAT_FILTERS = [
 ] as const;
 
 const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.map((item) => item.id);
-const MARKETING_ASSET_BASE = "http://61.150.31.150:8090";
-const REGISTER_URL = "http://www.harmonywatch.cn:8090";
+import { MARKETING_BASE as MARKETING_ASSET_BASE, REGISTER_URL, migratePublicServiceUrl } from "../services/serviceUrls";
 
 function selectedExtensions(groups: string[]) {
   return new Set<string>(
@@ -89,7 +88,7 @@ function assetPreviewUrl(asset: MarketingAsset) {
   const raw = asset.previewUrl;
   if (!raw) return "";
   return raw.startsWith("http://") || raw.startsWith("https://")
-    ? raw
+    ? migratePublicServiceUrl(raw)
     : `${MARKETING_ASSET_BASE}${raw.startsWith("/") ? raw : `/${raw}`}`;
 }
 

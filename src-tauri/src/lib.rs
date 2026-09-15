@@ -21,6 +21,8 @@ pub mod process;
 pub mod scheduler;
 mod skills;
 pub mod store;
+#[path = "../shared/service_urls.rs"]
+pub mod service_urls;
 mod tools;
 
 pub use app::run;

@@ -134,7 +134,9 @@ Get-FileHash .\Xiaoheng-WorkBuddy-<version>-x64-setup.exe -Algorithm SHA256
 
 设置界面还提供 Anthropic、通义千问、MiniMax、智谱 GLM、Kimi、SiliconFlow、Harmony 和自定义 OpenAI 兼容接口。实际可用性取决于供应商是否兼容当前 Codex Responses 执行协议。
 
-**Harmony 内部网关（公司统一计费）**：选择「Harmony（内部网关）」后，Base URL 默认为 `https://api.harmonywatch.cn:13001/v1`，填入门户「我的控制台」中生成的 Harmony API Key 即可调用。员工无需自付费用，用量由网关按个人 Key 统一核算。
+**Harmony 内部网关（公司统一计费）**：选择「Harmony（内部网关）」后，Base URL 默认为 `https://api.harmonywatch.cn/v1`，填入门户「我的控制台」中生成的 Harmony API Key 即可调用。员工无需自付费用，用量由网关按个人 Key 统一核算。
+
+门户入口为 `https://portal.harmonywatch.cn`，技能市场为 `https://market.harmonywatch.cn`。升级时会自动迁移已知旧公网端口地址（8090、8787、13001）；局域网与自定义服务地址保持不变，无需重新填写 API Key。
 
 推荐配置流程：
 

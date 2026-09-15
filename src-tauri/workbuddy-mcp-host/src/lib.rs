@@ -13,6 +13,10 @@ mod office;
 mod process;
 mod skills;
 mod staffdeck;
+#[path = "../../src/store/secrets.rs"]
+mod secrets;
+#[path = "../../shared/service_urls.rs"]
+mod service_urls;
 
 #[derive(Debug, Clone)]
 pub struct HostContext {
@@ -41,7 +45,11 @@ impl HostContext {
     }
 
     pub(crate) fn marketing_cookie_path(&self) -> PathBuf {
-        self.app_data_dir.join("marketing.session.cookie")
+        std::env::var_os("WORKBUDDY_MARKETING_SESSION_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.app_data_dir.clone())
+            .join("marketing.session.cookie")
     }
 }
 
@@ -505,11 +513,7 @@ pub fn context_from_environment() -> HostContext {
     let skills_roots = std::env::var_os("WORKBUDDY_SKILLS_DIRS")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);
-    let marketing_base_url = std::env::var("WORKBUDDY_MARKETING_URL")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "http://61.150.31.150:8090".to_string());
+    let marketing_base_url = service_urls::marketing_base_url();
     HostContext::new(
         app_data,
         database_path,

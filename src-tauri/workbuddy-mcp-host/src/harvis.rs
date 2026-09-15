@@ -117,9 +117,10 @@ impl<'a> HarvisClient<'a> {
     }
 
     async fn request(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-        let request = match tokio::fs::read_to_string(self.context.marketing_cookie_path()).await {
-            Ok(cookie) if !cookie.trim().is_empty() => request.header(COOKIE, cookie.trim()),
-            _ => request,
+        let cookie_path = self.context.marketing_cookie_path();
+        let request = match read_session_cookie(&cookie_path)? {
+            Some(cookie) => request.header(COOKIE, cookie),
+            None => request,
         };
         let response = request
             .send()
@@ -139,7 +140,8 @@ impl<'a> HarvisClient<'a> {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            tokio::fs::write(path, cookies.join("; ")).await?;
+            let store = crate::secrets::SecretStore::new(path.parent().context("Missing session directory")?)?;
+            tokio::fs::write(path, store.encrypt_hex(&cookies.join("; "))?).await?;
         }
         Ok(response)
     }
@@ -213,6 +215,45 @@ struct DownloadedAsset {
     media_type: String,
     source_url: String,
     bytes: Vec<u8>,
+}
+
+fn read_session_cookie(path: &Path) -> Result<Option<String>> {
+    let value = match std::fs::read_to_string(path) {
+        Ok(value) => value.trim().to_string(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if value.is_empty() { return Ok(None); }
+    // A legacy plaintext cookie has a name=value pair; encrypted data is hex.
+    if value.contains('=') { return Ok(Some(value)); }
+    let directory = path.parent().context("Missing session directory")?;
+    if !directory.join(".secret_key").is_file() {
+        return Err(anyhow!("登录凭据无法读取，请在客户端重新登录"));
+    }
+    let cookie = crate::secrets::SecretStore::new(directory)?.decrypt_hex(&value)
+        .map_err(|_| anyhow!("登录凭据无法解密，请在客户端重新登录"))?;
+    Ok(Some(cookie))
+}
+
+#[cfg(test)]
+mod session_regression_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_encrypted_session_is_readable_by_mcp() {
+        let dir = std::env::temp_dir().join(format!("harvis-session-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::secrets::SecretStore::new(&dir).unwrap();
+        let path = dir.join("marketing.session.cookie");
+        let expected = "harmony_session=regression-test";
+        std::fs::write(&path, store.encrypt_hex(expected).unwrap()).unwrap();
+        assert_eq!(read_session_cookie(&path).unwrap().as_deref(), Some(expected));
+        std::fs::write(&path, "invalid-ciphertext").unwrap();
+        assert!(read_session_cookie(&path).is_err());
+        std::fs::write(&path, expected).unwrap();
+        assert_eq!(read_session_cookie(&path).unwrap().as_deref(), Some(expected));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 async fn json_response(response: reqwest::Response) -> Result<Value> {

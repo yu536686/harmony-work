@@ -96,7 +96,7 @@ const PROVIDERS = [
   {
     id: "harmony",
     label: "Harmony（内部网关）",
-    baseUrl: "https://api.harmonywatch.cn:13001/v1",
+    baseUrl: HARMONY_API_BASE,
     keyField: "harmony_api_key",
     placeholder: "deepseek-v4-flash",
     keyPlaceholder: "sk-...",
@@ -460,3 +460,4 @@ export default function Onboarding({ onComplete }: Props) {
     </div>
   );
 }
+import { HARMONY_API_BASE } from "../../services/serviceUrls";

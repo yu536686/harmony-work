@@ -337,6 +337,9 @@ impl CodexRuntimeState {
         } else {
             crate::codex_runtime::config::render_default_providers_toml()
         };
+        let migrated_config = crate::codex_runtime::config::migrate_public_service_config(&existing_config);
+        let public_url_changed = migrated_config != existing_config;
+        existing_config = migrated_config;
         // 升级场景：旧版 codex.toml 只有 DeepSeek 段，需补齐 Harmony 内置 provider 段，
         // 否则切换到 Harmony 时 codex 会报 `Model provider harmony not found`。
         let harmony_missing = !existing_config.contains("[model_providers.harmony]");
@@ -347,11 +350,7 @@ impl CodexRuntimeState {
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
         let installed_skill_root = app_data_dir.join("installed-skills");
-        let marketing_base_url = std::env::var("WORKBUDDY_MARKETING_URL")
-            .ok()
-            .map(|value| value.trim().trim_end_matches('/').to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "http://61.150.31.150:8090".to_string());
+        let marketing_base_url = crate::service_urls::marketing_base_url();
         let mcp_profile = WorkBuddyMcpProfile::new(
             &mcp_host,
             app_data_dir,
@@ -359,7 +358,7 @@ impl CodexRuntimeState {
             &marketing_base_url,
         );
         let merged_config = merge_managed_mcp_config(&existing_config, &mcp_profile.render_toml());
-        if harmony_missing || merged_config != existing_config {
+        if public_url_changed || harmony_missing || merged_config != existing_config {
             std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
         }
@@ -1575,7 +1574,7 @@ mod tests {
 
         let diagnostic = state.diagnostic(false).await.expect("diagnostic");
         assert!(!diagnostic.running);
-        assert_eq!(diagnostic.display_version, "b1.0.5");
+        assert_eq!(diagnostic.display_version, crate::codex_runtime::config::DISPLAY_VERSION);
         assert_eq!(diagnostic.target_codex_version, "0.149.0");
         assert_eq!(diagnostic.mapped_sessions, 0);
 

@@ -95,6 +95,7 @@ async fn market_search(arguments: &Value) -> Result<Value> {
 
 async fn install(context: &HostContext, arguments: &Value) -> Result<Value> {
     let source = required_string(arguments, "source")?;
+    let source = crate::service_urls::migrate_public_service_url(&source);
     let enabled = arguments
         .get("enabled")
         .and_then(Value::as_bool)

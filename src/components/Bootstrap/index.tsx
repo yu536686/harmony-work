@@ -10,7 +10,7 @@ import {
 } from "../../services/tauri";
 import "./style.css";
 
-const REGISTER_URL = "http://www.harmonywatch.cn:8090";
+import { REGISTER_URL } from "../../services/serviceUrls";
 
 type BootstrapStep = "environment" | "login";
 

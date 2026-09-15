@@ -1320,6 +1320,7 @@ fn run_impl() {
             commands::harvis_generate::harvis_generate,
             commands::harvis_generate::harvis_query_task,
             commands::harvis_generate::harvis_query_task_content,
+            commands::harvis_generate::harvis_save_result,
             // harmony cut/
             commands::harmony_cut::harmony_cut_health,
             commands::harmony_cut::harmony_cut_start_service,

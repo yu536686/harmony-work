@@ -41,7 +41,7 @@ const LLM_PROVIDER_OPTIONS = [
   { id: "zhipu", labelKey: "settings.providerZhipu", icon: "🧠", baseUrl: "https://api.z.ai/api/paas/v4", keyField: "zhipu_api_key", placeholder: "glm-5" },
   { id: "kimi", labelKey: "settings.providerKimi", icon: "🌙", baseUrl: "https://api.moonshot.cn/v1", keyField: "kimi_api_key", placeholder: "kimi-k2.5" },
   { id: "siliconflow", labelKey: "settings.providerSiliconflow", icon: "⚡", baseUrl: "https://api.siliconflow.cn/v1", keyField: "siliconflow_api_key", placeholder: "deepseek-ai/DeepSeek-V3" },
-  { id: "harmony", labelKey: "settings.providerHarmony", icon: "🫧", baseUrl: "https://api.harmonywatch.cn:13001/v1", keyField: "harmony_api_key", placeholder: "deepseek-v4-flash" },
+  { id: "harmony", labelKey: "settings.providerHarmony", icon: "🫧", baseUrl: HARMONY_API_BASE, keyField: "harmony_api_key", placeholder: "deepseek-v4-flash" },
   { id: "custom", labelKey: "settings.providerCustom", icon: "🔌", baseUrl: "", keyField: "openai_api_key", placeholder: "model-name" },
 ] as const;
 
@@ -1097,7 +1097,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               <input className="input" type={showKeys ? "text" : "password"} value={form.harmony_api_key ?? ""}
                 onChange={(e) => update("harmony_api_key", e.target.value)} placeholder="sk-..." />
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                Base URL: <code>https://api.harmonywatch.cn:13001/v1</code>
+                Base URL: <code>{HARMONY_API_BASE}</code>
                 {" · "}<a href="https://portal.harmonywatch.cn/workspace?tab=console" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.harmonyKeyHelp")}</a>
               </p>
             </div>
@@ -2437,3 +2437,4 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
     </div>
   );
 }
+import { HARMONY_API_BASE } from "../../services/serviceUrls";

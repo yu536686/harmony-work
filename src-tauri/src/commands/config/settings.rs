@@ -569,6 +569,7 @@ pub async fn save_settings(
     // Validate that the configured vision model actually supports vision by
     // making a real API call. This replaces the old string-matching heuristic.
     // Skip validation if no vision-related fields were changed.
+    settings.migrate_public_service_urls();
     let vision_fields_changed = updates["vision_enabled"].as_bool().is_some()
         || updates["vision_use_main_llm"].as_bool().is_some()
         || updates["vision_provider"].as_str().is_some()
@@ -699,7 +700,7 @@ fn provider_default_base_url(provider: &str) -> &'static str {
         "zhipu" => "https://api.z.ai/api/paas/v4",
         "kimi" | "moonshot" => "https://api.moonshot.cn/v1",
         "siliconflow" => "https://api.siliconflow.cn/v1",
-        "harmony" => "https://api.harmonywatch.cn:13001/v1",
+        "harmony" => crate::service_urls::HARMONY_API_BASE,
         _ => "",
     }
 }
@@ -712,7 +713,7 @@ fn normalize_model_base_url(provider: &str, base_url: Option<&str>) -> Result<St
     if raw.trim().is_empty() {
         return Err("Base URL is required for custom model providers".into());
     }
-    Ok(raw.trim_end_matches('/').to_string())
+    Ok(crate::service_urls::migrate_public_service_url(raw).trim_end_matches('/').to_string())
 }
 
 /// 依据模型 ID 关键字识别模型种类，用于 Harvis 创作模型分类。

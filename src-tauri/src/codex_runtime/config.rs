@@ -1,4 +1,4 @@
-pub const DISPLAY_VERSION: &str = "b1.0.5";
+pub const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PINNED_CODEX_VERSION: &str = "0.149.0";
 pub const MANAGED_MCP_BEGIN: &str = "# BEGIN WORKBUDDY MCP";
 pub const MANAGED_MCP_END: &str = "# END WORKBUDDY MCP";
@@ -65,7 +65,7 @@ impl Default for HarmonyProfile {
         Self {
             provider_id: "harmony",
             model: "deepseek-v4-flash",
-            base_url: "https://api.harmonywatch.cn:13001/v1",
+            base_url: crate::service_urls::HARMONY_API_BASE,
             env_key: "HARMONY_API_KEY",
             display_name: "Harmony",
         }
@@ -143,18 +143,51 @@ impl WorkBuddyMcpProfile {
                     .join(if cfg!(windows) { ";" } else { ":" })
             });
         format!(
-            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {}, WORKBUDDY_MARKETING_URL = {} }}\n",
+            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {}, WORKBUDDY_MARKETING_URL = {}, WORKBUDDY_MARKETING_SESSION_DIR = {} }}\n",
             toml_string(&self.executable.display().to_string()),
             toml_string(&self.app_data_dir.display().to_string()),
             toml_string(&database_path.display().to_string()),
             toml_string(&skills),
             toml_string(&self.marketing_base_url),
+            toml_string(&crate::app::logging::default_app_data_dir().display().to_string()),
         )
     }
 }
 
 fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
+}
+
+pub fn migrate_public_service_config(existing: &str) -> String {
+    let Ok(mut doc) = existing.parse::<toml_edit::Document>() else {
+        return existing.to_string();
+    };
+    let mut changed = false;
+    for (group, field) in [("model_providers", "base_url"), ("mcp_servers", "url")] {
+        if let Some(entries) = doc.get_mut(group).and_then(|item| item.as_table_like_mut()) {
+            for (_, entry) in entries.iter_mut() {
+                if let Some(base) = entry.get_mut(field) {
+                    if let Some(raw) = base.as_str() {
+                        let migrated = crate::service_urls::migrate_public_service_url(raw);
+                        if migrated != raw {
+                            let decor = base.as_value().map(|value| value.decor().clone());
+                            let mut replacement = toml_edit::Value::from(migrated);
+                            if let Some(decor) = decor {
+                                *replacement.decor_mut() = decor;
+                            }
+                            *base = toml_edit::Item::Value(replacement);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if changed {
+        doc.to_string()
+    } else {
+        existing.to_string()
+    }
 }
 
 pub fn merge_managed_mcp_config(existing: &str, managed: &str) -> String {
@@ -184,11 +217,55 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn public_service_migration_preserves_user_config_and_managed_markers() {
+        let old = r#"# User configuration
+model = "my-model"
+[model_providers.harmony]
+base_url = "https://api.harmonywatch.cn:13001/v1" # account gateway
+env_key = "HARMONY_API_KEY"
+[model_providers.local]
+base_url = "http://192.168.11.29:13000/v1"
+[model_providers.custom]
+base_url = "https://custom.example:13001/v1"
+[mcp_servers.remote]
+url = "http://www.harmonywatch.cn:8090/mcp"
+bearer_token_env_var = "MCP_ACCOUNT_TOKEN"
+[mcp_servers.local]
+url = "http://192.168.11.29:1933/mcp"
+# BEGIN WORKBUDDY MCP
+[mcp_servers.workbuddy]
+command = "host"
+# END WORKBUDDY MCP
+"#;
+        let migrated = migrate_public_service_config(old);
+        let parsed: toml::Value = migrated.parse().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["harmony"]["base_url"].as_str(),
+            Some(crate::service_urls::HARMONY_API_BASE)
+        );
+        assert!(migrated.contains("# User configuration"));
+        assert!(migrated.contains("# account gateway"));
+        assert!(migrated.contains(MANAGED_MCP_BEGIN));
+        assert!(migrated.contains(MANAGED_MCP_END));
+        assert!(migrated.contains("HARMONY_API_KEY"));
+        assert_eq!(
+            parsed["mcp_servers"]["remote"]["url"].as_str(),
+            Some("https://portal.harmonywatch.cn/mcp")
+        );
+        assert!(migrated.contains("MCP_ACCOUNT_TOKEN"));
+        assert!(migrated.contains("http://192.168.11.29:1933/mcp"));
+        assert!(migrated.contains("http://192.168.11.29:13000/v1"));
+        assert!(migrated.contains("https://custom.example:13001/v1"));
+        assert_eq!(migrate_public_service_config(&migrated), migrated);
+        assert_eq!(migrate_public_service_config("invalid = ["), "invalid = [");
+    }
+
+    #[test]
     fn b1_version_has_semver_and_display_forms() {
         let config = CodexRuntimeConfig::b1_default();
 
-        assert_eq!(config.package_version, "1.2.0-alpha.5");
-        assert_eq!(config.display_version, "b1.0.5");
+        assert_eq!(config.package_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(config.display_version, config.package_version);
         assert_eq!(config.codex_version, "0.149.0");
     }
 

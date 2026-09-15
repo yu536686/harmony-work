@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreativeJob } from "../../services/tauri";
 import CreativePage from "./index";
+import { save } from "@tauri-apps/plugin-dialog";
 
 const mocks = vi.hoisted(() => ({
   listJobs: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   composeMusicPrompt: vi.fn(),
   adoptMusicArtifact: vi.fn(),
   saveMusicFeedback: vi.fn(),
+  harvisSaveResult: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
@@ -27,6 +29,7 @@ vi.mock("../../services/tauri", async (importOriginal) => {
       composeMusicPrompt: mocks.composeMusicPrompt,
       adoptMusicArtifact: mocks.adoptMusicArtifact,
       saveMusicFeedback: mocks.saveMusicFeedback,
+      harvisSaveResult: mocks.harvisSaveResult,
     },
   };
 });
@@ -58,6 +61,9 @@ const user = {
 
 describe("CreativePage completed job details", () => {
   beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(save).mockReset();
+    mocks.harvisSaveResult.mockReset();
     mocks.listJobs.mockReset();
     mocks.getJob.mockReset();
     mocks.musicConfig.mockReset();
@@ -68,6 +74,30 @@ describe("CreativePage completed job details", () => {
       businessLines: [{ id: "watch-poetry", title: "腕表如诗", description: "腕表配乐", fields: [] }],
       brands: [{ id: "chopard", name: "萧邦", collections: ["Happy Sport"] }]
     });
+  });
+
+  it("saves a local generation to the selected path and handles cancellation and errors", async () => {
+    localStorage.setItem("workbuddy.harvis.tasks", JSON.stringify([{
+      taskId: "resp-test", kind: "music", status: "succeeded", prompt: "piano",
+      progress: 100, resultUrl: "https://cdn.example/music.m4a", createdAt: Date.now()
+    }]));
+    mocks.listJobs.mockResolvedValue({ jobs: [] });
+    render(<CreativePage initialKind="music" user={user} onStageToChat={vi.fn()} />);
+    const download = await screen.findByRole("button", { name: "下载成品" });
+    vi.mocked(save).mockResolvedValueOnce(null);
+    await userEvent.click(download);
+    await waitFor(() => expect(download).not.toBeDisabled());
+    expect(mocks.harvisSaveResult).not.toHaveBeenCalled();
+    vi.mocked(save).mockResolvedValueOnce("C:\\Users\\test\\Desktop\\music.m4a");
+    mocks.harvisSaveResult.mockResolvedValueOnce({ localPath: "C:\\Users\\test\\Desktop\\music.m4a", sizeBytes: 12 });
+    await userEvent.click(download);
+    expect(await screen.findByText(/已保存到/)).toBeInTheDocument();
+    expect(mocks.harvisSaveResult).toHaveBeenCalledWith("https://cdn.example/music.m4a", "C:\\Users\\test\\Desktop\\music.m4a");
+    vi.mocked(save).mockResolvedValueOnce("C:\\Users\\test\\Desktop\\music.m4a");
+    mocks.harvisSaveResult.mockRejectedValueOnce(new Error("disk full"));
+    await userEvent.click(download);
+    expect(await screen.findByText(/disk full/)).toBeInTheDocument();
+    expect(download).not.toBeDisabled();
   });
 
   it("loads the selected completed job detail so image and music downloads are visible", async () => {

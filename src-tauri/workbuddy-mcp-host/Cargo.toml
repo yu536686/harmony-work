@@ -16,6 +16,9 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 tokio = { workspace = true }
 urlencoding = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+hex = "0.4"
 
 [lints]
 workspace = true

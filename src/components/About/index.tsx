@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
 import "./About.css";
 
-const HARMONY_SITE_URL = "https://www.harmonywatch.com";
+const HARMONY_SITE_URL = "https://www.harmonywatch.cn";
 
 export default function About() {
   const { t } = useTranslation();
@@ -49,7 +49,7 @@ export default function About() {
           onClick={() => openLink(HARMONY_SITE_URL)}
         >
           <span className="about-link-icon">⌘</span>
-          <span>{t("about.website")} · www.harmonywatch.com</span>
+          <span>{t("about.website")} · www.harmonywatch.cn</span>
           <span className="about-link-arrow">→</span>
         </button>
       </div>

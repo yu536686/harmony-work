@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { migratePublicServiceUrl } from "../../services/serviceUrls";
 import {
   creativeApi,
   marketingApi,
@@ -24,7 +25,8 @@ type CreativePageProps = {
 
 function normalizeHarvisStatus(raw: unknown): HarvisTask["status"] {
   const value = typeof raw === "string" ? raw.toLowerCase() : "";
-  if (value === "succeeded" || value.includes("success") || value.includes("complete") || value === "done") return "succeeded";
+  if (["succeeded", "success", "completed", "complete", "done"].includes(value)) return "succeeded";
+  if (["incomplete", "cancelled", "canceled"].includes(value)) return "failed";
   if (value === "failed" || value.includes("fail") || value.includes("error")) return "failed";
   if (value === "processing" || value.includes("process") || value.includes("running") || value.includes("pending") || value.includes("queue")) return "processing";
   return "processing";
@@ -35,7 +37,7 @@ function extractHarvisResultUrl(raw: unknown): string | undefined {
   if (!obj) return undefined;
   const candidates = [obj.url, obj.resultUrl, obj.result_url, obj.downloadUrl, obj.audioUrl, obj.audio_url, obj.imageUrl, obj.image_url];
   for (const value of candidates) {
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) return migratePublicServiceUrl(value.trim());
   }
   const content = obj.content;
   if (Array.isArray(content)) {
@@ -52,6 +54,7 @@ function extractHarvisResultUrl(raw: unknown): string | undefined {
 
 type ReferenceAttachment = {
   id: string;
+  referenceUrl?: string;
   fileName: string;
   previewUrl: string;
 };
@@ -131,6 +134,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const [jobs, setJobs] = useState<CreativeJob[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [jobDetailLoading, setJobDetailLoading] = useState(false);
   const [preview, setPreview] = useState<{ artifact: CreativeArtifact; dataUrl: string } | null>(null);
@@ -255,12 +259,13 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
               const contentResp = await creativeApi.harvisQueryTaskContent(task.taskId, task.kind);
               resultUrl = extractHarvisResultUrl(contentResp);
             }
-            return { ...task, status: "succeeded" as const, progress: 100, resultUrl };
+            if (!resultUrl) return { ...task, status: "failed" as const, errorMessage: "任务已结束但未返回成品，请联系管理员检查任务结果" };
+            return { ...task, status: "succeeded" as const, progress: 100, resultUrl, errorMessage: undefined };
           }
           if (status === "failed") {
-            return { ...task, status: "failed" as const, errorMessage: "生成任务失败" };
+            return { ...task, status: "failed" as const, errorMessage: String(statusResp.error_message || "生成任务失败") };
           }
-          return { ...task, status: "processing" as const, progress };
+          return { ...task, status: "processing" as const, progress, errorMessage: undefined };
         } catch (error) {
           return { ...task, errorMessage: String(error) };
         }
@@ -394,10 +399,11 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         canvasPreset: canvas.canvasPreset,
         outputWidth: canvas.outputWidth,
         outputHeight: canvas.outputHeight,
-        referenceIds
+        referenceIds,
+        referenceUrls: imageMode === "image" ? referenceFiles.map((file) => file.referenceUrl).filter(Boolean) : []
       });
       const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
-      const resultUrl = (result as any)?.result_url ?? "";
+      const resultUrl = extractHarvisResultUrl(result) ?? "";
       if (resultUrl) {
         const task: HarvisTask = {
           taskId: `image-${Date.now()}`,
@@ -454,7 +460,8 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
       const uploaded = await Promise.all(accepted.map(async (file) => {
         if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} 超过 20MB 上传限制`);
         const [result, previewUrl] = await Promise.all([creativeApi.uploadReference(file), readPreview(file)]);
-        return { id: result.id, fileName: file.name, previewUrl };
+        if (!result.referenceUrl) throw new Error("参考图服务未返回可访问地址，请联系管理员更新服务");
+        return { id: result.id, referenceUrl: migratePublicServiceUrl(result.referenceUrl), fileName: file.name, previewUrl };
       }));
       setReferenceFiles((previous) => [...previous, ...uploaded]);
       setImageMode("image");
@@ -481,6 +488,30 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
       setPreview({ artifact, dataUrl: data.dataUrl });
     } catch (error) {
       setNotice(String(error));
+    }
+  };
+
+  const downloadHarvisTask = async (task: HarvisTask) => {
+    if (!task.resultUrl || downloadingTaskId) return;
+    setDownloadingTaskId(task.taskId);
+    try {
+      let extension = task.kind === "music" ? "m4a" : task.kind === "video" ? "mp4" : "png";
+      try {
+        const candidate = new URL(task.resultUrl).pathname.split(".").pop()?.toLowerCase();
+        if (candidate && ["png", "jpg", "jpeg", "webp", "mp3", "m4a", "wav", "mp4"].includes(candidate)) extension = candidate;
+      } catch { /* Data URLs use the default media extension. */ }
+      const path = await saveFileDialog({
+        title: "保存 Harvis 创作成品",
+        defaultPath: `Harvis-${task.taskId.replace(/[^a-zA-Z0-9_-]/g, "")}.${extension}`,
+        filters: [{ name: "创作成品", extensions: [extension] }]
+      });
+      if (!path || Array.isArray(path)) return;
+      const saved = await creativeApi.harvisSaveResult(task.resultUrl, path);
+      setNotice(`已保存到 ${saved.localPath}`);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setDownloadingTaskId(null);
     }
   };
 
@@ -640,7 +671,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         </div>
         <aside className="creative-side">
           <section className="creative-panel"><div className="creative-panel-head"><strong>作品任务</strong><span>{jobs.length}</span></div><div className="creative-job-list">{jobs.map((job) => <button key={job.id} className={selectedJob?.id === job.id ? "creative-job active" : "creative-job"} onClick={() => setSelectedJobId(job.id)}><span>{job.kind === "music" ? "音乐" : "图片"}</span><strong>{job.promptSnapshot || "未命名创作"}</strong><small>{jobStatus(job.status)} {job.progress > 0 ? `${job.progress}%` : ""}</small></button>)}{!jobs.length && <div className="creative-empty">暂无创作任务</div>}</div></section>
-          <section className="creative-panel"><div className="creative-panel-head"><strong>本地生成任务</strong><span>{harvisTasks.length}</span></div><div className="creative-job-list">{harvisTasks.map((task) => <div key={task.taskId} className="creative-job" style={{ display: "block", textAlign: "left" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span>{task.kind === "music" ? "音乐" : task.kind === "image" ? "图片" : task.kind}</span><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div><strong style={{ display: "block", margin: "4px 0", fontSize: 13 }}>{task.prompt.slice(0, 40) || "未命名"}</strong>{task.errorMessage && <small style={{ color: "#d33", display: "block" }}>{task.errorMessage}</small>}{task.resultUrl && task.kind === "image" && <img src={task.resultUrl} alt="成品" style={{ width: "100%", borderRadius: 8, marginTop: 6 }} />}{task.resultUrl && task.kind === "music" && <audio controls src={task.resultUrl} style={{ width: "100%", marginTop: 6 }} />}{task.resultUrl && <a href={task.resultUrl} target="_blank" rel="noreferrer" download style={{ display: "inline-block", marginTop: 6, color: "var(--accent)" }}>下载成品</a>}</div>)}{!harvisTasks.length && <div className="creative-empty">暂无本地生成任务</div>}</div></section>
+          <section className="creative-panel"><div className="creative-panel-head"><strong>本地生成任务</strong><span>{harvisTasks.length}</span></div><div className="creative-job-list">{harvisTasks.map((task) => <div key={task.taskId} className="creative-job" style={{ display: "block", textAlign: "left" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span>{task.kind === "music" ? "音乐" : task.kind === "image" ? "图片" : task.kind}</span><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div><strong style={{ display: "block", margin: "4px 0", fontSize: 13 }}>{task.prompt.slice(0, 40) || "未命名"}</strong>{task.errorMessage && <small style={{ color: "#d33", display: "block" }}>{task.errorMessage}</small>}{task.resultUrl && task.kind === "image" && <img src={task.resultUrl} alt="成品" style={{ width: "100%", borderRadius: 8, marginTop: 6 }} />}{task.resultUrl && task.kind === "music" && <audio controls src={task.resultUrl} style={{ width: "100%", marginTop: 6 }} />}{task.resultUrl && <button type="button" className="btn btn-secondary" onClick={() => void downloadHarvisTask(task)} disabled={downloadingTaskId !== null} style={{ marginTop: 6 }}>{downloadingTaskId === task.taskId ? "正在保存…" : "下载成品"}</button>}</div>)}{!harvisTasks.length && <div className="creative-empty">暂无本地生成任务</div>}</div></section>
           <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}{jobDetailLoading ? <div className="creative-empty creative-detail-state">正在同步成品信息…</div> : ["succeeded", "partial_success", "archived"].includes(selectedJob.status) && selectedJob.artifacts.length === 0 ? <div className="creative-empty creative-detail-state">任务已完成，成品仍在归档或等待同步。请稍后刷新任务。</div> : null}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.kind === "music" && selectedJob.artifacts.some((artifact) => artifact.kind === "audio") && <section className="creative-feedback" aria-label="作品采用与评分"><div className="creative-feedback-head"><div><strong>采用与评分</strong><p>采用后可评分；评分 4 星及以上且主动提交的作品会进入管理员审核队列。</p></div><span className="creative-feedback-step">1 / 3</span></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用版本</span>{selectedJob.artifacts.filter((artifact) => artifact.kind === "audio").map((artifact) => <div className="creative-feedback-item" key={`feedback-${artifact.id}`}><div className="creative-feedback-item-info"><span title={artifact.fileName}>{artifact.fileName}</span>{selectedJob.adoptedArtifactId === artifact.id && <em>已采用</em>}</div><button className="btn btn-secondary" onClick={() => void adoptMusicArtifact(selectedJob, artifact)} disabled={busy || selectedJob.adoptedArtifactId === artifact.id}>{selectedJob.adoptedArtifactId === artifact.id ? "当前采用" : "采用此版本"}</button></div>)}</div><div className="creative-feedback-section creative-feedback-rating-row"><span className="creative-feedback-label">本次评分</span><div className="creative-rating" aria-label="评分">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" className={value <= musicRating ? "active" : ""} onClick={() => setMusicRating(value)} aria-label={`${value} 星`}>★</button>)}</div></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用原因</span><div className="creative-feedback-tags">{["风格契合", "镜头节奏合适", "乐器表现好", "品牌感强"].map((tag) => <button type="button" key={tag} className={feedbackTags.includes(tag) ? "active" : ""} onClick={() => setFeedbackTags((previous) => previous.includes(tag) ? previous.filter((value) => value !== tag) : [...previous, tag])}>{tag}</button>)}</div></div><label className="creative-knowledge-choice"><input type="checkbox" aria-label="提交为知识候选" checked={submitToKnowledge} onChange={(event) => setSubmitToKnowledge(event.target.checked)} /><span><strong>提交为知识候选</strong><small>仅采用且评分 4 星及以上的成品会提交审核。</small></span></label><div className="creative-actions"><button className="btn btn-primary" onClick={() => { const artifact = selectedJob.artifacts.find((item) => item.id === selectedJob.adoptedArtifactId) ?? selectedJob.artifacts.find((item) => item.kind === "audio"); if (artifact) void saveMusicFeedback(artifact); }} disabled={busy}>保存评分</button></div></section>}{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
         </aside>
       </div>

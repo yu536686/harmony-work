@@ -870,6 +870,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn migrate_public_service_urls(&mut self) {
+        use crate::service_urls::migrate_public_service_url;
+        self.custom_base_url = migrate_public_service_url(&self.custom_base_url);
+        self.vision_base_url = migrate_public_service_url(&self.vision_base_url);
+        for provider in &mut self.llm_providers {
+            provider.base_url = migrate_public_service_url(&provider.base_url);
+        }
+        for server in &mut self.mcp_servers {
+            server.url = migrate_public_service_url(&server.url);
+        }
+    }
+
     /// Returns settings that are safe to move between devices. Paths, local
     /// execution state, and channel credentials remain bound to this machine.
     pub fn cloud_snapshot(&self) -> Value {
@@ -898,6 +910,7 @@ impl Settings {
         let config_path = self.config_path.clone();
         let mut next: Settings = serde_json::from_value(Value::Object(local.clone()))?;
         next.config_path = config_path;
+        next.migrate_public_service_urls();
         *self = next;
         Ok(())
     }
@@ -925,6 +938,7 @@ impl Settings {
             Settings::default()
         };
         settings.config_path = path.to_path_buf();
+        settings.migrate_public_service_urls();
 
         // Decrypt API keys (hex-encoded ciphertext on disk).
         // If decryption fails the value is likely still plaintext (pre-migration);
@@ -967,6 +981,7 @@ impl Settings {
             std::fs::create_dir_all(parent)?;
         }
         let mut clone = self.clone();
+        clone.migrate_public_service_urls();
         // Encrypt secret fields before writing to disk
         if let Some(store) = Self::secret_store(&self.config_path) {
             Self::encrypt_field(&store, &mut clone.anthropic_api_key);
@@ -1141,6 +1156,55 @@ pub const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    #[test]
+    fn public_service_urls_migrate_from_cloud_without_changing_keys_or_local_urls() {
+        let mut settings = Settings::default();
+        settings.apply_cloud_snapshot(&serde_json::json!({
+            "custom_base_url": "https://api.harmonywatch.cn:13001/v1",
+            "harmony_api_key": "test-account-key",
+            "vision_base_url": "http://192.168.11.29:13000/v1",
+            "llm_providers": [
+                {"id":"company", "label":"Company", "provider":"harmony", "model":"test", "base_url":"https://api.harmonywatch.cn:13001/v1", "api_key":"test-provider-key"},
+                {"id":"custom", "label":"Custom", "provider":"custom", "model":"test", "base_url":"https://example.com:13001/v1"}
+            ]
+        })).unwrap();
+        assert_eq!(settings.custom_base_url, crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(settings.llm_providers[0].base_url, crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(settings.harmony_api_key, "test-account-key");
+        assert_eq!(settings.llm_providers[0].api_key, "test-provider-key");
+        assert_eq!(settings.vision_base_url, "http://192.168.11.29:13000/v1");
+        assert_eq!(settings.llm_providers[1].base_url, "https://example.com:13001/v1");
+    }
+
+    #[test]
+    fn public_service_urls_migrate_on_disk_load_and_save() {
+        let dir = std::env::temp_dir().join(format!("workbuddy-url-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut original = Settings::default();
+        original.custom_base_url = "https://api.harmonywatch.cn:13001/v1".into();
+        original.harmony_api_key = "test-migration-key".into();
+        original.mcp_servers = vec![super::McpServerConfig {
+            name: "Company MCP".into(),
+            transport: "http".into(),
+            url: "http://www.harmonywatch.cn:8090/mcp".into(),
+            headers: std::collections::HashMap::from([("Authorization".into(), "Bearer test-mcp-key".into())]),
+            ..Default::default()
+        }];
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let mut loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.custom_base_url, crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(loaded.harmony_api_key, original.harmony_api_key);
+        assert_eq!(loaded.mcp_servers[0].url, "https://portal.harmonywatch.cn/mcp");
+        assert_eq!(loaded.mcp_servers[0].headers, original.mcp_servers[0].headers);
+        loaded.custom_base_url = original.custom_base_url;
+        loaded.save().unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["custom_base_url"], crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(Settings::load(&path).unwrap().harmony_api_key, original.harmony_api_key);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn new_install_defaults_keep_the_workspace_bounded_and_shell_unattended() {

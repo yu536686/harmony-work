@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { migratePublicServiceUrl } from "../serviceUrls";
 
 export type CreativeKind = "music" | "image";
 export type CreativeStatus = "queued" | "submitting" | "submitted" | "processing" | "partial_success" | "succeeded" | "archiving" | "archived" | "failed" | "expired";
@@ -63,6 +64,7 @@ export interface ImageJobRequest {
 
 export interface CreativeReferenceUpload {
   id: string;
+  referenceUrl?: string;
   assetId: string | null;
   expiresInSeconds: number;
 }
@@ -205,7 +207,9 @@ export const creativeApi = {
   harvisQueryTask: (taskId: string, kind: HarvisTaskKind) =>
     invoke<Record<string, unknown>>("harvis_query_task", { taskId, kind }),
   harvisQueryTaskContent: (taskId: string, kind: HarvisTaskKind) =>
-    invoke<Record<string, unknown>>("harvis_query_task_content", { taskId, kind })
+    invoke<Record<string, unknown>>("harvis_query_task_content", { taskId, kind }),
+  harvisSaveResult: (resultUrl: string, targetPath: string) =>
+    invoke<{ localPath: string; sizeBytes: number }>("harvis_save_result", { resultUrl, targetPath })
 };
 
 const HARVIS_TASKS_KEY = "workbuddy.harvis.tasks";
@@ -215,7 +219,11 @@ export function loadHarvisTasks(): HarvisTask[] {
     const raw = localStorage.getItem(HARVIS_TASKS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as HarvisTask[]) : [];
+    return Array.isArray(parsed) ? (parsed as HarvisTask[]).map(task => (
+      task && typeof task.resultUrl === "string"
+        ? { ...task, resultUrl: migratePublicServiceUrl(task.resultUrl) }
+        : task
+    )) : [];
   } catch {
     return [];
   }

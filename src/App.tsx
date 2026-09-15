@@ -60,7 +60,7 @@ type MarketTab = "experts" | "team" | "skills";
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
-const REGISTER_URL = "http://www.harmonywatch.cn:8090";
+import { REGISTER_URL } from "./services/serviceUrls";
 
 function readMigratedStorage(key: string, legacyKey: string): string | null {
   const current = localStorage.getItem(key);
