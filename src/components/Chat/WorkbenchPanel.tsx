@@ -14,18 +14,28 @@ import {
 import type { SessionArtifact } from "../../services/tauri";
 import type { ExecutionStep, TurnExecutionModel } from "./execution/types";
 import ArtifactPreview from "./ArtifactPreview";
+import BrowserAnnotationCanvas from "./BrowserAnnotationCanvas";
 import type { WorkbenchAnnotation } from "./annotation/types";
 import "./ConversationExperience.css";
 
 type WorkbenchTab = "artifacts" | "summary" | "browser" | "terminal";
 
+export interface WorkbenchBrowserTarget {
+  id?: string;
+  title: string;
+  url: string;
+}
+
 interface WorkbenchPanelProps {
   open: boolean;
+  width?: number;
   sessionId: string;
   artifacts: SessionArtifact[];
   execution: TurnExecutionModel | null;
   annotations?: WorkbenchAnnotation[];
   focusedAnnotationId?: string | null;
+  focusedArtifactUri?: string | null;
+  browserTarget?: WorkbenchBrowserTarget | null;
   running?: boolean;
   onStageAnnotation?: (annotation: WorkbenchAnnotation) => void;
   onClose: () => void;
@@ -54,13 +64,26 @@ function isTerminalStep(step: ExecutionStep): boolean {
   return name === "shell" || name.includes("powershell") || name.includes("terminal") || name.includes("exec_command");
 }
 
+function normalizeArtifactUri(uri: string): string {
+  return uri.trim().replace(/^file:\/\//i, "").replace(/\//g, "\\").toLowerCase();
+}
+
+function canAnnotateArtifact(artifact: SessionArtifact | null): boolean {
+  if (!artifact) return false;
+  if (["image", "html", "text", "code", "pdf"].includes(artifact.artifact_type)) return true;
+  return /\.(?:avif|bmp|gif|html?|jpe?g|md|pdf|png|svg|txt|webp|[cm]?[jt]sx?|css|json|ya?ml)$/i.test(artifact.name);
+}
+
 export default function WorkbenchPanel({
   open,
+  width,
   sessionId,
   artifacts,
   execution,
   annotations = [],
   focusedAnnotationId,
+  focusedArtifactUri,
+  browserTarget,
   running = false,
   onStageAnnotation = () => {},
   onClose,
@@ -68,20 +91,21 @@ export default function WorkbenchPanel({
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("artifacts");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [openedArtifactIds, setOpenedArtifactIds] = useState<string[]>([]);
   const [annotationMode, setAnnotationMode] = useState(false);
+  const [browserAnnotationTargetId, setBrowserAnnotationTargetId] = useState<string | null>(null);
   const [browserCommentStepId, setBrowserCommentStepId] = useState<string | null>(null);
   const [browserCommentAnnotationId, setBrowserCommentAnnotationId] = useState<string | null>(null);
   const [browserComment, setBrowserComment] = useState("");
 
   useEffect(() => {
-    if (artifacts.length === 0) {
-      setSelectedArtifactId(null);
-      return;
-    }
-    if (!selectedArtifactId || !artifacts.some((artifact) => artifact.id === selectedArtifactId)) {
-      setSelectedArtifactId(artifacts[0].id);
-    }
-  }, [artifacts, selectedArtifactId]);
+    const artifactIds = new Set(artifacts.map((artifact) => artifact.id));
+    setOpenedArtifactIds((opened) => {
+      const available = opened.filter((id) => artifactIds.has(id));
+      return available.length > 0 || artifacts.length === 0 ? available : [artifacts[0].id];
+    });
+    setSelectedArtifactId((selected) => selected && artifactIds.has(selected) ? selected : artifacts[0]?.id ?? null);
+  }, [artifacts]);
 
   useEffect(() => {
     if (!focusedAnnotationId) return;
@@ -89,6 +113,10 @@ export default function WorkbenchPanel({
     if (!annotation) return;
     if (annotation.target.type === "browser") {
       setActiveTab("browser");
+      if (annotation.selection.type !== "page") {
+        setBrowserAnnotationTargetId(annotation.target.id);
+        return;
+      }
       setBrowserCommentStepId(annotation.target.id);
       setBrowserCommentAnnotationId(annotation.id);
       setBrowserComment(annotation.comment);
@@ -96,21 +124,49 @@ export default function WorkbenchPanel({
     }
     setActiveTab("artifacts");
     setSelectedArtifactId(annotation.target.id);
+    setOpenedArtifactIds((opened) => opened.includes(annotation.target.id) ? opened : [...opened, annotation.target.id]);
     setAnnotationMode(true);
   }, [annotations, focusedAnnotationId]);
 
+  useEffect(() => {
+    if (!focusedArtifactUri) return;
+    const artifact = artifacts.find(
+      (item) => item.uri && normalizeArtifactUri(item.uri) === normalizeArtifactUri(focusedArtifactUri),
+    );
+    if (!artifact) return;
+    setActiveTab("artifacts");
+    setSelectedArtifactId(artifact.id);
+    setOpenedArtifactIds((opened) => opened.includes(artifact.id) ? opened : [...opened, artifact.id]);
+  }, [artifacts, focusedArtifactUri]);
+
+  useEffect(() => {
+    if (browserTarget?.url) setActiveTab("browser");
+  }, [browserTarget?.url]);
+
   const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const openedArtifacts = openedArtifactIds
+    .map((id) => artifacts.find((artifact) => artifact.id === id))
+    .filter((artifact): artifact is SessionArtifact => Boolean(artifact));
   const browserSteps = useMemo(() => execution?.steps.filter(isBrowserStep) ?? [], [execution]);
   const terminalSteps = useMemo(() => execution?.steps.filter(isTerminalStep) ?? [], [execution]);
+  const openArtifact = (artifactId: string) => {
+    setSelectedArtifactId(artifactId);
+    setOpenedArtifactIds((opened) => opened.includes(artifactId) ? opened : [...opened, artifactId]);
+    setAnnotationMode(false);
+  };
 
   if (!open) return null;
 
   return (
-    <aside className="workbench-panel" aria-label={t("chat.workbenchTitle")}>
+    <aside
+      className="workbench-panel"
+      aria-label={t("chat.workbenchTitle")}
+      style={width ? { width, minWidth: width, flexBasis: width } : undefined}
+    >
       <header className="workbench-header">
         <strong>{t("chat.workbenchTitle")}</strong>
         <div className="workbench-header-actions">
-          {activeTab === "artifacts" && selectedArtifact && (
+          {activeTab === "artifacts" && canAnnotateArtifact(selectedArtifact) && (
             <button
               type="button"
               className={`workbench-annotation-toggle${annotationMode ? " active" : ""}`}
@@ -148,20 +204,35 @@ export default function WorkbenchPanel({
         {activeTab === "artifacts" && (
           artifacts.length > 0 ? (
             <>
-              <div className="workbench-artifact-list" aria-label={t("chat.workbenchArtifactList")}>
+              <div className="workbench-output-list" role="list" aria-label={t("chat.workbenchArtifactList")}>
                 {artifacts.map((artifact) => (
-                  <button
-                    type="button"
-                    key={artifact.id}
-                    className={artifact.id === selectedArtifactId ? "active" : ""}
-                    onClick={() => setSelectedArtifactId(artifact.id)}
-                    title={artifact.uri || artifact.name}
-                  >
-                    <FileText size={15} />
-                    <span>{artifact.name}</span>
-                  </button>
+                  <div className={`workbench-output-row${artifact.id === selectedArtifactId ? " active" : ""}`} role="listitem" key={artifact.id}>
+                    <FileText size={16} />
+                    <button type="button" onClick={() => openArtifact(artifact.id)} title={artifact.uri || artifact.name} aria-label={`打开 ${artifact.name}`}>
+                      <strong>{artifact.name}</strong>
+                      <span>{artifact.content_summary || artifact.artifact_type}</span>
+                    </button>
+                  </div>
                 ))}
               </div>
+              {openedArtifacts.length > 0 && (
+                <div className="workbench-preview-tabs" role="tablist" aria-label="已打开预览">
+                  {openedArtifacts.map((artifact) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      key={artifact.id}
+                      aria-selected={artifact.id === selectedArtifactId}
+                      className={`workbench-preview-tab${artifact.id === selectedArtifactId ? " active" : ""}`}
+                      title={artifact.name}
+                      onClick={() => { setSelectedArtifactId(artifact.id); setAnnotationMode(false); }}
+                    >
+                      <FileText size={13} />
+                      <span>{artifact.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {selectedArtifact && (
                 <section className="workbench-artifact-preview" aria-label={t("chat.workbenchArtifactPreviewLabel", { name: selectedArtifact.name })}>
                   <div className="workbench-section-heading">
@@ -210,8 +281,43 @@ export default function WorkbenchPanel({
         )}
 
         {activeTab === "browser" && (
-          browserSteps.length > 0 ? (
+          browserTarget || browserSteps.length > 0 ? (
             <div className="workbench-log-list">
+              {browserTarget && (() => {
+                const targetId = browserTarget.id ?? browserTarget.url;
+                return (
+                  <section className="workbench-browser-preview">
+                    <div className="workbench-log-title">
+                      <div><Globe2 size={15} /><strong>{browserTarget.title}</strong></div>
+                      <button
+                        type="button"
+                        className="workbench-browser-annotation-button"
+                        disabled={running}
+                        onClick={() => {
+                          setBrowserAnnotationTargetId((activeId) => activeId === targetId ? null : targetId);
+                        }}
+                        aria-label={t("chat.annotationStart")}
+                        title={t("chat.annotationStart")}
+                      >
+                        <MessageSquarePlus size={14} />
+                        <span>{browserAnnotationTargetId === targetId ? t("chat.annotationActive") : t("chat.annotationStart")}</span>
+                      </button>
+                    </div>
+                    <div className="workbench-log-command">{browserTarget.url}</div>
+                    <BrowserAnnotationCanvas
+                      enabled={browserAnnotationTargetId === targetId && !running}
+                      sessionId={sessionId}
+                      target={{ type: "browser", id: targetId, title: browserTarget.title, uri: browserTarget.url }}
+                      annotations={annotations}
+                      focusedAnnotationId={focusedAnnotationId}
+                      onStage={onStageAnnotation}
+                      onCancelDraft={() => setBrowserAnnotationTargetId(null)}
+                    >
+                      <iframe className="workbench-browser-frame" src={browserTarget.url} title={browserTarget.title} sandbox="allow-scripts allow-forms allow-same-origin" />
+                    </BrowserAnnotationCanvas>
+                  </section>
+                );
+              })()}
               {browserSteps.map((step) => {
                 const url = recordValue(step.input, "url") ?? recordValue(step.input, "final_url");
                 const target = url ?? recordValue(step.input, "query") ?? step.summary;

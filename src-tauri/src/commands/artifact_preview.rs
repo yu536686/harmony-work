@@ -16,6 +16,7 @@ pub enum ArtifactPreviewKind {
     Text,
     Code,
     Html,
+    Pdf,
     External,
 }
 
@@ -68,6 +69,7 @@ fn classify_path(path: &Path) -> (ArtifactPreviewKind, Option<&'static str>) {
         "bmp" => (ArtifactPreviewKind::Image, Some("image/bmp")),
         "svg" => (ArtifactPreviewKind::Image, Some("image/svg+xml")),
         "html" | "htm" => (ArtifactPreviewKind::Html, Some("text/html")),
+        "pdf" => (ArtifactPreviewKind::Pdf, Some("application/pdf")),
         "rs" | "ts" | "tsx" | "js" | "jsx" | "css" | "scss" | "py" | "java" | "c" | "cc"
         | "cpp" | "h" | "hpp" | "go" | "sh" | "ps1" | "bat" | "sql" => {
             (ArtifactPreviewKind::Code, Some("text/plain"))
@@ -126,7 +128,10 @@ pub(crate) fn read_artifact_preview(
     let (kind, media_type) = classify_path(&canonical_file);
     if matches!(
         kind,
-        ArtifactPreviewKind::Image | ArtifactPreviewKind::Html | ArtifactPreviewKind::External
+        ArtifactPreviewKind::Image
+            | ArtifactPreviewKind::Html
+            | ArtifactPreviewKind::Pdf
+            | ArtifactPreviewKind::External
     ) {
         return Ok(ArtifactPreviewPayload {
             kind,
@@ -263,6 +268,14 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn classifies_pdf_as_an_embeddable_preview() {
+        let (kind, media_type) = classify_path(Path::new("C:/workspace/report.pdf"));
+
+        assert_eq!(kind, ArtifactPreviewKind::Pdf);
+        assert_eq!(media_type, Some("application/pdf"));
     }
 
     #[test]

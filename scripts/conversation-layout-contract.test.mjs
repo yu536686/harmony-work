@@ -10,11 +10,17 @@ async function readProjectFile(relativePath) {
   return readFile(path.join(projectRoot, relativePath), "utf8");
 }
 
-test("conversation workbench keeps long output inside its panel", async () => {
-  const css = await readProjectFile("src/components/Chat/ConversationExperience.css");
+test("conversation workbench keeps an output list and bounded preview tabs inside its panel", async () => {
+  const [css, panel] = await Promise.all([
+    readProjectFile("src/components/Chat/ConversationExperience.css"),
+    readProjectFile("src/components/Chat/WorkbenchPanel.tsx"),
+  ]);
 
-  assert.match(css, /\.workbench-artifact-list button\s*\{[\s\S]*?max-width:\s*220px;/);
-  assert.match(css, /\.workbench-artifact-list button span\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+  assert.match(panel, /workbench-output-list/);
+  assert.match(panel, /workbench-preview-tabs/);
+  assert.match(css, /\.workbench-output-list\s*\{[\s\S]*?display:\s*grid;/);
+  assert.match(css, /\.workbench-preview-tab\s*\{[\s\S]*?max-width:\s*180px;/);
+  assert.match(css, /\.workbench-preview-tab span\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
   assert.match(css, /\.workbench-log-command\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/);
   assert.match(css, /\.workbench-log-list pre\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/);
   assert.match(css, /\.workbench-summary li span,[\s\S]*?\.workbench-log-title strong\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
@@ -27,7 +33,7 @@ test("conversation annotation and narrow workbench rules remain bounded", async 
   ]);
 
   assert.match(css, /\.annotation-popover\s*\{[\s\S]*?width:\s*min\(248px,\s*calc\(100% - 16px\)\)/);
-  assert.match(css, /@media \(max-width: 980px\)\s*\{[\s\S]*?\.workbench-panel\s*\{[\s\S]*?width:\s*min\(440px,\s*92vw\);[\s\S]*?min-width:\s*0;/);
+  assert.match(css, /@media \(max-width: 980px\)\s*\{[\s\S]*?\.workbench-panel\s*\{[\s\S]*?width:\s*min\(440px,\s*92vw\)(?:\s*!important)?;[\s\S]*?min-width:\s*0(?:\s*!important)?;/);
   assert.match(runtime, /const MAX_ANNOTATION_ITEMS:\s*usize\s*=\s*20;/);
 });
 

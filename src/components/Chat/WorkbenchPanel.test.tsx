@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,6 +18,15 @@ const artifact: SessionArtifact = {
   tool_use_id: "tool-2",
   metadata_json: null,
   created_at: "2026-09-15T10:00:00.000Z",
+};
+
+const secondArtifact: SessionArtifact = {
+  ...artifact,
+  id: "artifact-2",
+  name: "七夕门店执行清单.pdf",
+  uri: "E:/workspace/七夕门店执行清单.pdf",
+  artifact_type: "pdf",
+  content_summary: "门店执行清单",
 };
 
 const execution: TurnExecutionModel = {
@@ -76,11 +85,52 @@ describe("WorkbenchPanel", () => {
     );
 
     expect(screen.getByRole("tab", { name: "成果" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("七夕推广方案.md")).toBeVisible();
+    expect(screen.getByRole("button", { name: "打开 七夕推广方案.md" })).toBeVisible();
 
     await userEvent.click(screen.getByRole("tab", { name: "终端" }));
     expect(screen.getByText(/Verification passed/)).toBeVisible();
     expect(screen.getByText("npm test")).toBeVisible();
+  });
+
+  it("uses an output list and opens a preview tab only after the user selects an output", async () => {
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[artifact, secondArtifact]}
+        execution={execution}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("list", { name: "输出内容" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "打开 七夕推广方案.md" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "打开 七夕门店执行清单.pdf" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "七夕推广方案.md" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "七夕门店执行清单.pdf" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "打开 七夕门店执行清单.pdf" }));
+    expect(screen.getByRole("tab", { name: "七夕门店执行清单.pdf" })).toBeVisible();
+    expect(screen.getByLabelText("七夕门店执行清单.pdf 预览")).toBeVisible();
+  });
+
+  it("honors the caller-selected panel width", () => {
+    render(
+      <WorkbenchPanel
+        open
+        width={760}
+        sessionId="session-1"
+        artifacts={[]}
+        execution={execution}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("工具面板")).toHaveStyle({
+      width: "760px",
+      minWidth: "760px",
+      flexBasis: "760px",
+    });
   });
 
   it("展示结构化摘要和浏览器目标", async () => {
@@ -100,6 +150,22 @@ describe("WorkbenchPanel", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "浏览器" }));
     expect(screen.getByText("https://example.com/watch")).toBeVisible();
+  });
+
+  it("can focus a chat-opened browser URL in the workbench", async () => {
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={null}
+        browserTarget={{ title: "腕表官网", url: "https://example.com/watch" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "浏览器" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTitle("腕表官网")).toHaveAttribute("src", "https://example.com/watch");
   });
 
   it("can stage a URL-level browser annotation for the next turn", async () => {
@@ -125,6 +191,45 @@ describe("WorkbenchPanel", () => {
       selection: { type: "page", url: "https://example.com/watch" },
       comment: "以页面最新信息更新方案",
     }));
+  });
+
+  it("stages a selected browser viewport region for the next turn", async () => {
+    const onStageAnnotation = vi.fn();
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={null}
+        browserTarget={{ id: "watch-site", title: "腕表官网", url: "https://example.com/watch" }}
+        onStageAnnotation={onStageAnnotation}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "开始注释" }));
+    const canvas = screen.getByLabelText("浏览器批注画布");
+    vi.spyOn(canvas.parentElement as HTMLElement, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 500, bottom: 400, width: 500, height: 400,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(canvas, { pointerId: 1, clientX: 40, clientY: 40 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 240, clientY: 160 });
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 240, clientY: 160 });
+    await userEvent.type(screen.getByPlaceholderText("描述希望小亨如何修改所选内容"), "将这里改为更简洁的版式");
+    await userEvent.click(screen.getByRole("button", { name: "添加到对话" }));
+
+    const annotation = onStageAnnotation.mock.calls[0]?.[0];
+    expect(annotation).toMatchObject({
+      target: { type: "browser", id: "watch-site", uri: "https://example.com/watch" },
+      selection: { type: "image_region" },
+      comment: "将这里改为更简洁的版式",
+    });
+    if (!annotation || annotation.selection.type !== "image_region") throw new Error("expected a browser region annotation");
+    expect(annotation.selection.x).toBeCloseTo(0.08);
+    expect(annotation.selection.y).toBeCloseTo(0.1);
+    expect(annotation.selection.width).toBeCloseTo(0.4);
+    expect(annotation.selection.height).toBeCloseTo(0.3);
   });
 
   it("does not accept new annotations while the current turn is running", async () => {

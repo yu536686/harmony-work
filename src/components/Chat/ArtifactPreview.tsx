@@ -133,6 +133,14 @@ export default function ArtifactPreview({
         sandbox="allow-scripts allow-same-origin"
       />
     );
+  } else if (preview.kind === "pdf") {
+    previewContent = (
+      <iframe
+        className="artifact-preview-frame"
+        src={convertFileSrc(preview.uri)}
+        title={artifact.name}
+      />
+    );
   } else if (preview.kind === "text" || preview.kind === "code") {
     previewContent = (
       <div className="artifact-preview-text-wrap">

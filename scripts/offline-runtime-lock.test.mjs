@@ -143,7 +143,7 @@ test("Harmony Work release metadata and installer naming stay aligned", async ()
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.3.0-alpha.1");
+  assert.equal(packageJson.version, "1.3.0-alpha.2");
   assert.equal(tauriConfig.productName, "Harmony Work");
   assert.equal(tauriConfig.mainBinaryName, "harmony-work");
   assert.equal(tauriConfig.version, packageJson.version);

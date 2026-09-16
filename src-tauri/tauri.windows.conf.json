@@ -13,6 +13,7 @@
         "decorations": false,
         "shadow": false,
         "resizable": true,
+        "dragDropEnabled": true,
         "fullscreen": false
       },
       {

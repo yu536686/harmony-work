@@ -19,7 +19,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="..\..\src-tauri\icons\128x128.png" Link="Assets\brand.png" />
+    <Resource Include="..\..\assets\branding\harmony-work-icon-original.png" Link="Assets\brand.png" />
     <EmbeddedResource Include="$(PayloadArchive)" LogicalName="WorkBuddyBootstrapper.PayloadArchive" />
   </ItemGroup>
 </Project>

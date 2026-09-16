@@ -63,7 +63,7 @@
   --shadow-lg: 0 18px 48px rgba(24, 24, 27, 0.10);
   --radius: 8px;
   --radius-lg: 12px;
-  --font: "Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
   --font-scale: 1;
   --motion-fast: 150ms;

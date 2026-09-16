@@ -28,3 +28,21 @@ test("Tauri dev URL and Vite dev script use the same port", async () => {
     "Vite must ignore Rust target artifacts so the locked desktop executable cannot crash HMR",
   );
 });
+
+test("Windows main webview keeps Tauri native desktop file drops enabled", async () => {
+  const [tauriConfig, chatSource] = await Promise.all([
+    readFile(path.join(projectRoot, "src-tauri", "tauri.conf.json"), "utf8"),
+    readFile(path.join(projectRoot, "src", "components", "Chat", "index.tsx"), "utf8"),
+  ]);
+  const tauri = JSON.parse(tauriConfig);
+  const mainWindow = tauri.app.windows.find((window) => window.label === "main");
+
+  assert.notEqual(
+    mainWindow?.dragDropEnabled,
+    false,
+    "Windows desktop drops require Tauri's native drag handler",
+  );
+  for (const eventName of ["tauri://drag-enter", "tauri://drag-leave", "tauri://drag-drop"]) {
+    assert.match(chatSource, new RegExp(`listen(?:<[^>]+>)?\\(\\\"${eventName}\\\"`), `Chat must listen for ${eventName}`);
+  }
+});

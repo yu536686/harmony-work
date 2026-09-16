@@ -72,7 +72,7 @@ export interface SessionArtifact {
 }
 
 export interface ArtifactPreviewPayload {
-  kind: "image" | "text" | "code" | "html" | "external";
+  kind: "image" | "text" | "code" | "html" | "pdf" | "external";
   uri: string;
   content?: string | null;
   media_type?: string | null;

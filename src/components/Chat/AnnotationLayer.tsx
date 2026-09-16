@@ -9,7 +9,7 @@ interface AnnotationLayerProps {
   enabled: boolean;
   sessionId: string;
   artifact: SessionArtifact;
-  previewKind: "image" | "text" | "code" | "html" | "external";
+  previewKind: "image" | "text" | "code" | "html" | "pdf" | "external";
   textContent?: string | null;
   annotations: WorkbenchAnnotation[];
   focusedAnnotationId?: string | null;
@@ -81,7 +81,7 @@ export default function AnnotationLayer({
   }, [draft, onCancelDraft]);
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!enabled || (previewKind !== "image" && previewKind !== "html")) return;
+    if (!enabled || (previewKind !== "image" && previewKind !== "html" && previewKind !== "pdf")) return;
     pointerStartRef.current = { x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
@@ -159,7 +159,7 @@ export default function AnnotationLayer({
     <div ref={rootRef} className={`annotation-root${enabled ? " is-enabled" : ""}`} onMouseUp={captureTextSelection}>
       {children}
       <div
-        className={`annotation-capture${enabled && (previewKind === "image" || previewKind === "html") ? " is-active" : ""}`}
+        className={`annotation-capture${enabled && (previewKind === "image" || previewKind === "html" || previewKind === "pdf") ? " is-active" : ""}`}
         aria-label="批注画布"
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}

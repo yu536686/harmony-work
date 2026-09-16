@@ -21,10 +21,12 @@ use crate::store::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::SystemTime;
 use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 
@@ -73,6 +75,15 @@ struct CodexArtifactCandidate {
     summary: String,
     metadata_json: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkspaceArtifactStamp {
+    modified: Option<SystemTime>,
+    size_bytes: u64,
+}
+
+const MAX_DISCOVERED_WORKSPACE_ARTIFACTS: usize = 4096;
+const MAX_WORKSPACE_SCAN_DEPTH: usize = 8;
 
 impl CodexTurnTranscript {
     fn observe(&mut self, event: &WorkBuddyEvent) {
@@ -218,6 +229,11 @@ fn collect_artifact_candidates(value: &Value, candidates: &mut Vec<CodexArtifact
                 collect_artifact_candidates(nested, candidates);
             }
         }
+        Value::String(text) => {
+            if let Ok(nested) = serde_json::from_str::<Value>(text) {
+                collect_artifact_candidates(&nested, candidates);
+            }
+        }
         _ => {}
     }
 }
@@ -254,6 +270,7 @@ fn artifact_type_from_media(media_type: Option<&str>) -> String {
         value if value.starts_with("image/") => "image",
         value if value.starts_with("audio/") => "audio",
         value if value.starts_with("video/") => "video",
+        "application/pdf" => "pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "document",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
             "presentation"
@@ -262,6 +279,139 @@ fn artifact_type_from_media(media_type: Option<&str>) -> String {
         _ => "file",
     }
     .to_string()
+}
+
+fn artifact_type_from_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "pdf",
+        "doc" | "docx" | "odt" | "rtf" => "document",
+        "ppt" | "pptx" | "odp" => "presentation",
+        "xls" | "xlsx" | "ods" | "csv" => "spreadsheet",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" => "image",
+        "mp3" | "wav" | "m4a" | "ogg" => "audio",
+        "mp4" | "mov" | "webm" => "video",
+        "html" | "htm" => "html",
+        "txt" | "md" | "markdown" | "json" | "xml" => "text",
+        _ => "file",
+    }
+}
+
+fn is_workspace_artifact_file(path: &Path) -> bool {
+    matches!(
+        artifact_type_from_path(path),
+        "pdf" | "document" | "presentation" | "spreadsheet" | "image" | "audio" | "video" | "html" | "text"
+    )
+}
+
+fn is_ignored_workspace_directory(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | ".workbuddy" | "node_modules" | "target" | "__pycache__" | ".venv" | "venv")
+    )
+}
+
+fn collect_workspace_artifact_stamps(
+    directory: &Path,
+    depth: usize,
+    stamps: &mut HashMap<PathBuf, WorkspaceArtifactStamp>,
+) {
+    if depth > MAX_WORKSPACE_SCAN_DEPTH || stamps.len() >= MAX_DISCOVERED_WORKSPACE_ARTIFACTS {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if stamps.len() >= MAX_DISCOVERED_WORKSPACE_ARTIFACTS {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if !is_ignored_workspace_directory(&path) {
+                collect_workspace_artifact_stamps(&path, depth + 1, stamps);
+            }
+            continue;
+        }
+        if !file_type.is_file() || !is_workspace_artifact_file(&path) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        stamps.insert(
+            path,
+            WorkspaceArtifactStamp {
+                modified: metadata.modified().ok(),
+                size_bytes: metadata.len(),
+            },
+        );
+    }
+}
+
+fn snapshot_workspace_artifacts(workspace_root: &str) -> HashMap<PathBuf, WorkspaceArtifactStamp> {
+    let root = PathBuf::from(workspace_root);
+    let Ok(root) = root.canonicalize() else {
+        return HashMap::new();
+    };
+    let mut stamps = HashMap::new();
+    collect_workspace_artifact_stamps(&root, 0, &mut stamps);
+    stamps
+}
+
+fn discover_workspace_artifacts(
+    workspace_root: &str,
+    before: &HashMap<PathBuf, WorkspaceArtifactStamp>,
+) -> Vec<CodexArtifactCandidate> {
+    let after = snapshot_workspace_artifacts(workspace_root);
+    after
+        .into_iter()
+        .filter(|(path, stamp)| before.get(path) != Some(stamp))
+        .map(|(path, stamp)| CodexArtifactCandidate {
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Harmony Work 成果")
+                .to_string(),
+            artifact_type: artifact_type_from_path(&path).to_string(),
+            uri: workspace_artifact_uri(&path),
+            summary: "本轮任务在工作区中生成或更新".to_string(),
+            metadata_json: serde_json::to_string(&serde_json::json!({
+                "discovered": true,
+                "sizeBytes": stamp.size_bytes,
+            }))
+            .ok(),
+        })
+        .collect()
+}
+
+fn workspace_artifact_uri(path: &Path) -> String {
+    let value = path.to_string_lossy().into_owned();
+    value
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(value.as_str())
+        .to_string()
+}
+
+fn normalize_artifact_uri(uri: &str) -> String {
+    let trimmed = uri.trim();
+    let local_path = trimmed
+        .strip_prefix("file:///")
+        .or_else(|| trimmed.strip_prefix("file://"))
+        .unwrap_or(trimmed);
+    local_path
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(local_path)
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 #[derive(Clone)]
@@ -1479,6 +1629,8 @@ pub async fn codex_chat_send(
         developer_instructions: Some(developer_instructions),
         attachments,
     };
+    let workspace_artifacts_before = snapshot_workspace_artifacts(&options.workspace_root);
+    let workspace_root_for_artifact_discovery = options.workspace_root.clone();
     {
         let db = app_state.db.lock().await;
         db.append_message_with_context(
@@ -1633,6 +1785,42 @@ pub async fn codex_chat_send(
             }
             let terminal = is_terminal_event(&event);
             if terminal {
+                if matches!(&event, WorkBuddyEvent::Done { .. }) {
+                    let known_artifact_uris: HashSet<String> = {
+                        let db = app_state.db.lock().await;
+                        db.list_session_artifacts(&session_id, 1000)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|artifact| artifact.uri)
+                            .map(|uri| normalize_artifact_uri(&uri))
+                            .collect()
+                    };
+                    for candidate in discover_workspace_artifacts(
+                        &workspace_root_for_artifact_discovery,
+                        &workspace_artifacts_before,
+                    ) {
+                        if known_artifact_uris.contains(&normalize_artifact_uri(&candidate.uri)) {
+                            continue;
+                        }
+                        let artifact = {
+                            let db = app_state.db.lock().await;
+                            db.add_session_artifact(
+                                &session_id,
+                                &candidate.name,
+                                &candidate.artifact_type,
+                                Some(candidate.uri.as_str()),
+                                &candidate.summary,
+                                Some("workspace_discovery"),
+                                None,
+                                candidate.metadata_json.as_deref(),
+                            )
+                            .ok()
+                        };
+                        if let Some(artifact) = artifact {
+                            let _ = app.emit(&format!("session_artifacts_updated_{session_id}"), artifact);
+                        }
+                    }
+                }
                 {
                     let db = app_state.db.lock().await;
                     if matches!(&event, WorkBuddyEvent::Done { .. }) {
@@ -1761,6 +1949,50 @@ mod tests {
         assert_eq!(artifacts[0].artifact_type, "document");
         assert_eq!(artifacts[1].name, "poster.png");
         assert_eq!(artifacts[1].artifact_type, "image");
+    }
+
+    #[test]
+    fn extracts_artifacts_from_stringified_mcp_tool_results() {
+        let embedded = serde_json::json!({
+            "structuredContent": {
+                "artifacts": [{
+                    "fileName": "Agent-Loop-Frontier-Tech.pdf",
+                    "mediaType": "application/pdf",
+                    "localPath": "C:/Users/Admin/harmony/agent-loop-report/Agent-Loop-Frontier-Tech.pdf"
+                }]
+            }
+        })
+        .to_string();
+        let result = serde_json::json!({ "content": embedded }).to_string();
+
+        let artifacts = extract_artifact_candidates(&result);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].name, "Agent-Loop-Frontier-Tech.pdf");
+        assert_eq!(artifacts[0].artifact_type, "pdf");
+    }
+
+    #[test]
+    fn discovers_new_pdf_written_to_the_workspace() {
+        let workspace = std::env::temp_dir().join(format!(
+            "harmony-work-artifact-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&workspace).expect("create temp workspace");
+        let before = snapshot_workspace_artifacts(workspace.to_str().expect("workspace path"));
+        let report_path = workspace.join("report.pdf");
+        fs::write(&report_path, b"%PDF-1.7").expect("write report");
+
+        let artifacts = discover_workspace_artifacts(
+            workspace.to_str().expect("workspace path"),
+            &before,
+        );
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].name, "report.pdf");
+        assert_eq!(artifacts[0].artifact_type, "pdf");
+        assert_eq!(normalize_artifact_uri(&artifacts[0].uri), normalize_artifact_uri(report_path.to_str().expect("report path")));
+        fs::remove_dir_all(&workspace).expect("remove temp workspace");
     }
 
     #[test]

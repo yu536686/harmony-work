@@ -13,6 +13,8 @@ import {
   PanelRightOpen,
   MessageSquareText,
   UserRound,
+  FileOutput,
+  FileText,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -26,10 +28,9 @@ import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type
 import type { Settings } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
 import ExecutionTimeline from "./ExecutionTimeline";
-import WorkbenchPanel from "./WorkbenchPanel";
+import WorkbenchPanel, { type WorkbenchBrowserTarget } from "./WorkbenchPanel";
 import {
   addAnnotation,
   annotationAnchor,
@@ -655,6 +656,9 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   // History pagination: capacity starts at CHAT_INITIAL_SIZE, grows by CHAT_LAZY_STEP on each lazy-load
   const CHAT_INITIAL_SIZE = 200;
   const CHAT_LAZY_STEP = 10;
+  const WORKBENCH_MIN_WIDTH = 360;
+  const CHAT_MAIN_MIN_WIDTH = 420;
+  const WORKBENCH_WIDTH_STORAGE_KEY = "harmony-work.workbench-width";
   const [capacity, setCapacity] = useState(CHAT_INITIAL_SIZE);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
@@ -962,6 +966,14 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const executionModel = displaySessionId ? executionBySession[displaySessionId] ?? null : null;
   const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
   const [workbenchOpenBySession, setWorkbenchOpenBySession] = useState<Record<string, boolean>>({});
+  const [workbenchWidth, setWorkbenchWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(WORKBENCH_WIDTH_STORAGE_KEY));
+    return Number.isFinite(stored) && stored >= WORKBENCH_MIN_WIDTH ? stored : 480;
+  });
+  const chatLayoutRef = useRef<HTMLDivElement | null>(null);
+  const workbenchResizeCleanupRef = useRef<(() => void) | null>(null);
+  const [focusedArtifactUriBySession, setFocusedArtifactUriBySession] = useState<Record<string, string>>({});
+  const [browserTargetBySession, setBrowserTargetBySession] = useState<Record<string, WorkbenchBrowserTarget>>({});
   const [annotationDraftsBySession, setAnnotationDraftsBySession] = useState<Record<string, AnnotationDraftState>>({});
   const [focusedAnnotationId, setFocusedAnnotationId] = useState<string | null>(null);
   const workbenchOpen = displaySessionId
@@ -970,6 +982,81 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const activeAnnotationDraft = displaySessionId
     ? annotationDraftsBySession[displaySessionId] ?? emptyAnnotationDraft
     : emptyAnnotationDraft;
+  const focusedArtifactUri = displaySessionId ? focusedArtifactUriBySession[displaySessionId] ?? null : null;
+  const browserTarget = displaySessionId ? browserTargetBySession[displaySessionId] ?? null : null;
+  const workbenchArtifacts = useMemo(() => {
+    const normalizedFocusedUri = focusedArtifactUri
+      ?.replace(/^file:\/\//i, "")
+      .replace(/\//g, "\\")
+      .toLowerCase();
+    if (!focusedArtifactUri || activeArtifacts.some((artifact) => artifact.uri
+      ?.replace(/^file:\/\//i, "")
+      .replace(/\//g, "\\")
+      .toLowerCase() === normalizedFocusedUri)) {
+      return activeArtifacts;
+    }
+    const name = decodeURIComponent(focusedArtifactUri)
+      .replace(/^file:\/\//i, "")
+      .split(/[\\/]/)
+      .filter(Boolean)
+      .pop() || "Harmony Work 成果";
+    return [{
+      id: `linked-artifact-${focusedArtifactUri}`,
+      session_id: displaySessionId ?? "",
+      name,
+      artifact_type: "file",
+      uri: focusedArtifactUri,
+      content_summary: "会话中打开的文件",
+      source_tool: "chat_link",
+      tool_use_id: null,
+      metadata_json: null,
+      created_at: new Date().toISOString(),
+    }, ...activeArtifacts];
+  }, [activeArtifacts, displaySessionId, focusedArtifactUri]);
+  const openArtifactInWorkbench = useCallback((uri: string) => {
+    if (!displaySessionId) return;
+    setFocusedArtifactUriBySession((current) => ({ ...current, [displaySessionId]: uri }));
+    setWorkbenchOpenBySession((current) => ({ ...current, [displaySessionId]: true }));
+  }, [displaySessionId]);
+  const openBrowserInWorkbench = useCallback((url: string, title?: string) => {
+    if (!displaySessionId) return;
+    setBrowserTargetBySession((current) => ({
+      ...current,
+      [displaySessionId]: { id: `browser-${url}`, title: title || url, url },
+    }));
+    setWorkbenchOpenBySession((current) => ({ ...current, [displaySessionId]: true }));
+  }, [displaySessionId]);
+  const stopWorkbenchResize = useCallback(() => {
+    workbenchResizeCleanupRef.current?.();
+    workbenchResizeCleanupRef.current = null;
+  }, []);
+  const beginWorkbenchResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const layout = chatLayoutRef.current;
+    if (!layout) return;
+    event.preventDefault();
+    stopWorkbenchResize();
+    const startX = event.clientX;
+    const startWidth = workbenchWidth;
+    const applyWidth = (clientX: number) => {
+      const maxWidth = Math.max(WORKBENCH_MIN_WIDTH, layout.clientWidth - CHAT_MAIN_MIN_WIDTH);
+      setWorkbenchWidth(Math.round(Math.min(maxWidth, Math.max(
+        WORKBENCH_MIN_WIDTH,
+        startWidth - (clientX - startX),
+      ))));
+    };
+    const onMove = (moveEvent: PointerEvent) => applyWidth(moveEvent.clientX);
+    const onUp = () => stopWorkbenchResize();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    workbenchResizeCleanupRef.current = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [CHAT_MAIN_MIN_WIDTH, WORKBENCH_MIN_WIDTH, stopWorkbenchResize, workbenchWidth]);
+  useEffect(() => {
+    localStorage.setItem(WORKBENCH_WIDTH_STORAGE_KEY, String(workbenchWidth));
+  }, [WORKBENCH_WIDTH_STORAGE_KEY, workbenchWidth]);
+  useEffect(() => () => stopWorkbenchResize(), [stopWorkbenchResize]);
   const stageAnnotation = useCallback((annotation: WorkbenchAnnotation) => {
     setAnnotationDraftsBySession((current) => ({
       ...current,
@@ -1974,40 +2061,40 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
   }, [projectName, projectParentDirectory, projectDirectories, registerProjectDirectory, beginDraft, t]);
 
-  // ── File drag-and-drop (Tauri v2 events) ─────────────────────────────────
-  // Tauri v2 intercepts native drag-and-drop and emits its own events.
-  // We listen to tauri://drag-enter / drag-leave / drag-drop instead of
-  // HTML5 onDragOver/onDragLeave/onDrop, because only Tauri events provide
-  // the full file paths via payload.paths.
+  // ── File drag-and-drop ───────────────────────────────────────────────────
+  // Native Tauri events preserve Windows paths and grant temporary read scope
+  // for the files the user deliberately drops into this window.
   const [isDragging, setIsDragging] = useState(false);
 
   const processDroppedFile = useCallback(async (filePath: string) => {
     const filename = filePath.split(/[\\/]/).pop() ?? filePath;
-    if (isImageFilename(filename)) {
+    try {
+      appendAttachment(await buildAttachmentFromPath(filePath));
+    } catch (error) {
+      // Preserve the user-selected native path even when a preview cannot be read.
+      console.error("native drop attachment read error:", error);
+      appendAttachment({
+        id: `att_${Date.now()}_${filename}`,
+        attachment: {
+          media_type: isImageFilename(filename) ? "image/*" : "application/octet-stream",
+          path: filePath,
+          filename,
+        },
+      });
+    }
+  }, [appendAttachment]);
+
+  const processBrowserDroppedFiles = useCallback(async (files: File[]) => {
+    for (const file of files) {
       try {
-        const item = await buildAttachmentFromPath(filePath);
-        appendAttachment(item);
-      } catch (e) {
-        console.error("drop image read error:", e);
-        appendAttachment({
-          id: `att_${Date.now()}`,
-          attachment: { media_type: "application/octet-stream", path: filePath, filename },
-        });
-      }
-    } else {
-      try {
-        const item = await buildAttachmentFromPath(filePath);
-        appendAttachment(item);
-      } catch {
-        setInput((prev) => {
-          const sep = prev.trim() ? "\n" : "";
-          return prev + sep + filePath;
-        });
+        appendAttachment(await buildAttachmentFromBlob(file, file.name));
+      } catch (error) {
+        console.error("browser drop attachment error:", error);
       }
     }
   }, [appendAttachment]);
 
-  // Refs to access latest state inside Tauri event listeners without re-registering
+  // Refs keep the event subscription stable while session state changes.
   const activeSessionIdRef2 = useRef(displaySessionId);
   useEffect(() => { activeSessionIdRef2.current = displaySessionId; }, [displaySessionId]);
   const isImSessionRef2 = useRef(isImSession);
@@ -2024,36 +2111,56 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
 
     const setup = async () => {
       unlistenEnter = await listen<{ paths: string[] }>("tauri://drag-enter", () => {
-        if ((activeSessionIdRef2.current || isDraftRef.current) && !isImSessionRef2.current && !runningRef2.current) {
+        if ((activeSessionIdRef2.current || isDraftRef.current)
+          && !isImSessionRef2.current
+          && !runningRef2.current) {
           setIsDragging(true);
         }
       });
-
-      unlistenLeave = await listen("tauri://drag-leave", () => {
+      unlistenLeave = await listen("tauri://drag-leave", () => setIsDragging(false));
+      unlistenDrop = await listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
         setIsDragging(false);
-      });
-
-      unlistenDrop = await listen<{ paths: string[] }>("tauri://drag-drop", async (e) => {
-        setIsDragging(false);
-        // Only allow drop in chat sessions (not IM, not empty state)
-        if ((!activeSessionIdRef2.current && !isDraftRef.current) || isImSessionRef2.current || runningRef2.current) return;
-
-        const paths = e.payload.paths;
-        if (!paths || paths.length === 0) return;
-
-        for (const filePath of paths) {
+        if ((!activeSessionIdRef2.current && !isDraftRef.current)
+          || isImSessionRef2.current
+          || runningRef2.current) return;
+        for (const filePath of event.payload.paths ?? []) {
           await processDroppedFile(filePath);
         }
       });
     };
 
-    setup();
+    void setup();
     return () => {
       unlistenEnter?.();
       unlistenLeave?.();
       unlistenDrop?.();
     };
   }, [processDroppedFile]);
+
+  const handleComposerDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (event.dataTransfer.types.includes("Files") && !isImSession && !running) {
+      event.preventDefault();
+      setIsDragging(true);
+    }
+  }, [isImSession, running]);
+
+  const handleComposerDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (event.dataTransfer.types.includes("Files") && !isImSession && !running) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }, [isImSession, running]);
+
+  const handleComposerDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
+  }, []);
+
+  const handleComposerDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.files.length || isImSession || running) return;
+    event.preventDefault();
+    setIsDragging(false);
+    await processBrowserDroppedFiles(Array.from(event.dataTransfer.files));
+  }, [isImSession, processBrowserDroppedFiles, running]);
 
   // Core send logic, called after plan-resume decision is made.
   // clearPlan=true: clear existing plan before this turn (default / new task)
@@ -2453,7 +2560,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   return (
     <>
       {sessionRail}
-      <div className={`chat-layout${workbenchOpen ? " workbench-open" : ""}`}>
+      <div
+        ref={chatLayoutRef}
+        className={`chat-layout${workbenchOpen ? " workbench-open" : ""}`}
+      >
       {/* Main chat area */}
       <div className={`chat-main ${isDraft ? "is-draft" : ""}`}>
         <div className="chat-topbar">
@@ -2525,7 +2635,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                           <div key={card.requestId} className="message message-assistant">
                             <div className="message-role">{t("chat.piscis")}</div>
                             <div className="message-content">
-                              {msg.content.trim() && <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />}
+                              {msg.content.trim() && <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} onOpenArtifact={openArtifactInWorkbench} onOpenBrowser={openBrowserInWorkbench} />}
                               <InteractiveCard
                                 requestId={card.requestId}
                                 uiDefinition={card.uiDefinition}
@@ -2551,7 +2661,13 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                         {msg.role === "user" ? t("chat.you") : t("chat.piscis")}
                       </div>
                       <div className="message-content">
-                        <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
+                        <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} onOpenArtifact={openArtifactInWorkbench} onOpenBrowser={openBrowserInWorkbench} />
+                        {msg.role === "assistant" && !running && messageIndex === activeMessages.length - 1 && (
+                          <ArtifactQuickLinks
+                            artifacts={activeArtifacts}
+                            onOpen={openArtifactInWorkbench}
+                          />
+                        )}
                         {persistedAnnotations.length > 0 && (
                           <div className="message-annotation-badges" aria-label="成果批注">
                             {persistedAnnotations.map((annotation, index) => (
@@ -2579,7 +2695,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                   <div className="message-content">
                     {streamingCurrent ? (
                       <>
-                        <MessageContent content={streamingCurrent} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} />
+                        <MessageContent content={streamingCurrent} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} onOpenArtifact={openArtifactInWorkbench} onOpenBrowser={openBrowserInWorkbench} />
                         <span className="cursor-blink">▋</span>
                       </>
                     ) : (
@@ -2671,6 +2787,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
 
             {!isImSession && <div
               className={`input-area${isDragging ? " drag-over" : ""}`}
+              onDragEnter={handleComposerDragEnter}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={(event) => { void handleComposerDrop(event); }}
             >
               {reviewChanges.length > 0 && (
                 <div className="review-bar">
@@ -2898,20 +3018,34 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       </div>
 
       {displaySessionId && (
-        <WorkbenchPanel
-          open={workbenchOpen}
-          sessionId={displaySessionId}
-          artifacts={activeArtifacts}
-          execution={executionModel}
-      annotations={activeAnnotationDraft.items}
-      focusedAnnotationId={focusedAnnotationId}
-      running={running}
-          onStageAnnotation={stageAnnotation}
-          onClose={() => setWorkbenchOpenBySession((current) => ({
-            ...current,
-            [displaySessionId]: false,
-          }))}
-        />
+        <>
+          {workbenchOpen && (
+            <div
+              className="workbench-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整工具面板宽度"
+              onPointerDown={beginWorkbenchResize}
+            />
+          )}
+          <WorkbenchPanel
+            open={workbenchOpen}
+            width={workbenchWidth}
+            sessionId={displaySessionId}
+            artifacts={workbenchArtifacts}
+            execution={executionModel}
+            annotations={activeAnnotationDraft.items}
+            focusedAnnotationId={focusedAnnotationId}
+            focusedArtifactUri={focusedArtifactUri}
+            browserTarget={browserTarget}
+            running={running}
+            onStageAnnotation={stageAnnotation}
+            onClose={() => setWorkbenchOpenBySession((current) => ({
+              ...current,
+              [displaySessionId]: false,
+            }))}
+          />
+        </>
       )}
 
       {projectDialogOpen && (
@@ -3271,7 +3405,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   );
 }
 
-import { linkifyPaths, stripSendMarkers, isLocalPath, uriToNativePath } from "../../utils/linkify";
+import { linkifyPaths, stripSendMarkers, isLocalPath } from "../../utils/linkify";
 
 function harmonyCutProjectIdFromHref(href: string | undefined): string | null {
   if (!href) return null;
@@ -3289,8 +3423,45 @@ function harmonyCutProjectIdFromHref(href: string | undefined): string | null {
   }
 }
 
+function ArtifactQuickLinks({ artifacts, onOpen }: {
+  artifacts: SessionArtifact[];
+  onOpen: (uri: string) => void;
+}) {
+  const deliverables = artifacts.filter((artifact) => artifact.uri).slice(0, 6);
+  if (deliverables.length === 0) return null;
+
+  return (
+    <section className="message-artifact-links" aria-label="本轮成果">
+      <div className="message-artifact-links-label">
+        <FileOutput size={14} strokeWidth={1.8} />
+        <span>本轮成果</span>
+      </div>
+      {deliverables.map((artifact) => (
+        <button
+          key={artifact.id}
+          type="button"
+          className="message-artifact-link"
+          onClick={() => onOpen(artifact.uri!)}
+          title={artifact.uri!}
+        >
+          <FileText size={15} strokeWidth={1.8} />
+          <span className="message-artifact-link-copy">
+            <strong>{artifact.name}</strong>
+            <small>{artifact.uri}</small>
+          </span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
-function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpenHarmonyCut?: (projectId: string | null) => void }) {
+function MessageContent({ content, onOpenHarmonyCut, onOpenArtifact, onOpenBrowser }: {
+  content: string;
+  onOpenHarmonyCut?: (projectId: string | null) => void;
+  onOpenArtifact?: (uri: string) => void;
+  onOpenBrowser?: (url: string, title?: string) => void;
+}) {
   const processed = linkifyPaths(stripSendMarkers(content));
   const fallback = (
     <pre className="code-block">
@@ -3305,7 +3476,7 @@ function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpen
           remarkPlugins={[remarkGfm]}
           urlTransform={(url) => url.startsWith("file://") ? url : (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:") || url.startsWith("#") || url.startsWith("/") || !url.includes(":")) ? url : ""}
           components={{
-            // Local paths → shell.open(); web URLs → new tab
+            // Local paths and web URLs open in the current session workbench.
             a: ({ href, children }) => {
               const harmonyCutProjectId = harmonyCutProjectIdFromHref(href);
               if (harmonyCutProjectId !== null) {
@@ -3330,7 +3501,7 @@ function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpen
                     style={{ cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
-                      openPath(uriToNativePath(href!)).catch(console.error);
+                      onOpenArtifact?.(href!);
                     }}
                   >
                     {children}
@@ -3338,7 +3509,20 @@ function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpen
                 );
               }
               if (!href) return <span>{children}</span>;
-              return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+              if (/^https?:\/\//i.test(href)) {
+                return (
+                  <a
+                    href={href}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onOpenBrowser?.(href, typeof children === "string" ? children : href);
+                    }}
+                  >
+                    {children}
+                  </a>
+                );
+              }
+              return <a href={href}>{children}</a>;
             },
             // Code blocks with language label; mermaid gets special rendering
             code: ({ className, children, ...props }) => {
@@ -3366,7 +3550,7 @@ function MessageContent({ content, onOpenHarmonyCut }: { content: string; onOpen
                     style={{ cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
-                      openPath(uriToNativePath(uri)).catch(console.error);
+                      onOpenArtifact?.(uri);
                     }}
                   >
                     {text}
