@@ -778,6 +778,12 @@
   font-size: 12px;
 }
 
+.workbench-summary li span,
+.workbench-log-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .workbench-summary li.is-completed svg {
   color: var(--success, #3c9b69);
 }

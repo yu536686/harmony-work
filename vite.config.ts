@@ -48,7 +48,7 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**", "**/references/**"],
+      ignored: ["**/src-tauri/**", "**/target/**", "**/references/**"],
     },
     fs: {
       deny: ["references"],

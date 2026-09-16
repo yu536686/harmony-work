@@ -303,6 +303,10 @@ pub fn run() {
     run_impl();
 }
 
+fn should_register_single_instance(allow_multiple_instances: bool, debug_build: bool) -> bool {
+    !allow_multiple_instances && !debug_build
+}
+
 fn run_impl() {
     let _log_guard = init_logging();
     install_crash_reporter();
@@ -330,7 +334,7 @@ fn run_impl() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
-    if !allow_multiple {
+    if should_register_single_instance(allow_multiple, cfg!(debug_assertions)) {
         builder = builder.plugin(
             tauri_plugin_single_instance::Builder::new()
                 .callback(|app, _args, _cwd| {
@@ -1454,7 +1458,9 @@ fn run_impl() {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_im_outbound_route, resolve_or_create_im_binding};
+    use super::{
+        resolve_im_outbound_route, resolve_or_create_im_binding, should_register_single_instance,
+    };
     use crate::{gateway, store};
     use serde_json::json;
     use std::sync::Arc;
@@ -1478,6 +1484,14 @@ mod tests {
                 "from_user_id": "wx-user-1",
             })),
         }
+    }
+
+    #[test]
+    fn debug_builds_do_not_claim_the_release_single_instance_lock() {
+        assert!(!should_register_single_instance(false, true));
+        assert!(!should_register_single_instance(true, true));
+        assert!(!should_register_single_instance(true, false));
+        assert!(should_register_single_instance(false, false));
     }
 
     #[tokio::test]

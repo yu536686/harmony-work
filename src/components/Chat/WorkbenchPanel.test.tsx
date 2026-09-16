@@ -188,4 +188,33 @@ describe("WorkbenchPanel", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("空成果和预览失败都保留在可滚动的工作台内容区域", async () => {
+    const { container, rerender } = render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={null}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector(".workbench-content .workbench-empty")).toBeInTheDocument();
+
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("超长预览读取失败"));
+    rerender(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[artifact]}
+        execution={execution}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const error = await screen.findByRole("alert");
+    expect(error).toHaveClass("artifact-preview-state", "is-error");
+    expect(error).toHaveTextContent("超长预览读取失败");
+  });
 });

@@ -69,10 +69,12 @@
 ### 2026-09-16：任务 11 功能与跨平台回归（进行中）
 
 - 已补充键盘回归：Enter 可展开已完成执行步骤，Space 可切换 Workbench 标签；既有测试覆盖 Esc 取消当前批注且保留已暂存标记。
+- 已补充布局契约：长成果名、长命令、长 URL 和任务摘要均具备截断或 `overflow-wrap` 约束；20 条批注上限由服务端验证；窄窗口 Workbench 覆盖层、主输入框和权限弹窗层级有自动断言。另补足空成果和成果预览失败状态的组件回归。
 - 已修复 MCP Host 打包脚本测试在 Windows 上将 `\\` 路径分隔符直接套入 POSIX 正则的问题；实现路径未变，只在测试中归一化后断言，避免 Windows 打包回归被误报。
-- 远端 Windows 验证：前端全量 `npm test` 为 20 个测试文件、135 项通过，附属脚本 9 项通过；`npm run test:artifact-runtime` 5/5、`npm run test:codex-sdk` 4/4、`npm run test:codex-sidecar` 3/3、`npm run test:mcp-host` 3/3；`npx tsc --noEmit` 通过；Rust 工作区全量为主程序 182 项和 MCP Host 15 项通过。
-- 远端 Vite 预览可启动，但普通浏览器没有 Tauri `invoke` 上下文，只能验证启动页，不能替代桌面端真实会话截图。桌面 UI 的 1440/1024/390 截图、真实 Codex 回合与安装升级冒烟仍未完成，禁止据此打包或标记阶段完成。
-- 下一步：在 Windows 桌面应用运行态完成任务 11 的视觉截图和真实 Codex 回合验收，再进入任务 12 打包。
+- 修复远端开发态三项真实问题：Vite 开发端口与 Tauri `devUrl` 不一致、Vite 监听 Rust `target` 目录时会因锁定的可执行文件崩溃、调试进程会抢占已安装正式版的单实例锁。新增开发契约测试，并让仅 Debug 构建跳过该锁；Release 行为保持不变。
+- 远端 Windows 验证：前端全量 `npm test` 最新为 20 个测试文件、136 项通过，附属 Node 契约测试 13 项通过；Rust 工作区最新全量为主程序 183 项和 MCP Host 15 项通过；生产 `npm run build` 通过，退出码 0，仅有既有 Vite 大 chunk 警告。`npm run test:artifact-runtime` 5/5、`npm run test:codex-sdk` 4/4、`npm run test:codex-sidecar` 3/3、`npm run test:mcp-host` 3/3、`npx tsc --noEmit` 已在本阶段前序检查点通过。
+- 远端 Vite 预览可启动，但普通浏览器没有 Tauri `invoke` 上下文，只能验证启动页，不能替代桌面端真实会话截图。已在远端桌面 Debug 实例完成 1440px 品牌、时间线和右侧 Workbench 视觉检查；应用当前 `minWidth` 为 980px，因此无法把原计划 390px 原生桌面截图误报为通过。1024px、真实 Codex 新回合与安装升级冒烟仍未完成，禁止据此打包或标记阶段完成。
+- 下一步：决定是否将原生最小窗口降至 390px 并补齐对应响应式设计；不调整最小窗口时，完成 1024px 桌面截图、真实 Codex 回合验收后再进入任务 12 打包。
 
 ### 2026-09-16：直接批注与结构化下一轮修改（任务 9-10）
 
