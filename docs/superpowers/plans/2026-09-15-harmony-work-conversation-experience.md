@@ -756,7 +756,7 @@ git commit -m "feat: 将成果批注接入小亨下一轮任务"
 - 修改：`src/utils/designTokens.test.ts`
 - 修改：`docs/roadmaps/harmony-work-v1.3-execution-ledger.md`
 
-- [ ] **步骤 1：补充键盘与 reduced-motion 测试**
+- [x] **步骤 1：补充键盘与 reduced-motion 测试**
 
 验证 Enter/Space 展开步骤、Tab 可到达 Workbench 标签和批注操作、Esc 退出当前批注、焦点返回触发控件。`prefers-reduced-motion: reduce` 下旋转与脉冲动画禁用，但状态文字和图标仍可辨识。
 
@@ -764,7 +764,7 @@ git commit -m "feat: 将成果批注接入小亨下一轮任务"
 
 验证长中文文件名、长命令、长 URL、20 条批注、空成果和预览错误均不撑破容器；主输入框不遮挡审批弹窗或文件操作提示。
 
-- [ ] **步骤 3：运行前端全量测试**
+- [x] **步骤 3：运行前端全量测试**
 
 运行：`ssh win 'powershell -NoProfile -Command "Set-Location E:\harmony-work; npm test"'`
 

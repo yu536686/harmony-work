@@ -159,6 +159,23 @@ describe("WorkbenchPanel", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("allows a keyboard user to switch workbench views", async () => {
+    render(
+      <WorkbenchPanel
+        open
+        sessionId="session-1"
+        artifacts={[]}
+        execution={execution}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const browserTab = screen.getByRole("tab", { name: "浏览器" });
+    browserTab.focus();
+    await userEvent.keyboard(" ");
+    expect(browserTab).toHaveAttribute("aria-selected", "true");
+  });
+
   it("关闭时不占用页面布局", () => {
     const { container } = render(
       <WorkbenchPanel

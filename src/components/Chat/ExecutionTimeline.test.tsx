@@ -69,6 +69,17 @@ describe("ExecutionTimeline", () => {
     expect(screen.getByText("E:/workspace/materials")).toBeVisible();
   });
 
+  it("allows a keyboard user to expand a completed step", async () => {
+    const onToggleStep = vi.fn();
+    render(<ExecutionTimeline model={model()} onToggleStep={onToggleStep} />);
+
+    const step = screen.getByRole("button", { name: /读取文件/ });
+    step.focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(onToggleStep).toHaveBeenCalledWith("tool-1");
+  });
+
   it("只显示公开思考摘要，不读取未知 raw reasoning 字段", async () => {
     const completed = model({
       state: "completed",
