@@ -73,8 +73,9 @@
 - 已修复 MCP Host 打包脚本测试在 Windows 上将 `\\` 路径分隔符直接套入 POSIX 正则的问题；实现路径未变，只在测试中归一化后断言，避免 Windows 打包回归被误报。
 - 修复远端开发态三项真实问题：Vite 开发端口与 Tauri `devUrl` 不一致、Vite 监听 Rust `target` 目录时会因锁定的可执行文件崩溃、调试进程会抢占已安装正式版的单实例锁。新增开发契约测试，并让仅 Debug 构建跳过该锁；Release 行为保持不变。
 - 远端 Windows 验证：前端全量 `npm test` 最新为 20 个测试文件、136 项通过，附属 Node 契约测试 13 项通过；Rust 工作区最新全量为主程序 183 项和 MCP Host 15 项通过；生产 `npm run build` 通过，退出码 0，仅有既有 Vite 大 chunk 警告。`npm run test:artifact-runtime` 5/5、`npm run test:codex-sdk` 4/4、`npm run test:codex-sidecar` 3/3、`npm run test:mcp-host` 3/3、`npx tsc --noEmit` 已在本阶段前序检查点通过。
-- 远端 Vite 预览可启动，但普通浏览器没有 Tauri `invoke` 上下文，只能验证启动页，不能替代桌面端真实会话截图。已在远端桌面 Debug 实例完成 1440px 品牌、时间线和右侧 Workbench 视觉检查；应用当前 `minWidth` 为 980px，因此无法把原计划 390px 原生桌面截图误报为通过。1024px、真实 Codex 新回合与安装升级冒烟仍未完成，禁止据此打包或标记阶段完成。
-- 下一步：决定是否将原生最小窗口降至 390px 并补齐对应响应式设计；不调整最小窗口时，完成 1024px 桌面截图、真实 Codex 回合验收后再进入任务 12 打包。
+- 远端 Vite 预览可启动，但普通浏览器没有 Tauri `invoke` 上下文，只能验证启动页，不能替代桌面端真实会话截图。已在远端桌面 Debug 实例完成 1440px 品牌、时间线和右侧 Workbench 视觉检查；产品已确认保持 `minWidth: 980px`，因此计划不再把 390px 原生桌面截图作为验收项。小于 980px 的 Workbench 覆盖层继续以 CSS/组件契约保护，未来若下调最小宽度需新开响应式重构任务。
+- 尝试以远端 `admin` 交互计划任务启动 Debug 应用并抓取 1024px 窗口时，Tauri/Wry 在创建 WebView2 返回 `0x80010108`（被调用对象与客户端断开连接）。进程会启动但没有原生 WebView 窗口；该启动路径不能作为桌面 UI 或真实 Codex 回合验收环境。已终止调试进程、删除计划任务及临时截图/日志；正式安装版未改动。1024px、真实 Codex 新回合与安装升级冒烟仍未完成，禁止据此打包或标记阶段完成。
+- 下一步：在实际桌面用户会话中直接启动 Harmony Work Debug/安装版，完成 1024px 窗口截图和真实 Codex 回合验收后再进入任务 12 打包。
 
 ### 2026-09-16：直接批注与结构化下一轮修改（任务 9-10）
 
