@@ -48,6 +48,7 @@ const Settings = lazy(() => import("./components/Settings"));
 const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
 const Bootstrap = lazy(() => import("./components/Bootstrap"));
+const Account = lazy(() => import("./components/Account"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 type Tab = WorkspaceNavigationTab;
 type SchoolSubTab = "fish" | "koi";
@@ -526,7 +527,7 @@ function AppContent() {
           {userMenuOpen && (
             <div className="user-menu">
               <div className="user-menu-email">◎ {marketingUser?.email ?? "未登录"}</div>
-              <button onClick={() => { setActiveTab("marketing-assets"); setUserMenuOpen(false); }}>个人账户</button>
+              <button onClick={() => { setActiveTab("account"); setUserMenuOpen(false); }}>个人账户</button>
               <button onClick={() => { navigateTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
               <button onClick={() => { navigateTab("about"); setUserMenuOpen(false); }}>{t("nav.about")}</button>
               <button onClick={() => { navigateTab("debug"); setUserMenuOpen(false); }}>{t("nav.debug")}</button>
@@ -599,6 +600,11 @@ function AppContent() {
                 sourceSessionId={harmonyCutSessionId}
                 onNavigateToChat={() => setActiveTab("chat")}
               />
+            </div>
+          )}
+          {mountedTabs.has("account") && (
+            <div className="tab-panel" hidden={activeTab !== "account"}>
+              <Account user={marketingUser} onUserChange={setMarketingUser} />
             </div>
           )}
           {mountedTabs.has("creative-music") && (

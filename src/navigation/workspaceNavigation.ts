@@ -27,7 +27,11 @@ export type WorkspaceRoute =
   | "settings"
   | "about";
 
-export type WorkspaceNavigationTab = WorkspaceRoute | "marketing-dashboard" | "harmony-cut";
+export type WorkspaceNavigationTab =
+  | WorkspaceRoute
+  | "marketing-dashboard"
+  | "harmony-cut"
+  | "account";
 
 export type WorkspaceNavigationLabel =
   | { key: "chat.newChat" | "nav.market" | "nav.scheduler" | "nav.memory" | "nav.settings" }
