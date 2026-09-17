@@ -1,0 +1,86 @@
+.settings-page-body {
+  max-width: 1200px;
+}
+
+.settings-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  min-width: 0;
+}
+
+.settings-content {
+  width: min(100%, 920px);
+  min-width: 0;
+}
+
+.settings-section-anchor {
+  scroll-margin-top: 16px;
+}
+
+.settings-section-heading,
+.settings-diagnostic-heading {
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.settings-diagnostics {
+  display: grid;
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.settings-diagnostic-panel {
+  min-width: 0;
+}
+
+.settings-diagnostic-panel .page {
+  min-height: 0;
+}
+
+.settings-diagnostic-panel .tools-page--embedded {
+  height: auto;
+}
+
+.settings-diagnostic-panel .page-body {
+  max-width: none;
+}
+
+.settings-diagnostic-panel .page-header--embedded,
+.settings-diagnostic-panel .dbg-header--embedded {
+  min-height: 48px;
+  padding: 8px 0;
+  background: transparent;
+}
+
+.settings-diagnostic-panel .dbg-root--embedded {
+  height: auto;
+  min-height: 560px;
+  border: 1px solid var(--border);
+}
+
+.settings-diagnostic-panel .dbg-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-diagnostic-panel .dbg-body,
+.settings-diagnostic-panel .dbg-scenarios-layout {
+  min-height: 420px;
+}
+
+@media (max-width: 1100px) {
+  .settings-layout {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .settings-content {
+    width: 100%;
+  }
+}

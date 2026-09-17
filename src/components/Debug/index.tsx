@@ -115,7 +115,12 @@ function isScenarioAvailable(scenario: DebugScenario, settings: Settings | null)
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function DebugPanel() {
+interface DebugPanelProps {
+  embedded?: boolean;
+  hidePageHeader?: boolean;
+}
+
+export default function DebugPanel({ embedded = false, hidePageHeader = false }: DebugPanelProps) {
   const { t } = useTranslation();
   const [scenarios, setScenarios] = useState<DebugScenario[]>([]);
   const [results, setResults] = useState<Record<string, ScenarioResult>>({});
@@ -257,12 +262,12 @@ export default function DebugPanel() {
   const totalRun = passCount + failCount;
 
   return (
-    <div className="dbg-root">
-      <div className="dbg-header">
-        <div className="dbg-title">
+    <div className={`dbg-root${embedded ? " dbg-root--embedded" : ""}`}>
+      <div className={`dbg-header${hidePageHeader ? " dbg-header--embedded" : ""}`}>
+        {!hidePageHeader && <div className="dbg-title">
           <span className="dbg-icon">🔬</span>
           <span>{t("debug.title")}</span>
-        </div>
+        </div>}
         <div className="dbg-header-actions">
           {totalRun > 0 && (
             <span className="dbg-summary">

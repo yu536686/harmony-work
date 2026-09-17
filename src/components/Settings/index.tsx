@@ -26,9 +26,15 @@ import {
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 import AccountSettingsSyncPanel from "./AccountSettingsSyncPanel";
+import SettingsNavigation from "./SettingsNavigation";
+import { SETTINGS_SECTIONS, type SettingsSection } from "./settingsSections";
+import Tools from "../Tools";
+import AuditLog from "../AuditLog";
+import DebugPanel from "../Debug";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
+import "./Settings.css";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
@@ -167,10 +173,11 @@ const DEFAULT_SETTINGS: SettingsData = {
 interface SettingsProps {
   theme: 'violet' | 'gold';
   setTheme: (t: 'violet' | 'gold') => void;
+  initialSection?: SettingsSection;
   onOpenTools?: () => void;
 }
 
-export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps) {
+export default function Settings({ theme, setTheme, initialSection, onOpenTools }: SettingsProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { settings } = useSelector((s: RootState) => s.settings);
@@ -200,6 +207,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const [capabilityTest, setCapabilityTest] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityTestResult | null>>>({});
   const [capabilityMsg, setCapabilityMsg] = useState<Partial<Record<EnterprisePlatformId, string | null>>>({});
   const [fontScale, setFontScaleState] = useState<FontScale>(() => getFontScale());
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection ?? "account-cloud");
+
+  useEffect(() => {
+    setActiveSection(initialSection ?? "account-cloud");
+  }, [initialSection]);
 
   // WeChat binding flow
   const [wechatQr, setWechatQr] = useState<string | null>(null);
@@ -815,15 +827,32 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </div>
       )}
 
-      <div className="page-body" style={{ maxWidth: 640 }}>
-        <AccountSettingsSyncPanel
-          user={readRememberedMarketingUser()}
-          onSettingsApplied={reloadSettingsAfterCloudRestore}
-        />
+      <div className="page-body settings-page-body">
+        <div className="settings-layout">
+          <SettingsNavigation
+            activeSection={activeSection}
+            initialSection={initialSection}
+            onSectionChange={setActiveSection}
+          />
+          <div className="settings-content">
+        <section
+          id="settings-section-account-cloud"
+          className="settings-section-anchor"
+          aria-labelledby="settings-heading-account-cloud"
+          hidden={activeSection !== "account-cloud"}
+        >
+          <h2 id="settings-heading-account-cloud" className="settings-section-heading">
+            {SETTINGS_SECTIONS[0].label}
+          </h2>
+          <AccountSettingsSyncPanel
+            user={readRememberedMarketingUser()}
+            onSettingsApplied={reloadSettingsAfterCloudRestore}
+          />
+        </section>
 
         {/* AI Provider */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-model-api" className="settings-section-anchor" aria-labelledby="settings-heading-model-api" hidden={activeSection !== "model-api"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-model-api" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.aiProvider")}
           </h2>
 
@@ -1344,8 +1373,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* Workspace */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-workspace-security" className="settings-section-anchor" aria-labelledby="settings-heading-workspace-security" hidden={activeSection !== "workspace-security"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-workspace-security" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.workspace")}
           </h2>
           <div className="form-group">
@@ -1395,8 +1424,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* Security */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-security" className="settings-section-anchor" aria-labelledby="settings-heading-security" hidden={activeSection !== "workspace-security"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-security" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.security")}
           </h2>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1432,8 +1461,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* Agent Config */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-agent-skills" className="settings-section-anchor" aria-labelledby="settings-heading-agent-skills" hidden={activeSection !== "agent-skills"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-agent-skills" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.agentConfig")}
           </h2>
           <div className="form-group">
@@ -1663,8 +1692,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* Interface */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-appearance" className="settings-section-anchor" aria-labelledby="settings-heading-appearance" hidden={activeSection !== "appearance"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-appearance" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.interface")}
           </h2>
           <div className="form-group">
@@ -1769,8 +1798,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* IM Gateway */}
-        <section style={{ marginBottom: 32 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        <section id="settings-section-channels" className="settings-section-anchor" aria-labelledby="settings-heading-channels" hidden={activeSection !== "channels"} style={{ marginBottom: 32 }}>
+          <h2 id="settings-heading-channels" style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.imChannels")}
           </h2>
           <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
@@ -1952,8 +1981,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* ── Email ─────────────────────────────────────────────────────── */}
-        <section className="settings-section">
-          <h3 className="settings-section-title">{t("settings.emailSection")}</h3>
+        <section id="settings-section-email" className="settings-section settings-section-anchor" aria-labelledby="settings-heading-email" hidden={activeSection !== "channels"}>
+          <h3 id="settings-heading-email" className="settings-section-title">{t("settings.emailSection")}</h3>
           <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
             {t("settings.emailSectionDesc")}
           </p>
@@ -2015,8 +2044,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* ── SSH Servers ───────────────────────────────────────────────── */}
-        <section className="settings-section">
-          <h3 className="settings-section-title">{t("settings.sshSection")}</h3>
+        <section id="settings-section-ssh-servers" className="settings-section settings-section-anchor" aria-labelledby="settings-heading-ssh-servers" hidden={activeSection !== "agent-skills"}>
+          <h3 id="settings-heading-ssh-servers" className="settings-section-title">{t("settings.sshSection")}</h3>
           <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
             {t("settings.sshSectionDesc")}
           </p>
@@ -2129,8 +2158,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
         </section>
 
         {/* ── Runtime Environment ───────────────────────────────────────── */}
-        <section className="settings-section">
-          <h3 className="settings-section-title">{t("settings.runtimeSection")}</h3>
+        <section id="settings-section-system-diagnostics" className="settings-section settings-section-anchor" aria-labelledby="settings-heading-system-diagnostics" hidden={activeSection !== "system-diagnostics"}>
+          <h3 id="settings-heading-system-diagnostics" className="settings-section-title">{t("settings.runtimeSection")}</h3>
           <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
             {t("settings.runtimeSectionDesc")}
           </p>
@@ -2432,7 +2461,24 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               </div>
             )}
           </div>
+
+          <div className="settings-diagnostics" aria-label="系统诊断工具">
+            <section id="settings-section-tools" className="settings-diagnostic-panel" aria-labelledby="settings-heading-tools">
+              <h4 id="settings-heading-tools" className="settings-diagnostic-heading">工具管理</h4>
+              <Tools embedded hidePageHeader />
+            </section>
+            <section id="settings-section-audit" className="settings-diagnostic-panel" aria-labelledby="settings-heading-audit">
+              <h4 id="settings-heading-audit" className="settings-diagnostic-heading">操作日志</h4>
+              <AuditLog embedded hidePageHeader />
+            </section>
+            <section id="settings-section-debug" className="settings-diagnostic-panel" aria-labelledby="settings-heading-debug">
+              <h4 id="settings-heading-debug" className="settings-diagnostic-heading">调试面板</h4>
+              <DebugPanel embedded hidePageHeader />
+            </section>
+          </div>
         </section>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -463,7 +463,12 @@ function SessionBundleCard({
   );
 }
 
-export default function AuditLog() {
+interface AuditLogProps {
+  embedded?: boolean;
+  hidePageHeader?: boolean;
+}
+
+export default function AuditLog({ embedded = false, hidePageHeader = false }: AuditLogProps) {
   const { t } = useTranslation();
   const [bundles, setBundles] = useState<SessionActivityBundle[]>([]);
   const [loading, setLoading] = useState(false);
@@ -565,10 +570,10 @@ export default function AuditLog() {
   }, 0);
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1 className="page-title">🔍 {t("audit.title")}</h1>
-        <div className="page-header-actions">
+    <div className={`page${embedded ? " audit-log--embedded" : ""}`}>
+      <div className={`page-header${hidePageHeader ? " page-header--embedded" : ""}`}>
+          {!hidePageHeader && <h1 className="page-title">🔍 {t("audit.title")}</h1>}
+          <div className="page-header-actions">
           <button type="button" className="btn-header" onClick={load} disabled={loading}>
             ↻ {loading ? t("common.loading") : t("common.refresh")}
           </button>
@@ -580,7 +585,7 @@ export default function AuditLog() {
           >
             {clearing ? t("audit.clearing") : t("audit.clearLog")}
           </button>
-        </div>
+          </div>
       </div>
 
       {error && (

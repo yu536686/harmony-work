@@ -491,7 +491,12 @@ function McpServerCard({ server, onEdit, onDelete }: McpServerCardProps) {
 
 type ToolsTab = "builtin" | "user" | "mcp";
 
-export default function Tools() {
+interface ToolsProps {
+  embedded?: boolean;
+  hidePageHeader?: boolean;
+}
+
+export default function Tools({ embedded = false, hidePageHeader = false }: ToolsProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ToolsTab>("builtin");
 
@@ -644,10 +649,12 @@ export default function Tools() {
   };
 
   return (
-    <div className="page tools-page">
-      <div className="page-header">
-        <h1 className="page-title">🔧 {t("tools.title")}</h1>
-      </div>
+    <div className={`page tools-page${embedded ? " tools-page--embedded" : ""}`}>
+      {!hidePageHeader && (
+        <div className="page-header">
+          <h1 className="page-title">🔧 {t("tools.title")}</h1>
+        </div>
+      )}
 
       <div className="page-body tools-page-body">
       {/* ── Tab Bar ── */}

@@ -1,3 +1,4 @@
+import { getLegacySettingsSection, type SettingsSection } from "../components/Settings/settingsSections";
 import {
   Brain,
   Clock3,
@@ -10,14 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type SettingsSection =
-  | "account-cloud"
-  | "model-api"
-  | "channels"
-  | "workspace-security"
-  | "agent-skills"
-  | "appearance"
-  | "system-diagnostics";
+export type { SettingsSection } from "../components/Settings/settingsSections";
 
 export type WorkspaceRoute =
   | "chat"
@@ -138,9 +132,6 @@ const LEGACY_ROUTE_ALIASES: Record<string, { route: WorkspaceRoute; settingsSect
   market: { route: "skills" },
   school: { route: "members" },
   pond: { route: "team" },
-  tools: { route: "settings", settingsSection: "agent-skills" },
-  audit: { route: "settings", settingsSection: "system-diagnostics" },
-  debug: { route: "settings", settingsSection: "system-diagnostics" },
 };
 
 export function normalizeWorkspaceRoute(route: string): {
@@ -148,6 +139,8 @@ export function normalizeWorkspaceRoute(route: string): {
   settingsSection?: SettingsSection;
 } {
   const normalizedRoute = route.trim();
+  const settingsSection = getLegacySettingsSection(normalizedRoute);
+  if (settingsSection) return { route: "settings", settingsSection };
   const legacyRoute = LEGACY_ROUTE_ALIASES[normalizedRoute];
   if (legacyRoute) return legacyRoute;
   if (ROUTES.has(normalizedRoute as WorkspaceRoute)) {

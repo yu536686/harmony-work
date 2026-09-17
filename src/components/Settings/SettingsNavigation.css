@@ -1,0 +1,74 @@
+.settings-navigation {
+  align-self: flex-start;
+  position: sticky;
+  top: 16px;
+  width: 196px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  flex: 0 0 196px;
+  padding-right: 12px;
+}
+
+.settings-navigation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-navigation-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-navigation-item:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.settings-navigation-item.is-active {
+  border-color: var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-navigation-item:focus-visible {
+  outline: 2px solid var(--accent, #7c6af7);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1100px) {
+  .settings-navigation {
+    position: static;
+    width: 100%;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-basis: auto;
+    padding: 0 0 8px;
+  }
+
+  .settings-navigation-list {
+    display: grid;
+    grid-auto-columns: max-content;
+    grid-auto-flow: column;
+  }
+
+  .settings-navigation-item {
+    width: auto;
+    white-space: nowrap;
+  }
+}
