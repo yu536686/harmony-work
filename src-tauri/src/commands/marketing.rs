@@ -381,6 +381,92 @@ pub async fn marketing_douyin_accounts() -> Result<Value, String> {
     marketing_get_json("/api/douyin/accounts", Vec::new()).await
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketingAccountOverview {
+    pub user: Value,
+    pub balance: Option<f64>,
+    pub usage: Option<Value>,
+    pub gateway_api_key: Option<String>,
+}
+
+fn normalize_account_balance(value: &Value) -> Option<f64> {
+    value.get("balance").and_then(Value::as_f64)
+}
+
+fn normalize_account_usage(value: &Value) -> Option<Value> {
+    value.get("stat").filter(|v| !v.is_null()).cloned()
+}
+
+fn normalize_account_gateway_key(value: &Value) -> Option<String> {
+    value
+        .get("gatewayApiKey")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn build_account_overview(
+    user: Value,
+    balance: Option<Value>,
+    usage: Option<Value>,
+    credentials: Option<Value>,
+) -> MarketingAccountOverview {
+    MarketingAccountOverview {
+        user,
+        balance: balance.as_ref().and_then(normalize_account_balance),
+        usage: usage.as_ref().and_then(normalize_account_usage),
+        gateway_api_key: credentials
+            .as_ref()
+            .and_then(normalize_account_gateway_key),
+    }
+}
+
+async fn fetch_marketing_json_optional(path: &str) -> Option<Value> {
+    let client = marketing_client().ok()?;
+    let req = apply_cookie(client.get(format!("{}{}", marketing_base_url(), path))).await;
+    let resp = req.send().await.ok()?;
+    store_response_cookie(&resp).await;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Value>().await.ok()
+}
+
+/// 汇总门户账户、积分余额、网关用量和个人 Harmony API Key。
+/// 身份接口失败（401/403）会清除过期会话并报错；非关键统计接口失败只降级为 `null`。
+/// 该命令不持久化任何网关凭据，仅向当前调用返回结果。
+#[tauri::command]
+pub async fn marketing_account_overview() -> Result<MarketingAccountOverview, String> {
+    let client = marketing_client()?;
+    let req = apply_cookie(client.get(format!("{}/api/auth/me", marketing_base_url()))).await;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("账户信息请求失败：{e}"))?;
+    store_response_cookie(&resp).await;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        clear_persisted_cookie().await;
+        *cookie_store().lock().await = None;
+        return Err(format!("登录已过期（HTTP {status}），请重新登录"));
+    }
+    if !status.is_success() {
+        return Err(format!("账户信息获取失败（HTTP {status}）：{text}"));
+    }
+    let me_value: Value =
+        serde_json::from_str(&text).map_err(|e| format!("账户信息解析失败：{e}"))?;
+    let user = me_value.get("user").cloned().unwrap_or(Value::Null);
+
+    let (balance, usage, credentials) = tokio::join!(
+        fetch_marketing_json_optional("/api/gateway/balance"),
+        fetch_marketing_json_optional("/api/gateway/usage"),
+        fetch_marketing_json_optional("/api/gateway/credentials"),
+    );
+
+    Ok(build_account_overview(user, balance, usage, credentials))
+}
+
 async fn marketing_get_json(path: &str, params: Vec<(String, String)>) -> Result<Value, String> {
     let client = marketing_client()?;
     let url = format!("{}{}", marketing_base_url(), path);
@@ -798,7 +884,10 @@ pub async fn marketing_creative_save_to_workspace(
 
 #[cfg(test)]
 mod tests {
-    use super::{omit_null_object_fields, save_target_path};
+    use super::{
+        build_account_overview, normalize_account_balance, normalize_account_gateway_key,
+        normalize_account_usage, omit_null_object_fields, save_target_path,
+    };
     use serde_json::{json, Value};
 
     #[test]
@@ -828,5 +917,70 @@ mod tests {
             payload.get("theme").and_then(Value::as_str),
             Some("节日礼赠")
         );
+    }
+
+    #[test]
+    fn normalizes_account_balance_to_number() {
+        assert_eq!(
+            normalize_account_balance(&json!({"balance": 12.5, "quota": 6250000})),
+            Some(12.5)
+        );
+        assert_eq!(
+            normalize_account_balance(&json!({"balance": null, "message": "尚未开通中转站账号"})),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_account_usage_and_drops_absent_stat() {
+        let stat = normalize_account_usage(&json!({
+            "stat": {"quota": 100, "request_count": 3},
+            "logs": []
+        }));
+        assert_eq!(stat, Some(json!({"quota": 100, "request_count": 3})));
+
+        let absent = normalize_account_usage(&json!({
+            "stat": null,
+            "logs": [],
+            "message": "尚未开通中转站账号"
+        }));
+        assert_eq!(absent, None);
+    }
+
+    #[test]
+    fn normalizes_account_gateway_key_and_ignores_null() {
+        assert_eq!(
+            normalize_account_gateway_key(&json!({
+                "gatewayUserId": 1,
+                "gatewayApiKey": "sk-test",
+                "baseUrl": "https://api.harmonywatch.cn:13001"
+            }))
+            .as_deref(),
+            Some("sk-test")
+        );
+        assert_eq!(
+            normalize_account_gateway_key(&json!({"gatewayApiKey": null})),
+            None
+        );
+    }
+
+    #[test]
+    fn builds_account_overview_with_partial_failures() {
+        let overview = build_account_overview(
+            json!({"id": "u1", "name": "张三", "email": "a@b.c", "userRole": "admin", "approvalStatus": "active"}),
+            Some(json!({"balance": 8.0})),
+            None,
+            Some(json!({"gatewayApiKey": "sk-123"})),
+        );
+
+        assert_eq!(overview.balance, Some(8.0));
+        assert_eq!(overview.usage, None);
+        assert_eq!(overview.gateway_api_key.as_deref(), Some("sk-123"));
+        assert_eq!(overview.user.get("name").and_then(Value::as_str), Some("张三"));
+
+        // 序列化后的账户概览可被前端直接读取，且 key 只存在于内存返回值中。
+        let serialized = serde_json::to_value(&overview).unwrap();
+        assert_eq!(serialized.get("gatewayApiKey").and_then(Value::as_str), Some("sk-123"));
+        assert_eq!(serialized.get("usage"), Some(&Value::Null));
     }
 }

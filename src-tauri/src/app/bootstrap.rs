@@ -1302,6 +1302,7 @@ fn run_impl() {
             commands::marketing::marketing_login,
             commands::marketing::marketing_logout,
             commands::marketing::marketing_me,
+            commands::marketing::marketing_account_overview,
             commands::marketing::marketing_asset_summary,
             commands::marketing::marketing_asset_folders,
             commands::marketing::marketing_asset_formats,

@@ -8,6 +8,13 @@ export interface MarketingUser {
   approvalStatus: "pending" | "active" | "disabled";
 }
 
+export interface MarketingAccountOverview {
+  user: MarketingUser;
+  balance: number | null;
+  usage: Record<string, number> | null;
+  gatewayApiKey: string | null;
+}
+
 export interface AccountSettingsSyncPrepared {
   snapshotExists: boolean;
   revision: number | null;
@@ -245,6 +252,7 @@ export const marketingApi = {
     rememberUser(result.user);
     return result.user;
   },
+  accountOverview: () => invoke<MarketingAccountOverview>("marketing_account_overview"),
   summary: async () => normalizeSummary(await invoke<MarketingAssetSummary>("marketing_asset_summary")),
   folders: () => invoke<{ folders: string[] }>("marketing_asset_folders"),
   formats: () => invoke<{ existing: Array<{ extension: string; count: number }>; common: string[] }>("marketing_asset_formats"),
