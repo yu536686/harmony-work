@@ -79,12 +79,39 @@ function assetMatchesFormat(asset: MarketingAsset, groups: string[]) {
   return groups.includes(asset.assetType);
 }
 
+function sortAssets(a: MarketingAsset, b: MarketingAsset, sort: string) {
+  switch (sort) {
+    case "modified_asc":
+      return String(a.modifiedAt ?? "").localeCompare(String(b.modifiedAt ?? ""));
+    case "name_asc":
+      return a.fileName.localeCompare(b.fileName);
+    case "size_desc":
+      return Number(b.fileSize ?? 0) - Number(a.fileSize ?? 0);
+    case "modified_desc":
+    default:
+      return String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? ""));
+  }
+}
+
 function assetKindIcon(asset: MarketingAsset) {
   if (asset.assetType === "image") return "🖼";
   if (asset.assetType === "video") return "▶";
   if (asset.assetType === "audio") return "♪";
   if (asset.assetType === "document") return "DOC";
   return (asset.extension || "FILE").slice(0, 4).toUpperCase();
+}
+
+function isPdf(asset: MarketingAsset) {
+  return (asset.extension || "").trim().toLowerCase().replace(/^\.+/, "") === "pdf";
+}
+
+function canInlinePreview(asset: MarketingAsset) {
+  return (
+    asset.assetType === "image" ||
+    asset.assetType === "video" ||
+    asset.assetType === "audio" ||
+    (asset.assetType === "document" && isPdf(asset))
+  );
 }
 
 function assetPreviewUrl(asset: MarketingAsset) {
@@ -113,6 +140,8 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [folders, setFolders] = useState<string[]>([]);
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("modified_desc");
+  const [visibleCount, setVisibleCount] = useState(48);
   const [assets, setAssets] = useState<MarketingAsset[]>([]);
   const [assetTotal, setAssetTotal] = useState(0);
   const [selectedAsset, setSelectedAsset] = useState<MarketingAsset | null>(null);
@@ -134,7 +163,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     try {
       const selectedGroups = formatGroups.length ? formatGroups : [];
       const assetRequests = selectedGroups.length
-        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 96, sort: "modified_desc" }))
+        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 96, sort }))
         : [Promise.resolve({ assets: [], total: 0 })];
       const [nextSummary, nextFolders, nextAssetGroups, nextCampaign] = await Promise.all([
         marketingApi.summary(),
@@ -153,9 +182,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       const filteredAssets = Array.from(merged.values())
         .filter((asset) => shouldShowAsset(asset, false))
         .filter((asset) => assetMatchesFormat(asset, selectedGroups));
-      const nextAssets = filteredAssets
-        .sort((a, b) => String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? "")))
-        .slice(0, 48);
+      const nextAssets = filteredAssets.sort((a, b) => sortAssets(a, b, sort));
       setSummary(nextSummary);
       setFolders(nextFolders.folders ?? []);
       setAssets(nextAssets);
@@ -177,7 +204,13 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   useEffect(() => {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, folder, view, formatGroups]);
+  }, [active, folder, view, formatGroups, sort]);
+
+  useEffect(() => {
+    setVisibleCount(48);
+  }, [folder, formatGroups, sort]);
+
+  const visibleAssets = useMemo(() => assets.slice(0, visibleCount), [assets, visibleCount]);
 
   useEffect(() => {
     if (!assets.length) return;
@@ -295,7 +328,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     setPreview(null);
     setPreviewDataUrl("");
     setPreviewError("");
-    if (asset.assetType === "image" || asset.assetType === "video") {
+    if (canInlinePreview(asset)) {
       try {
         await prepareInlinePreview(asset);
       } catch (error) {
@@ -347,6 +380,17 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       const prepared = preview?.assetId === asset.id ? preview : await prepareAsset(asset);
       await openPath(prepared.localPath);
       setMessage("");
+    } catch (error) {
+      setPreviewError(String(error));
+      setMessage(String(error));
+    }
+  };
+
+  const saveSelectedAssetToWorkspace = async (asset: MarketingAsset) => {
+    setMessage(`正在保存素材到工作区：${asset.fileName}`);
+    try {
+      const prepared = preview?.assetId === asset.id ? preview : await prepareAsset(asset);
+      setMessage(`素材已保存到工作区：${prepared.localPath}`);
     } catch (error) {
       setPreviewError(String(error));
       setMessage(String(error));
@@ -427,7 +471,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const renderAssetPreview = () => {
     if (!selectedAsset) return <div className="empty-state">选择一个素材查看详情和预览。</div>;
     const src = previewDataUrl || (preview?.localPath ? convertFileSrc(preview.localPath) : "");
-    const canInlinePreview = selectedAsset.assetType === "image" || selectedAsset.assetType === "video";
+    const inline = canInlinePreview(selectedAsset);
     return (
       <aside className="card marketing-preview">
         <div className="marketing-preview-media">
@@ -436,13 +480,30 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             <img src={src} alt={selectedAsset.fileName} onError={() => setPreviewError("图片预览加载失败，可点击打开文件用系统应用查看。")} />
           )}
           {!previewLoading && src && selectedAsset.assetType === "video" && (
-            <video src={src} controls preload="metadata" onError={() => setPreviewError("视频预览加载失败，可点击打开文件用系统播放器查看。")} />
+            <video
+              src={src}
+              controls
+              preload="metadata"
+              poster={thumbnailDataUrls[selectedAsset.id] || assetPreviewUrl(selectedAsset) || undefined}
+              onError={() => setPreviewError("视频预览加载失败，可点击打开文件用系统播放器查看。")}
+            />
+          )}
+          {!previewLoading && src && selectedAsset.assetType === "audio" && (
+            <audio src={src} controls preload="metadata" onError={() => setPreviewError("音频预览加载失败，可点击打开文件用系统播放器查看。")} />
+          )}
+          {!previewLoading && src && selectedAsset.assetType === "document" && isPdf(selectedAsset) && (
+            <iframe
+              src={src}
+              title={selectedAsset.fileName}
+              className="marketing-preview-pdf"
+              onError={() => setPreviewError("PDF 预览加载失败，可点击打开文件用系统应用查看。")}
+            />
           )}
           {!previewLoading && !src && <div className="marketing-preview-empty">{assetKindIcon(selectedAsset)}</div>}
         </div>
         <div className="marketing-preview-info">
           <h3>{selectedAsset.fileName}</h3>
-          {canInlinePreview && !preview && !previewLoading && !previewError && <p className="marketing-preview-hint">选择素材后会先缓存到本地，再使用本地文件进行安全预览。</p>}
+          {inline && !preview && !previewLoading && !previewError && <p className="marketing-preview-hint">选择素材后会先缓存到本地，再使用本地文件进行安全预览。</p>}
           {previewError && <div className="marketing-preview-warning">{previewError}</div>}
           <dl>
             <dt>类型</dt><dd>{selectedAsset.assetType} / {selectedAsset.mimeType}</dd>
@@ -454,6 +515,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
           </dl>
           <div className="marketing-preview-actions">
             <button className="btn btn-primary" onClick={() => void stageAssetToChat(selectedAsset)}>放入会话输入框</button>
+            <button className="btn btn-secondary" onClick={() => void saveSelectedAssetToWorkspace(selectedAsset)}>保存到工作区</button>
             <button
               className="btn btn-secondary"
               onClick={() => void openSelectedAsset(selectedAsset)}
@@ -494,6 +556,12 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                   <option value="">全部文件夹</option>
                   {folders.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
+                <select className="input" value={sort} onChange={(event) => setSort(event.target.value)} aria-label="排序">
+                  <option value="modified_desc">最近更新</option>
+                  <option value="modified_asc">最早更新</option>
+                  <option value="name_asc">名称 A-Z</option>
+                  <option value="size_desc">大小降序</option>
+                </select>
                 <input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名、路径" />
                 <button className="btn btn-secondary" onClick={() => void loadAll()}>搜索</button>
               </div>
@@ -512,7 +580,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                 ))}
               </div>
               <div className="marketing-asset-cards">
-                {assets.map((asset) => {
+                {visibleAssets.map((asset) => {
                   const previewUrl = thumbnailDataUrls[asset.id] || (thumbnailFailures[asset.id] === "preview-load-failed" ? "" : assetPreviewUrl(asset));
                   const dimensions = assetDimensions(asset);
                   return (
@@ -541,8 +609,15 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                   </button>
                   );
                 })}
-                {!assets.length && <div className="empty-state">没有匹配素材。</div>}
+                {!visibleAssets.length && <div className="empty-state">没有匹配素材。</div>}
               </div>
+              {visibleAssets.length < assets.length && (
+                <div className="marketing-load-more">
+                  <button className="btn btn-secondary" onClick={() => setVisibleCount((value) => value + 48)}>
+                    加载更多（已显示 {visibleAssets.length} / {assets.length}）
+                  </button>
+                </div>
+              )}
             </section>
             {renderAssetPreview()}
           </div>
