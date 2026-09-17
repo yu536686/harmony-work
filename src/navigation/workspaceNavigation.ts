@@ -67,6 +67,18 @@ export const WORKSPACE_NAVIGATION: Record<"work" | "collaboration" | "system", W
       action: "new-chat",
     },
     {
+      id: "creative",
+      route: "creative-music",
+      label: { text: "AI 创作" },
+      icon: Sparkles,
+      activeRoutes: ["creative-music", "creative-image"],
+      action: "toggle-creative",
+      children: [
+        { id: "creative-music", route: "creative-music", label: { text: "Harvis 音乐创作" } },
+        { id: "creative-image", route: "creative-image", label: { text: "Harvis 图片创作" } },
+      ],
+    },
+    {
       id: "marketing-assets",
       route: "marketing-assets",
       label: { text: "线上营销工作台" },
@@ -77,18 +89,6 @@ export const WORKSPACE_NAVIGATION: Record<"work" | "collaboration" | "system", W
         { id: "marketing-assets", route: "marketing-assets", label: { text: "素材库" } },
         { id: "marketing-dashboard", route: "marketing-dashboard", label: { text: "数据看板" } },
         { id: "harmony-cut", route: "harmony-cut", label: { text: "商摄快剪" }, action: "open-harmony-cut" },
-      ],
-    },
-    {
-      id: "creative",
-      route: "creative-music",
-      label: { text: "AI 创作" },
-      icon: Sparkles,
-      activeRoutes: ["creative-music", "creative-image"],
-      action: "toggle-creative",
-      children: [
-        { id: "creative-music", route: "creative-music", label: { text: "Harvis 音乐创作" } },
-        { id: "creative-image", route: "creative-image", label: { text: "Harvis 图片创作" } },
       ],
     },
     {

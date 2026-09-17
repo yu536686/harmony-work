@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   WORKSPACE_NAVIGATION,
   normalizeWorkspaceRoute,
@@ -25,7 +26,7 @@ describe("workspace navigation", () => {
 
   it("provides the sidebar presentation and drives App navigation from the model", () => {
     const items = Object.values(WORKSPACE_NAVIGATION).flat();
-    const appSource = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+    const appSource = readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
 
     expect(items.every((item) => (
       item.label !== undefined

@@ -642,7 +642,12 @@ function AppContent() {
           )}
           {mountedTabs.has("settings") && (
             <div className="tab-panel" hidden={activeTab !== "settings"} data-settings-section={settingsSection}>
-              <Settings theme={theme} setTheme={setTheme} onOpenTools={() => navigateTab("tools")} />
+              <Settings
+                theme={theme}
+                setTheme={setTheme}
+                initialSection={settingsSection}
+                onOpenTools={() => navigateTab("tools")}
+              />
             </div>
           )}
           {mountedTabs.has("about") && (
