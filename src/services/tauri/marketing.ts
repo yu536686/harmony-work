@@ -72,6 +72,8 @@ export interface MarketingAsset {
   thumbnailUrl?: string;
   coverUrl?: string;
   posterUrl?: string;
+  contentClass?: "business" | "source" | "auxiliary";
+  isAuxiliary?: boolean;
 }
 
 export interface MarketingAssetSummary {
@@ -95,6 +97,8 @@ export interface MarketingAssetQuery {
   sort?: string;
   limit?: number;
   offset?: number;
+  contentClass?: "business" | "source" | "auxiliary";
+  includeAuxiliary?: boolean;
 }
 
 export interface MarketingCampaignSummary {

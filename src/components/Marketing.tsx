@@ -16,6 +16,7 @@ import {
   type MarketingUser,
 } from "../services/tauri";
 import "./Marketing.css";
+import { shouldShowAsset } from "./Marketing/assetFiltering";
 
 function formatBytes(value: number | string | undefined) {
   const bytes = Number(value ?? 0);
@@ -55,9 +56,11 @@ const FORMAT_FILTERS = [
   { id: "video", label: "视频", extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v"] },
   { id: "audio", label: "音频", extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg"] },
   { id: "document", label: "文档", extensions: ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv"] },
+  { id: "source", label: "工程源文件", extensions: ["psd", "ai", "aep", "prproj", "cdr", "fig"] },
+  { id: "archive", label: "归档", extensions: ["zip", "rar", "7z", "tar", "gz"] },
 ] as const;
 
-const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.map((item) => item.id);
+const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.filter((item) => item.id !== "source").map((item) => item.id);
 import { MARKETING_BASE as MARKETING_ASSET_BASE, REGISTER_URL, migratePublicServiceUrl } from "../services/serviceUrls";
 
 function selectedExtensions(groups: string[]) {
@@ -131,7 +134,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     try {
       const selectedGroups = formatGroups.length ? formatGroups : [];
       const assetRequests = selectedGroups.length
-        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, limit: 96, sort: "modified_desc" }))
+        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 96, sort: "modified_desc" }))
         : [Promise.resolve({ assets: [], total: 0 })];
       const [nextSummary, nextFolders, nextAssetGroups, nextCampaign] = await Promise.all([
         marketingApi.summary(),
@@ -147,7 +150,9 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
           merged.set(asset.id, asset);
         }
       }
-      const filteredAssets = Array.from(merged.values()).filter((asset) => assetMatchesFormat(asset, selectedGroups));
+      const filteredAssets = Array.from(merged.values())
+        .filter((asset) => shouldShowAsset(asset, false))
+        .filter((asset) => assetMatchesFormat(asset, selectedGroups));
       const nextAssets = filteredAssets
         .sort((a, b) => String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? "")))
         .slice(0, 48);

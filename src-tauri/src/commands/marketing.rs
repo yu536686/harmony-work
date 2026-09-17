@@ -197,6 +197,8 @@ pub struct MarketingAssetQuery {
     asset_type: Option<String>,
     extension: Option<String>,
     format_group: Option<String>,
+    content_class: Option<String>,
+    include_auxiliary: Option<bool>,
     q: Option<String>,
     sort: Option<String>,
     limit: Option<u32>,
@@ -347,6 +349,13 @@ pub async fn marketing_assets(query: MarketingAssetQuery) -> Result<Value, Strin
     if let Some(value) = query.format_group.filter(|v| !v.trim().is_empty()) {
         params.push(("formatGroup".to_string(), value));
     }
+    if let Some(value) = query.content_class.filter(|v| !v.trim().is_empty()) {
+        params.push(("contentClass".to_string(), value));
+    }
+    params.push((
+        "includeAuxiliary".to_string(),
+        query.include_auxiliary.unwrap_or(false).to_string(),
+    ));
     if let Some(value) = query.q.filter(|v| !v.trim().is_empty()) {
         params.push(("q".to_string(), value));
     }
