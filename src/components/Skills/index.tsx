@@ -24,16 +24,18 @@ import {
   SkillRevision,
 } from "../../services/tauri";
 import ConfirmDialog from "../ConfirmDialog";
-import type { SyncSkillsResult } from "../../services/tauri";
+import type { SkillRuntimeVerification, SyncSkillsResult } from "../../services/tauri";
 import i18n from "../../i18n";
 import { buildSkillAdaptationPrompt, type SkillAdaptationTarget } from "../../utils/skillAdaptation";
+import { canInvokeSkill, type SkillLifecycle } from "./skillLifecycle";
 
 interface SkillsProps {
   onNavigateTab?: (tab: "chat") => void;
   embedded?: boolean;
 }
 
-type SkillHubTab = "local" | "evolution" | "harmony" | "hub" | "official" | "openai";
+type SkillWorkbenchView = "installed" | "discover" | "diagnostics";
+type DiscoverySource = "local" | "harmony" | "hub" | "official" | "openai";
 
 const SOURCE_BADGE: Record<string, { label: string; color: string }> = {
   builtin:   { label: "builtin",   color: "var(--text-muted)" },
@@ -65,8 +67,11 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   // Sync from disk
   const [syncing, setSyncing] = useState(false);
 
-  // ClawHub marketplace
-  const [hubTab, setHubTab] = useState<SkillHubTab>("local");
+  const [workbenchView, setWorkbenchView] = useState<SkillWorkbenchView>("installed");
+  const [discoverySource, setDiscoverySource] = useState<DiscoverySource>("local");
+  const [runtimeVerifications, setRuntimeVerifications] = useState<Record<string, SkillRuntimeVerification>>({});
+
+  // Discovery sources
   const [hubQuery, setHubQuery] = useState("");
   const [hubResults, setHubResults] = useState<ClawHubSkill[]>([]);
   const [hubSearching, setHubSearching] = useState(false);
@@ -155,6 +160,10 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     try {
       await skillsApi.toggle(id, enabled);
       dispatch(skillsActions.toggleSkill({ id, enabled }));
+      if (enabled) {
+        const verification = await skillsApi.verifyRuntime(id);
+        setRuntimeVerifications((current) => ({ ...current, [id]: verification }));
+      }
     } catch (e) {
       setError(t("skills.failedToggle", { error: String(e) }));
     }
@@ -174,6 +183,27 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     }
   }, []);
 
+  const refreshInstalledLifecycle = useCallback(async (name: string) => {
+    await skillsApi.syncFromDisk();
+    const { skills: syncedSkills } = await skillsApi.list();
+    dispatch(skillsActions.setSkills(syncedSkills));
+    const installed = syncedSkills.find((skill) => skill.name.toLowerCase() === name.toLowerCase());
+    if (!installed) throw new Error(`安装后未在磁盘同步中找到技能：${name}`);
+    if (!installed.enabled) {
+      await skillsApi.toggle(installed.id, true);
+      dispatch(skillsActions.toggleSkill({ id: installed.id, enabled: true }));
+    }
+    const verification = await skillsApi.verifyRuntime(installed.id);
+    setRuntimeVerifications((current) => ({ ...current, [installed.id]: verification }));
+    return verification;
+  }, [dispatch]);
+
+  const verifyRuntime = useCallback(async (id: string) => {
+    const verification = await skillsApi.verifyRuntime(id);
+    setRuntimeVerifications((current) => ({ ...current, [id]: verification }));
+    return verification;
+  }, []);
+
   const handleInstall = async () => {
     const src = installUrl.trim();
     if (!src) return;
@@ -181,11 +211,16 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     setError(null);
     setSuccessMsg(null);
     try {
+      const compatibility = await skillsApi.checkCompat(src);
+      setCompatCheck(compatibility);
+      if (!compatibility.compatible) {
+        throw new Error(compatibility.issues.join("; "));
+      }
       const skill = await skillsApi.install(src);
+      await refreshInstalledLifecycle(skill.name);
       setSuccessMsg(t("skills.installSuccess", { name: skill.name }));
       setInstallUrl("");
       setCompatCheck(null);
-      loadSkills();
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
     } finally {
@@ -274,10 +309,10 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   }, [harmonyQuery, t]);
 
   useEffect(() => {
-    if (hubTab === "harmony" && harmonyResults.length === 0 && !harmonySearching) {
+    if (workbenchView === "discover" && discoverySource === "harmony" && harmonyResults.length === 0 && !harmonySearching) {
       handleHarmonySearch();
     }
-  }, [hubTab, harmonyResults.length, harmonySearching, handleHarmonySearch]);
+  }, [workbenchView, discoverySource, harmonyResults.length, harmonySearching, handleHarmonySearch]);
 
   const handleOfficialSearch = useCallback(async () => {
     setOfficialSearching(true);
@@ -297,10 +332,10 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   }, [officialQuery, t]);
 
   useEffect(() => {
-    if (hubTab === "official" && officialPlugins.length === 0 && !officialSearching) {
+    if (workbenchView === "discover" && discoverySource === "official" && officialPlugins.length === 0 && !officialSearching) {
       handleOfficialSearch();
     }
-  }, [hubTab, officialPlugins.length, officialSearching, handleOfficialSearch]);
+  }, [workbenchView, discoverySource, officialPlugins.length, officialSearching, handleOfficialSearch]);
 
   const handleOpenaiSearch = useCallback(async () => {
     setOpenaiSearching(true);
@@ -320,10 +355,10 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   }, [openaiQuery, t]);
 
   useEffect(() => {
-    if (hubTab === "openai" && openaiSkills.length === 0 && !openaiSearching) {
+    if (workbenchView === "discover" && discoverySource === "openai" && openaiSkills.length === 0 && !openaiSearching) {
       handleOpenaiSearch();
     }
-  }, [hubTab, openaiSkills.length, openaiSearching, handleOpenaiSearch]);
+  }, [workbenchView, discoverySource, openaiSkills.length, openaiSearching, handleOpenaiSearch]);
 
   const handleOpenaiSelect = async (skill: OpenAISkillListItem) => {
     setOpenaiDetailLoading(true);
@@ -344,6 +379,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     setSuccessMsg(null);
     try {
       const result = await openaiSkillsApi.install([skillId]);
+      await Promise.all(result.installed.map((skill) => refreshInstalledLifecycle(skill.name)));
       const names = result.installed.map((s) => s.name).join(", ");
       if (names) {
         setSuccessMsg(t("skills.openaiInstallSuccess", { names, count: result.installed.length }));
@@ -351,7 +387,6 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
       if (result.errors.length > 0) {
         setError(t("skills.openaiInstallPartial", { errors: result.errors.join("; ") }));
       }
-      loadSkills();
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
     } finally {
@@ -436,6 +471,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     setSuccessMsg(null);
     try {
       const result = await claudePluginsApi.install(pluginId, skillDirs);
+      await Promise.all(result.installed.map((skill) => refreshInstalledLifecycle(skill.name)));
       const names = result.installed.map((s) => s.name).join(", ");
       if (names) {
         setSuccessMsg(t("skills.officialInstallSuccess", { names, count: result.installed.length }));
@@ -443,7 +479,6 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
       if (result.errors.length > 0) {
         setError(t("skills.officialInstallPartial", { errors: result.errors.join("; ") }));
       }
-      loadSkills();
       if (officialDetail?.plugin.id === pluginId) {
         await handleOfficialSelect(officialDetail.plugin);
       }
@@ -469,8 +504,8 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
         skill.slug,
         version && version !== "latest" ? version : undefined,
       );
+      await refreshInstalledLifecycle(installed.name);
       setSuccessMsg(t("skills.installSuccess", { name: installed.name }));
-      loadSkills();
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
     } finally {
@@ -484,8 +519,8 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     setSuccessMsg(null);
     try {
       const installed = await harmonyMarketApi.install(skill.slug);
+      await refreshInstalledLifecycle(installed.name);
       setSuccessMsg(t("skills.installSuccess", { name: installed.name }));
-      loadSkills();
       await handleHarmonySearch();
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
@@ -645,42 +680,61 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
           onCancel={() => !uninstalling && setUninstallTarget(null)}
         />
 
-        {/* Tab switcher */}
+        {/* Lifecycle workbench */}
         <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>
-          {(["local", "evolution", "harmony", "hub", "official", "openai"] as const).map((tab) => (
+          {(["installed", "discover", "diagnostics"] as const).map((view) => (
             <button
-              key={tab}
-              onClick={() => setHubTab(tab)}
+              key={view}
+              onClick={() => setWorkbenchView(view)}
               style={{
                 padding: "6px 16px",
                 background: "none",
                 border: "none",
-                borderBottom: hubTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
-                color: hubTab === tab ? "var(--accent)" : "var(--text-secondary)",
+                borderBottom: workbenchView === view ? "2px solid var(--accent)" : "2px solid transparent",
+                color: workbenchView === view ? "var(--accent)" : "var(--text-secondary)",
                 cursor: "pointer",
-                fontWeight: hubTab === tab ? 600 : 400,
+                fontWeight: workbenchView === view ? 600 : 400,
                 fontSize: 13,
                 marginBottom: -1,
               }}
             >
-              {tab === "local"
-                ? `⚡ ${t("skills.tabLocal")}`
-                : tab === "evolution"
-                  ? `🧬 ${t("skills.tabEvolution")}`
-                  : tab === "harmony"
-                    ? `H ${t("skills.tabHarmony")}`
-                    : tab === "hub"
-                      ? `🛒 ${t("skills.tabHub")}`
-                      : tab === "official"
-                        ? `🏛 ${t("skills.tabOfficial")}`
-                        : `🤖 ${t("skills.tabOpenai")}`}
+              {view === "installed" ? "已安装" : view === "discover" ? "发现技能" : "诊断与调用"}
             </button>
           ))}
         </div>
 
-        {hubTab === "local" && (
+        {workbenchView === "discover" && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+            {(["local", "hub", "harmony", "official", "openai"] as const).map((source) => (
+              <button
+                type="button"
+                key={source}
+                className="btn btn-secondary"
+                onClick={() => setDiscoverySource(source)}
+                style={{
+                  fontSize: 12,
+                  borderColor: discoverySource === source ? "var(--accent)" : undefined,
+                  color: discoverySource === source ? "var(--accent)" : undefined,
+                }}
+              >
+                {source === "local"
+                  ? "本地路径 / 直链"
+                  : source === "hub"
+                    ? "ClawHub"
+                    : source === "harmony"
+                      ? "Harmony 市场"
+                      : source === "official"
+                        ? "Anthropic 官方插件"
+                        : "OpenAI curated skills"}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(workbenchView === "installed" || (workbenchView === "discover" && discoverySource === "local")) && (
           <>
-            {/* Install panel */}
+            {workbenchView === "discover" && discoverySource === "local" && (
+            /* Local path/direct-link discovery source */
             <div style={{ marginBottom: 24, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
               <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 8, fontSize: 14 }}>
                 ⬇ {t("skills.installTitle")}
@@ -736,19 +790,22 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                 {t("skills.installHint")}
               </p>
             </div>
+            )}
 
+            {workbenchView === "installed" && (
+            <>
             <p style={{ color: "var(--text-secondary)", marginBottom: 16, fontSize: 13 }}>
               {t("skills.description")}
             </p>
 
-            {visibleSkills.length === 0 ? (
+            {installedSkills.length === 0 ? (
               <div className="empty-state" style={{ padding: "28px 16px" }}>
                 <div className="empty-state-title">{t("skills.emptyTitle")}</div>
                 <div className="empty-state-desc">{t("skills.emptyDesc")}</div>
               </div>
             ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-              {visibleSkills.map((skill) => {
+              {installedSkills.map((skill) => {
                 const catalogEntry = catalogByName[skill.name.toLowerCase()];
                 const source = skillSource(skill);
                 const badge = SOURCE_BADGE[source] ?? SOURCE_BADGE.builtin;
@@ -811,10 +868,12 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
               })}
             </div>
             )}
+            </>
+            )}
           </>
         )}
 
-        {hubTab === "evolution" && (
+        {workbenchView === "installed" && (
           <div>
             <div style={{ marginBottom: 20, padding: 14, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>🧹 {t("skills.curator")}</div>
@@ -934,7 +993,100 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
           </div>
         )}
 
-        {hubTab === "official" && (
+        {workbenchView === "diagnostics" && (
+          <div>
+            <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                只有已安装、已启用、依赖就绪且运行时已验证的技能才会标记为可调用。
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={async () => {
+                  try {
+                    await Promise.all(installedSkills.map((skill) => verifyRuntime(skill.id)));
+                  } catch (e) {
+                    setError(`运行时验证失败：${String(e)}`);
+                  }
+                }}
+              >
+                验证全部
+              </button>
+            </div>
+            {installedSkills.length === 0 ? (
+              <div className="empty-state" style={{ padding: "28px 16px" }}>
+                <div className="empty-state-title">没有已安装技能</div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+                {installedSkills.map((skill) => {
+                  const runtime = runtimeVerifications[skill.id];
+                  const lifecycle: SkillLifecycle = runtime
+                    ? {
+                      installed: runtime.installed,
+                      enabled: runtime.enabled,
+                      dependenciesReady: runtime.dependenciesReady,
+                      runtimeState: runtime.runtimeState,
+                      repairHint: runtime.repairHint,
+                    }
+                    : {
+                      installed: true,
+                      enabled: skill.enabled,
+                      dependenciesReady: false,
+                      runtimeState: "unverified",
+                    };
+                  const callable = canInvokeSkill(lifecycle);
+                  const repairAction = !lifecycle.enabled ? "启用并验证" : "重新验证";
+                  return (
+                    <div key={skill.id} className="card skill-card" style={{ padding: 14 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{skill.name}</div>
+                          <div style={{ marginTop: 6, fontSize: 12, color: callable ? "#28a745" : "#ff6b6b" }}>
+                            {callable ? "可调用" : "不可调用"}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: 12, flexShrink: 0 }}
+                          onClick={async () => {
+                            try {
+                              if (!lifecycle.enabled) await handleToggle(skill.id, true);
+                              else await verifyRuntime(skill.id);
+                            } catch (e) {
+                              setError(`运行时验证失败：${String(e)}`);
+                            }
+                          }}
+                        >
+                          {repairAction}
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, fontSize: 11, color: "var(--text-secondary)" }}>
+                        <span>安装：{lifecycle.installed ? "已确认" : "缺失"}</span>
+                        <span>启用：{lifecycle.enabled ? "已启用" : "未启用"}</span>
+                        <span>依赖：{lifecycle.dependenciesReady ? "就绪" : "未就绪"}</span>
+                        <span>运行时：{lifecycle.runtimeState === "ready" ? "已验证" : lifecycle.runtimeState === "unverified" ? "未验证" : "需修复"}</span>
+                      </div>
+                      {!callable && (
+                        <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>
+                          {lifecycle.repairHint || "尚未验证运行时；请执行验证。"}
+                        </p>
+                      )}
+                      {runtime && runtime.missingDependencies.length > 0 && (
+                        <p style={{ margin: "6px 0 0", fontSize: 11, color: "#ff6b6b" }}>
+                          缺失：{runtime.missingDependencies.join("、")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {workbenchView === "discover" && discoverySource === "official" && (
           <div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 8, fontSize: 14 }}>
@@ -1063,7 +1215,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
           </div>
         )}
 
-        {hubTab === "openai" && (
+        {workbenchView === "discover" && discoverySource === "openai" && (
           <div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 8, fontSize: 14 }}>
@@ -1177,7 +1329,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
           </div>
         )}
 
-        {hubTab === "harmony" && (
+        {workbenchView === "discover" && discoverySource === "harmony" && (
           <div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 8, fontSize: 14 }}>
@@ -1265,7 +1417,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
           </div>
         )}
 
-        {hubTab === "hub" && (
+        {workbenchView === "discover" && discoverySource === "hub" && (
           <div>
             {/* ClawHub search */}
             <div style={{ marginBottom: 16 }}>

@@ -1245,6 +1245,7 @@ fn run_impl() {
             commands::config::skills::toggle_skill,
             commands::config::skills::scan_skill_catalog,
             commands::config::skills::sync_skills_from_disk,
+            commands::config::skills::verify_skill_runtime,
             commands::config::skills::install_skill,
             commands::config::skills::uninstall_skill,
             commands::config::skills::clawhub_search,

@@ -262,6 +262,18 @@ export interface SyncSkillsResult {
   errors: string[];
 }
 
+export type SkillRuntimeState = "unverified" | "ready" | "repair-required";
+
+export interface SkillRuntimeVerification {
+  id: string;
+  installed: boolean;
+  enabled: boolean;
+  dependenciesReady: boolean;
+  runtimeState: SkillRuntimeState;
+  repairHint?: string;
+  missingDependencies: string[];
+}
+
 export const skillsApi = {
   list: () => invoke<{ skills: Skill[]; total: number }>("list_skills"),
   toggle: (skillId: string, enabled: boolean) =>
@@ -272,6 +284,8 @@ export const skillsApi = {
   checkCompat: (source: string) =>
     invoke<SkillCompatibilityCheck>("check_skill_compat", { source }),
   syncFromDisk: () => invoke<SyncSkillsResult>("sync_skills_from_disk"),
+  verifyRuntime: (id: string) =>
+    invoke<SkillRuntimeVerification>("verify_skill_runtime", { id }),
 };
 
 export interface ClawHubSkill {

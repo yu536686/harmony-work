@@ -79,6 +79,198 @@ pub struct SkillList {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillRuntimeState {
+    Unverified,
+    Ready,
+    RepairRequired,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRuntimeVerification {
+    pub id: String,
+    pub installed: bool,
+    pub enabled: bool,
+    pub dependencies_ready: bool,
+    pub runtime_state: SkillRuntimeState,
+    pub repair_hint: Option<String>,
+    pub missing_dependencies: Vec<String>,
+}
+
+fn mcp_dependency_name(dependency: &str) -> Option<String> {
+    let value = dependency.trim();
+    let name = value
+        .strip_prefix("mcp:")
+        .or_else(|| value.strip_prefix("mcp/"))?;
+    let name = name.split('/').next().unwrap_or_default().trim();
+    (!name.is_empty()).then(|| name.to_lowercase())
+}
+
+fn local_command_dependency_name(dependency: &str) -> Option<String> {
+    let raw = dependency.to_lowercase();
+    let executable = raw
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.')
+        .next()
+        .unwrap_or_default();
+    let executable = match executable {
+        "python3" => "python",
+        "nodejs" => "node",
+        "dotnet-sdk" | "dotnet-runtime" => "dotnet",
+        other => other,
+    };
+    const KNOWN_RUNTIMES: &[&str] = &[
+        "python", "node", "npm", "npx", "ruby", "go", "java", "dotnet", "git", "ffmpeg",
+        "cargo", "pip", "pip3",
+    ];
+    KNOWN_RUNTIMES
+        .contains(&executable)
+        .then(|| executable.to_string())
+}
+
+fn command_is_available(command: &str) -> bool {
+    let finder = if cfg!(windows) { "where" } else { "which" };
+    crate::process::std_command(finder)
+        .arg(command)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn verify_skill_runtime_from<F>(
+    skill_id: &str,
+    record: Option<&Skill>,
+    skills_root: &std::path::Path,
+    enabled_mcp_servers: &std::collections::HashSet<String>,
+    command_available: F,
+) -> SkillRuntimeVerification
+where
+    F: Fn(&str) -> bool,
+{
+    let enabled = record.is_some_and(|skill| skill.enabled);
+    let Some(skill_file) = crate::skills::provenance::find_skill_md(skills_root, skill_id) else {
+        return SkillRuntimeVerification {
+            id: skill_id.to_string(),
+            installed: false,
+            enabled,
+            dependencies_ready: false,
+            runtime_state: SkillRuntimeState::RepairRequired,
+            repair_hint: Some("未找到已安装技能的 SKILL.md，请同步磁盘或重新安装。".into()),
+            missing_dependencies: vec!["SKILL.md".into()],
+        };
+    };
+
+    let content = match std::fs::read_to_string(&skill_file) {
+        Ok(content) => content,
+        Err(error) => {
+            return SkillRuntimeVerification {
+                id: skill_id.to_string(),
+                installed: false,
+                enabled,
+                dependencies_ready: false,
+                runtime_state: SkillRuntimeState::RepairRequired,
+                repair_hint: Some(format!("无法读取 SKILL.md：{error}")),
+                missing_dependencies: vec!["SKILL.md".into()],
+            };
+        }
+    };
+    let loader = crate::skills::loader::SkillLoader::new(skills_root);
+    let definition = match loader.parse_skill_from_content(&content) {
+        Ok(definition) => definition,
+        Err(error) => {
+            return SkillRuntimeVerification {
+                id: skill_id.to_string(),
+                installed: false,
+                enabled,
+                dependencies_ready: false,
+                runtime_state: SkillRuntimeState::RepairRequired,
+                repair_hint: Some(format!("SKILL.md 无法解析：{error}")),
+                missing_dependencies: vec!["SKILL.md".into()],
+            };
+        }
+    };
+
+    let installed = record.is_some();
+    let mut missing_dependencies = Vec::new();
+    for dependency in &definition.dependencies {
+        if let Some(mcp_name) = mcp_dependency_name(dependency) {
+            if !enabled_mcp_servers.contains(&mcp_name) {
+                missing_dependencies.push(format!("mcp:{mcp_name}"));
+            }
+        } else if let Some(command) = local_command_dependency_name(dependency) {
+            if !command_available(&command) {
+                missing_dependencies.push(command);
+            }
+        }
+    }
+
+    let dependencies_ready = installed && missing_dependencies.is_empty();
+    let repair_hint = if !installed {
+        Some("技能元数据尚未登记，请从磁盘同步后再验证。".into())
+    } else if !enabled {
+        Some("技能已安装但未启用；启用后再验证即可调用。".into())
+    } else if !dependencies_ready {
+        Some(format!(
+            "缺少运行时依赖：{}。修复后重新验证。",
+            missing_dependencies.join("、")
+        ))
+    } else {
+        None
+    };
+    let runtime_state = if installed && enabled && dependencies_ready {
+        SkillRuntimeState::Ready
+    } else {
+        SkillRuntimeState::RepairRequired
+    };
+
+    SkillRuntimeVerification {
+        id: skill_id.to_string(),
+        installed,
+        enabled,
+        dependencies_ready,
+        runtime_state,
+        repair_hint,
+        missing_dependencies,
+    }
+}
+
+/// Read-only runtime verification. This only reads installed metadata and checks
+/// command/MCP discovery; it never launches a Skill's user business command.
+#[tauri::command]
+pub async fn verify_skill_runtime(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<SkillRuntimeVerification, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
+    let skills_root = crate::skills::service::skills_root_from_app_data(&app_dir);
+    let record = {
+        let db = state.db.lock().await;
+        db.get_skill(&id).map_err(|error| error.to_string())?
+    };
+    let enabled_mcp_servers = {
+        let settings = state.settings.lock().await;
+        settings
+            .mcp_servers
+            .iter()
+            .filter(|server| server.enabled)
+            .map(|server| server.name.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+    };
+
+    Ok(verify_skill_runtime_from(
+        &id,
+        record.as_ref(),
+        &skills_root,
+        &enabled_mcp_servers,
+        command_is_available,
+    ))
+}
+
 #[tauri::command]
 pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String> {
     let app_dir = state
@@ -1169,6 +1361,126 @@ pub async fn check_skill_compat(
         .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
 
     Ok(check_skill_compatibility(&skill).await)
+}
+
+#[cfg(test)]
+mod runtime_verification_tests {
+    use super::{verify_skill_runtime_from, SkillRuntimeState};
+    use crate::store::db::Skill;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn record(enabled: bool) -> Skill {
+        Skill {
+            id: "sample-skill".into(),
+            name: "Sample Skill".into(),
+            description: String::new(),
+            enabled,
+            icon: "📦".into(),
+            config: r#"{"lifecycle":"installed"}"#.into(),
+        }
+    }
+
+    fn skills_root(test_name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "harmony-work-runtime-verification-{}-{}",
+            test_name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("installed/sample-skill")).unwrap();
+        root
+    }
+
+    fn write_skill(root: &PathBuf, dependencies: &[&str]) {
+        let dependencies = dependencies
+            .iter()
+            .map(|dependency| format!("  - {dependency}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(
+            root.join("installed/sample-skill/SKILL.md"),
+            format!(
+                "---\nname: Sample Skill\ndescription: test\ndependencies:\n{dependencies}\n---\n\n# Test"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn verifies_an_enabled_skill_with_available_dependencies() {
+        let root = skills_root("ready");
+        write_skill(&root, &["node", "mcp:company"]);
+
+        let result = verify_skill_runtime_from(
+            "sample-skill",
+            Some(&record(true)),
+            &root,
+            &HashSet::from(["company".to_string()]),
+            |command| command == "node",
+        );
+
+        assert!(result.installed);
+        assert!(result.dependencies_ready);
+        assert_eq!(result.runtime_state, SkillRuntimeState::Ready);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_a_missing_skill_manifest_as_repair_required() {
+        let root = skills_root("missing-manifest");
+
+        let result = verify_skill_runtime_from(
+            "sample-skill",
+            Some(&record(true)),
+            &root,
+            &HashSet::new(),
+            |_| true,
+        );
+
+        assert!(!result.installed);
+        assert_eq!(result.runtime_state, SkillRuntimeState::RepairRequired);
+        assert!(result.repair_hint.unwrap().contains("SKILL.md"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_missing_command_dependencies_without_executing_the_skill() {
+        let root = skills_root("missing-command");
+        write_skill(&root, &["node"]);
+
+        let result = verify_skill_runtime_from(
+            "sample-skill",
+            Some(&record(true)),
+            &root,
+            &HashSet::new(),
+            |_| false,
+        );
+
+        assert!(!result.dependencies_ready);
+        assert_eq!(result.runtime_state, SkillRuntimeState::RepairRequired);
+        assert_eq!(result.missing_dependencies, vec!["node"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn does_not_mark_a_disabled_record_as_ready() {
+        let root = skills_root("disabled");
+        write_skill(&root, &[]);
+
+        let result = verify_skill_runtime_from(
+            "sample-skill",
+            Some(&record(false)),
+            &root,
+            &HashSet::new(),
+            |_| true,
+        );
+
+        assert!(!result.enabled);
+        assert_eq!(result.runtime_state, SkillRuntimeState::RepairRequired);
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 /// Install a skill from ClawHub by slug.
