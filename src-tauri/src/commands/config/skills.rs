@@ -82,7 +82,6 @@ pub struct SkillList {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SkillRuntimeState {
-    Unverified,
     Ready,
     RepairRequired,
 }
