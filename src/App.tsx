@@ -12,16 +12,15 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
   Sparkles,
-  Store,
   Sun,
-  Wrench,
+  Settings2,
+  Users,
+  UserRoundCheck,
   Circle,
   Minus,
   Square as WindowSquare,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
@@ -30,6 +29,7 @@ import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import { PRODUCT_BRAND } from "./branding";
 import i18n, { setLanguage } from "./i18n";
+import { normalizeWorkspaceRoute, type SettingsSection, type WorkspaceRoute } from "./navigation/workspaceNavigation";
 import Chat from "./components/Chat";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
@@ -37,26 +37,20 @@ import "./theme.css";
 import "./App.css";
 
 const Memory = lazy(() => import("./components/Memory"));
-const Tools = lazy(() => import("./components/Tools"));
 const SchoolPage = lazy(() => import("./components/School"));
 const Pond = lazy(() => import("./components/Pond"));
 const Skills = lazy(() => import("./components/Skills"));
-const Market = lazy(() => import("./components/Market"));
 const Marketing = lazy(() => import("./components/Marketing"));
 const Creative = lazy(() => import("./components/Creative"));
 const HarmonyCut = lazy(() => import("./components/HarmonyCut"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
 const Settings = lazy(() => import("./components/Settings"));
-const AuditLog = lazy(() => import("./components/AuditLog"));
 const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
 const Bootstrap = lazy(() => import("./components/Bootstrap"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
-const DebugPanel = lazy(() => import("./components/Debug"));
-
-type Tab = "chat" | "marketing-assets" | "marketing-dashboard" | "harmony-cut" | "creative-music" | "creative-image" | "memory" | "tools" | "market" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = WorkspaceRoute | "marketing-dashboard" | "harmony-cut";
 type SchoolSubTab = "fish" | "koi";
-type MarketTab = "experts" | "team" | "skills";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
@@ -108,6 +102,9 @@ function AppContent() {
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
   const [creativeExpanded, setCreativeExpanded] = useState(true);
+  const [collaborationExpanded, setCollaborationExpanded] = useState(
+    () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
   const [chatSidebarHost, setChatSidebarHost] = useState<HTMLDivElement | null>(null);
   const [newChatRequest, setNewChatRequest] = useState(0);
@@ -115,7 +112,7 @@ function AppContent() {
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [schoolSubTab, setSchoolSubTab] = useState<SchoolSubTab>("fish");
-  const [marketTab, setMarketTab] = useState<MarketTab>("experts");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>();
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
   const [initialized, setInitialized] = useState(false);
@@ -170,6 +167,10 @@ function AppContent() {
   useEffect(() => {
     localStorage.setItem("workbuddy.sidebarCollapsed", String(sidebarCollapsed));
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem("harmony-work.collaboration-expanded", String(collaborationExpanded));
+  }, [collaborationExpanded]);
 
   // Pond IDE assistant → jump to main Chat (鱼池CLI tab).
   useEffect(() => {
@@ -343,24 +344,17 @@ function AppContent() {
     );
   }
 
-  const navigateTab = (tab: Tab, opts?: { schoolSubTab?: SchoolSubTab }) => {
-    if (opts?.schoolSubTab) setSchoolSubTab(opts.schoolSubTab);
-    if (tab === "skills") {
-      setMarketTab("skills");
-      setActiveTab("market");
+  const navigateTab = (requestedRoute: string, opts?: { schoolSubTab?: SchoolSubTab }) => {
+    if (requestedRoute === "marketing-dashboard" || requestedRoute === "harmony-cut") {
+      setSettingsSection(undefined);
+      setActiveTab(requestedRoute);
       return;
     }
-    if (tab === "school") {
-      setMarketTab("experts");
-      setActiveTab("market");
-      return;
-    }
-    if (tab === "pond") {
-      setMarketTab("team");
-      setActiveTab("market");
-      return;
-    }
-    setActiveTab(tab);
+    const { route, settingsSection: nextSettingsSection } = normalizeWorkspaceRoute(requestedRoute);
+    setSettingsSection(nextSettingsSection);
+    if (route === "members") setSchoolSubTab(opts?.schoolSubTab ?? "fish");
+    if (route === "experts") setSchoolSubTab("koi");
+    setActiveTab(route);
   };
 
   const openHarmonyCut = (opts?: { projectId?: string | null; sessionId?: string | null }) => {
@@ -371,13 +365,6 @@ function AppContent() {
   };
 
   const highLevelUnlocked = marketingUser?.approvalStatus === "active";
-  const tabs: { id: Tab; label: string; icon: LucideIcon }[] = [
-    { id: "market", label: t("nav.market"), icon: Store },
-    { id: "tools", label: t("nav.tools"), icon: Wrench },
-    { id: "scheduler", label: t("nav.scheduler"), icon: Clock3 },
-    { id: "memory", label: t("nav.memory"), icon: Brain },
-    { id: "audit", label: t("nav.audit"), icon: Search },
-  ];
   const userInitial = (marketingUser?.name || marketingUser?.email || "YT").trim().slice(0, 2).toUpperCase();
   const requireLoginPanel = (title: string) => (
     <div className="locked-page">
@@ -513,21 +500,56 @@ function AppContent() {
               <button className={`nav-subitem ${activeTab === "creative-image" ? "active" : ""}`} onClick={() => navigateTab("creative-image")}>Harvis 图片创作</button>
             </div>
           )}
-          <div className="sidebar-section-label sidebar-section-label-resources">资源与管理</div>
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                className={`nav-item ${activeTab === tab.id ? "active" : ""}`}
-                onClick={() => navigateTab(tab.id)}
-                title={tab.label}
-              >
-                <span className="nav-icon"><Icon size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">{tab.label}</span>
+          <button
+            className={`nav-item ${activeTab === "skills" ? "active" : ""}`}
+            onClick={() => navigateTab("skills")}
+            title={t("nav.market")}
+          >
+            <span className="nav-icon"><Sparkles size={17} strokeWidth={1.8} /></span>
+            <span className="nav-label">{t("nav.market")}</span>
+          </button>
+
+          <div className="sidebar-section-label sidebar-section-label-collaboration">
+            <button
+              type="button"
+              className="sidebar-section-toggle"
+              aria-expanded={collaborationExpanded}
+              onClick={() => setCollaborationExpanded((expanded) => !expanded)}
+            >
+              <span>协作</span>
+              {collaborationExpanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+            </button>
+          </div>
+          {collaborationExpanded && (
+            <div className="sidebar-navigation-group">
+              <button className={`nav-item ${activeTab === "team" ? "active" : ""}`} onClick={() => navigateTab("team")} title="团队">
+                <span className="nav-icon"><Users size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">团队</span>
               </button>
-            );
-          })}
+              <button className={`nav-item ${activeTab === "members" ? "active" : ""}`} onClick={() => navigateTab("members")} title="成员">
+                <span className="nav-icon"><UserRoundCheck size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">成员</span>
+              </button>
+              <button className={`nav-item ${activeTab === "experts" ? "active" : ""}`} onClick={() => navigateTab("experts")} title="专家">
+                <span className="nav-icon"><Brain size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">专家</span>
+              </button>
+              <button className={`nav-item ${activeTab === "scheduler" ? "active" : ""}`} onClick={() => navigateTab("scheduler")} title={t("nav.scheduler")}>
+                <span className="nav-icon"><Clock3 size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">{t("nav.scheduler")}</span>
+              </button>
+              <button className={`nav-item ${activeTab === "memory" ? "active" : ""}`} onClick={() => navigateTab("memory")} title={t("nav.memory")}>
+                <span className="nav-icon"><Brain size={17} strokeWidth={1.8} /></span>
+                <span className="nav-label">{t("nav.memory")}</span>
+              </button>
+            </div>
+          )}
+
+          <div className="sidebar-section-label sidebar-section-label-system">系统</div>
+          <button className={`nav-item ${activeTab === "settings" ? "active" : ""}`} onClick={() => navigateTab("settings")} title={t("nav.settings")}>
+            <span className="nav-icon"><Settings2 size={17} strokeWidth={1.8} /></span>
+            <span className="nav-label">{t("nav.settings")}</span>
+          </button>
         </nav>
         <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label={t("chat.projects")} />
         </div>
@@ -536,9 +558,9 @@ function AppContent() {
             <div className="user-menu">
               <div className="user-menu-email">◎ {marketingUser?.email ?? "未登录"}</div>
               <button onClick={() => { setActiveTab("marketing-assets"); setUserMenuOpen(false); }}>个人账户</button>
-              <button onClick={() => { setActiveTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
-              <button onClick={() => { setActiveTab("about"); setUserMenuOpen(false); }}>{t("nav.about")}</button>
-              <button onClick={() => { setActiveTab("debug"); setUserMenuOpen(false); }}>{t("nav.debug")}</button>
+              <button onClick={() => { navigateTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
+              <button onClick={() => { navigateTab("about"); setUserMenuOpen(false); }}>{t("nav.about")}</button>
+              <button onClick={() => { navigateTab("debug"); setUserMenuOpen(false); }}>{t("nav.debug")}</button>
               <div className="user-menu-separator" />
               {marketingUser ? (
                 <button onClick={() => void handleMarketingLogout()}>退出登录</button>
@@ -623,29 +645,22 @@ function AppContent() {
           {mountedTabs.has("memory") && (
             <div className="tab-panel" hidden={activeTab !== "memory"}>{highLevelUnlocked ? <Memory /> : requireLoginPanel(t("nav.memory"))}</div>
           )}
-          {mountedTabs.has("tools") && (
-            <div className="tab-panel" hidden={activeTab !== "tools"}>{highLevelUnlocked ? <Tools /> : requireLoginPanel(t("nav.tools"))}</div>
-          )}
-          {mountedTabs.has("market") && (
-            <div className="tab-panel" hidden={activeTab !== "market"}>
-              {highLevelUnlocked ? <Market
-                initialTab={marketTab}
-                initialSchoolSubTab={schoolSubTab}
-                onNavigateToChat={() => setActiveTab("chat")}
-              /> : requireLoginPanel(t("nav.market"))}
-            </div>
-          )}
-          {mountedTabs.has("pond") && (
-            <div className="tab-panel" hidden={activeTab !== "pond"}>
+          {mountedTabs.has("team") && (
+            <div className="tab-panel" hidden={activeTab !== "team"}>
               {highLevelUnlocked ? <Pond
-                visible={activeTab === "pond"}
-                onNavigateToSchoolKoi={() => navigateTab("school", { schoolSubTab: "koi" })}
+                visible={activeTab === "team"}
+                onNavigateToSchoolKoi={() => navigateTab("experts")}
               /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
-          {mountedTabs.has("school") && (
-            <div className="tab-panel" hidden={activeTab !== "school"}>
+          {mountedTabs.has("members") && (
+            <div className="tab-panel" hidden={activeTab !== "members"}>
               {highLevelUnlocked ? <SchoolPage initialSubTab={schoolSubTab} /> : requireLoginPanel(t("nav.market"))}
+            </div>
+          )}
+          {mountedTabs.has("experts") && (
+            <div className="tab-panel" hidden={activeTab !== "experts"}>
+              {highLevelUnlocked ? <SchoolPage initialSubTab="koi" /> : requireLoginPanel(t("nav.market"))}
             </div>
           )}
           {mountedTabs.has("skills") && (
@@ -656,19 +671,13 @@ function AppContent() {
           {mountedTabs.has("scheduler") && (
             <div className="tab-panel" hidden={activeTab !== "scheduler"}>{highLevelUnlocked ? <Scheduler /> : requireLoginPanel(t("nav.scheduler"))}</div>
           )}
-          {mountedTabs.has("audit") && (
-            <div className="tab-panel" hidden={activeTab !== "audit"}>{highLevelUnlocked ? <AuditLog /> : requireLoginPanel(t("nav.audit"))}</div>
-          )}
           {mountedTabs.has("settings") && (
-            <div className="tab-panel" hidden={activeTab !== "settings"}>
-              <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />
+            <div className="tab-panel" hidden={activeTab !== "settings"} data-settings-section={settingsSection}>
+              <Settings theme={theme} setTheme={setTheme} onOpenTools={() => navigateTab("tools")} />
             </div>
           )}
           {mountedTabs.has("about") && (
             <div className="tab-panel" hidden={activeTab !== "about"}><About /></div>
-          )}
-          {mountedTabs.has("debug") && (
-            <div className="tab-panel" hidden={activeTab !== "debug"}><DebugPanel /></div>
           )}
         </Suspense>
       </main>
