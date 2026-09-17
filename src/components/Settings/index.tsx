@@ -9,6 +9,7 @@ import {
   settingsApi,
   accountSettingsSyncApi,
   gatewayApi,
+  primaryChannelApi,
   systemApi,
   wechatApi,
   enterpriseCapabilityApi,
@@ -22,6 +23,8 @@ import {
   ProviderModelInfo,
   EnterpriseCapabilityStatus,
   EnterpriseCapabilityTestResult,
+  type PrimaryChannelId,
+  type PrimaryChannelSetupResult,
   readRememberedMarketingUser,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
@@ -34,6 +37,7 @@ import DebugPanel from "../Debug";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
+import { primaryChannelStatusLabel } from "./channelLifecycle";
 import "./Settings.css";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
@@ -206,6 +210,8 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [capabilityTesting, setCapabilityTesting] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
   const [capabilityTest, setCapabilityTest] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityTestResult | null>>>({});
   const [capabilityMsg, setCapabilityMsg] = useState<Partial<Record<EnterprisePlatformId, string | null>>>({});
+  const [primaryChannelSetup, setPrimaryChannelSetup] = useState<Partial<Record<PrimaryChannelId, PrimaryChannelSetupResult>>>({});
+  const [primaryChannelSetupBusy, setPrimaryChannelSetupBusy] = useState<Partial<Record<PrimaryChannelId, boolean>>>({});
   const [fontScale, setFontScaleState] = useState<FontScale>(() => getFontScale());
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection ?? "account-cloud");
 
@@ -251,12 +257,16 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
         if (status.connected) {
           setWechatBindState("success");
           setWechatQr(null);
-          // Auto-connect gateway so the WeChat listener starts immediately after binding.
           try {
-            const r = await gatewayApi.connect();
-            setGatewayStatus(r.channels);
-          } catch {
-            // Non-fatal: user can still click "Connect" manually.
+            await initializePrimaryChannel("wechat");
+            setForm((previous) => ({
+              ...previous,
+              wechat_enabled: true,
+              wechat_bot_id: status.bot_id ?? previous.wechat_bot_id,
+            }));
+          } catch (error) {
+            setWechatBindState("error");
+            setWechatBindError(error instanceof Error ? error.message : String(error));
           }
           return;
         }
@@ -321,6 +331,19 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
       setGatewayStatus(event.payload.channels ?? []);
     });
     return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  const initializePrimaryChannel = useCallback(async (channel: PrimaryChannelId) => {
+    setPrimaryChannelSetupBusy((previous) => ({ ...previous, [channel]: true }));
+    try {
+      const result = await primaryChannelApi.initialize(channel);
+      setPrimaryChannelSetup((previous) => ({ ...previous, [channel]: result }));
+      const gateway = await gatewayApi.list();
+      setGatewayStatus(gateway.channels);
+      return result;
+    } finally {
+      setPrimaryChannelSetupBusy((previous) => ({ ...previous, [channel]: false }));
+    }
   }, []);
 
   const refreshCapabilityStatus = useCallback(async (platform: EnterprisePlatformId) => {
@@ -484,6 +507,34 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
     return null;
   };
 
+  const renderPrimaryChannelSetup = (channel: PrimaryChannelId) => {
+    const setup = primaryChannelSetup[channel];
+    if (!setup) return null;
+    const isHealthy = setup.state === "connected";
+    return (
+      <div
+        style={{
+          marginTop: 10,
+          padding: "9px 10px",
+          borderRadius: 6,
+          fontSize: 12,
+          lineHeight: 1.55,
+          background: isHealthy ? "rgba(40, 167, 69, 0.1)" : "rgba(201, 168, 76, 0.1)",
+          color: isHealthy ? "var(--success, #16803c)" : "var(--text-secondary)",
+        }}
+      >
+        <strong>{primaryChannelStatusLabel(setup)}</strong>
+        {setup.nextAction && <div style={{ marginTop: 3 }}>{setup.nextAction}</div>}
+        {setup.diagnostic && (
+          <details style={{ marginTop: 5 }}>
+            <summary style={{ cursor: "pointer" }}>查看初始化诊断</summary>
+            <pre style={{ margin: "5px 0 0", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>{setup.diagnostic}</pre>
+          </details>
+        )}
+      </div>
+    );
+  };
+
   const handleSave = async () => {
     // workspace_root is always required — fill with default if blank
     if (!(form.workspace_root ?? "").trim()) {
@@ -543,8 +594,21 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
         });
       }
       try {
-        const gateway = await gatewayApi.connect();
-        setGatewayStatus(gateway.channels);
+        const primaryChannels: PrimaryChannelId[] = [];
+        if (updated.wecom_enabled && updated.wecom_bot_id.trim() && updated.wecom_bot_secret.trim()) {
+          primaryChannels.push("wecom");
+        }
+        if (updated.wechat_enabled && updated.wechat_bot_token.trim()) {
+          primaryChannels.push("wechat");
+        }
+        if (primaryChannels.length > 0) {
+          for (const channel of primaryChannels) {
+            await initializePrimaryChannel(channel);
+          }
+        } else {
+          const gateway = await gatewayApi.connect();
+          setGatewayStatus(gateway.channels);
+        }
         setGatewayMsg(t("settings.channelConnected"));
       } catch (gatewayError) {
         setGatewayMsg(t("settings.channelFailed", { error: String(gatewayError) }));
@@ -1917,6 +1981,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                 </div>
 
                 <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "12px 0 0", whiteSpace: "pre-line" }}>{t("settings.wechatHelp")}</p>
+                {renderPrimaryChannelSetup("wechat")}
               </>
             )}
           </div>
@@ -1953,6 +2018,18 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                   t("settings.wecomEnterpriseDesc"),
                   { showEnable: false }
                 )}
+                <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    disabled={primaryChannelSetupBusy.wecom}
+                    onClick={() => void initializePrimaryChannel("wecom")}
+                  >
+                    {primaryChannelSetupBusy.wecom ? "正在初始化..." : "重新初始化企业微信"}
+                  </button>
+                  <span style={{ color: "var(--text-muted)", fontSize: 12 }}>保存 Bot 凭据后会自动执行。</span>
+                </div>
+                {renderPrimaryChannelSetup("wecom")}
               </>
             )}
           </div>

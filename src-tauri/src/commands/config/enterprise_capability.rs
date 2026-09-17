@@ -431,6 +431,13 @@ struct WeComCliProbe {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WecomCliReadiness {
+    pub available: bool,
+    pub authorized: bool,
+    pub diagnostics: Vec<String>,
+}
+
 impl WeComCliProbe {
     fn is_initialized(&self) -> bool {
         matches!(
@@ -588,6 +595,17 @@ async fn test_wecom_cli() -> WeComCliProbe {
                 .collect::<Vec<_>>()
                 .join("; "),
         ),
+    }
+}
+
+/// Read-only CLI readiness probe shared by the primary-channel setup flow.
+/// It never invokes a business command or attempts an interactive authorization.
+pub(crate) async fn inspect_wecom_cli() -> WecomCliReadiness {
+    let probe = test_wecom_cli().await;
+    WecomCliReadiness {
+        available: probe.version.is_some(),
+        authorized: probe.is_initialized(),
+        diagnostics: build_wecom_cli_diagnostics(&probe),
     }
 }
 

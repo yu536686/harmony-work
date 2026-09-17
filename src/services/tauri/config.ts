@@ -669,6 +669,16 @@ export interface EnterpriseCapabilityTestResult {
   diagnostics: string[];
 }
 
+export type PrimaryChannelId = "wecom" | "wechat";
+
+export interface PrimaryChannelSetupResult {
+  channel: PrimaryChannelId;
+  state: "unconfigured" | "initializing" | "awaiting-user-action" | "ready" | "repair-required" | "connected";
+  capabilities: string[];
+  nextAction?: string;
+  diagnostic?: string;
+}
+
 export const enterpriseCapabilityApi = {
   listTemplates: () =>
     invoke<EnterpriseCapabilityTemplate[]>("list_enterprise_capability_templates"),
@@ -678,4 +688,9 @@ export const enterpriseCapabilityApi = {
     invoke<EnterpriseCapabilityStatus>("enable_enterprise_capability", { platform }),
   test: (platform: string) =>
     invoke<EnterpriseCapabilityTestResult>("test_enterprise_capability", { platform }),
+};
+
+export const primaryChannelApi = {
+  initialize: (channel: PrimaryChannelId) =>
+    invoke<PrimaryChannelSetupResult>("initialize_primary_channel", { channel }),
 };

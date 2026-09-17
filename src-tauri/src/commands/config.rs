@@ -24,6 +24,7 @@ pub mod enterprise_capability;
 pub mod mcp;
 pub mod memory;
 pub mod openai_skills;
+pub mod primary_channels;
 pub mod settings;
 pub mod skill_evolution;
 pub mod skills;

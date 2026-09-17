@@ -1288,6 +1288,7 @@ fn run_impl() {
             commands::config::enterprise_capability::get_enterprise_capability_status,
             commands::config::enterprise_capability::enable_enterprise_capability,
             commands::config::enterprise_capability::test_enterprise_capability,
+            commands::config::primary_channels::initialize_primary_channel,
             // marketing portal/
             commands::account_settings_sync::account_settings_sync_status,
             commands::account_settings_sync::account_settings_sync_prepare,
