@@ -117,7 +117,7 @@ public sealed class InstallerEngine
             "installer-cache",
             InstallerVersion,
             "payload");
-        if (File.Exists(Path.Combine(root, "payload.manifest.json"))) return root;
+        if (await PayloadManifestMatchesInstallerVersionAsync(root, cancellationToken)) return root;
 
         var staging = root + ".staging-" + Guid.NewGuid().ToString("N");
         var archivePath = Path.Combine(staging, "payload.zip");
@@ -188,6 +188,21 @@ public sealed class InstallerEngine
         return await JsonSerializer.DeserializeAsync<PayloadManifest>(stream,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken)
             ?? throw new InvalidDataException("安装载荷清单无效。");
+    }
+
+    private static async Task<bool> PayloadManifestMatchesInstallerVersionAsync(
+        string payloadRoot,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(Path.Combine(payloadRoot, "payload.manifest.json"))) return false;
+        try {
+            var manifest = await ReadManifestAsync(payloadRoot, cancellationToken);
+            return manifest.Version.Equals(InstallerVersion, StringComparison.Ordinal);
+        } catch (IOException) {
+            return false;
+        } catch (JsonException) {
+            return false;
+        }
     }
 
     private static async Task VerifyPayloadAsync(string payloadRoot, PayloadManifest manifest, CancellationToken cancellationToken)

@@ -130,10 +130,11 @@ test("full installer reuses managed runtimes and reports generic user-facing pro
   assert.match(engine, /ExtractPayloadArchiveAsync/);
 });
 
-test("Harmony Work release metadata and installer naming stay aligned", async () => {
-  const [packageJson, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
+test("Harmony Work 1.0.0 release metadata, payload manifest, and installer naming stay aligned", async () => {
+  const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+      readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
       readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8").then(JSON.parse),
       readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
       readFile(new URL("../installer/WorkBuddyBootstrapper/WorkBuddyBootstrapper.csproj", import.meta.url), "utf8"),
@@ -143,16 +144,69 @@ test("Harmony Work release metadata and installer naming stay aligned", async ()
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.3.0-alpha.2");
+  assert.equal(packageJson.version, "1.0.0");
+  assert.equal(packageLock.version, packageJson.version);
+  assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");
   assert.equal(tauriConfig.mainBinaryName, "harmony-work");
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(tauriConfig.identifier, "com.harmony.xiaoheng-workbuddy");
   assert.match(cargoToml, /name = "harmony-work"/);
+  assert.match(cargoToml, /version = "1\.0\.0"/);
   assert.match(cargoToml, /default-run = "harmony-work"/);
   assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
+  assert.match(project, /<Version>1\.0\.0<\/Version>/);
   assert.match(engine, /private const string ProductName = "Harmony Work"/);
   assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
   assert.match(stageScript, /app\\harmony-work-setup\.exe/);
+  assert.match(
+    stageScript,
+    /\[PSCustomObject\]@\{ version = \$Version; files = @\(\$Files\) \}/,
+    "the staged payload manifest must inherit the formal release version",
+  );
+  assert.match(buildScript, /\[string\]\$Version = "1\.0\.0"/);
   assert.match(buildScript, /Harmony-Work-\$Version-x64-setup\.exe/);
+});
+
+test("the 1.0.0 installer refreshes the alpha payload without removing user state", async () => {
+  const [engine, buildScript] = await Promise.all([
+    readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
+    readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(
+    engine,
+    /"installer-cache",\s*InstallerVersion,\s*"payload"/,
+    "payload cache identity must be based on the installer manifest version",
+  );
+  assert.match(
+    engine,
+    /PayloadManifestMatchesInstallerVersionAsync\(root, cancellationToken\)/,
+    "a cached payload must be reused only when its manifest matches the official installer",
+  );
+  assert.match(
+    engine,
+    /manifest\.Version\.Equals\(InstallerVersion, StringComparison\.Ordinal\)/,
+    "1.3.0-alpha.2 must not be treated as newer than the formal 1.0.0 manifest",
+  );
+  assert.doesNotMatch(
+    engine,
+    /(?:Version\.Compare(?:To)?|CompareTo\(|System\.Version|SemanticVersion)/,
+    "the installer must not use numeric version ordering to skip the formal build",
+  );
+  assert.doesNotMatch(
+    engine,
+    /DeleteDirectory\(_runtimeRoot\)/,
+    "installer upgrades must retain the managed runtime root",
+  );
+  assert.match(
+    engine,
+    /DeleteDirectory\(root\)/,
+    "only the stale installer payload cache may be replaced",
+  );
+  assert.match(
+    buildScript,
+    /\[string\]\$Version = "1\.0\.0"/,
+    "the release build must emit the formal installer filename by default",
+  );
 });

@@ -4,14 +4,18 @@ param(
   [switch]$SkipDownload,
   [switch]$SkipTauriBuild,
   [string]$InnerInstaller,
-  [string]$Version = ""
+  [string]$Version = "1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 if ([string]::IsNullOrWhiteSpace($Version)) {
-  $Version = (Get-Content -Raw (Join-Path $ProjectRoot "package.json") | ConvertFrom-Json).version
+  throw "The full installer version must be explicit."
+}
+$PackageVersion = (Get-Content -Raw (Join-Path $ProjectRoot "package.json") | ConvertFrom-Json).version
+if ($Version -ne $PackageVersion) {
+  throw "Installer version $Version does not match package.json version $PackageVersion."
 }
 
 if (-not $SkipDownload) {
