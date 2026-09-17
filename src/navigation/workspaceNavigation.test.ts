@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   WORKSPACE_NAVIGATION,
   normalizeWorkspaceRoute,
@@ -22,9 +23,24 @@ describe("workspace navigation", () => {
     expect(WORKSPACE_NAVIGATION.system.map((item) => item.id)).toEqual(["settings"]);
   });
 
+  it("provides the sidebar presentation and drives App navigation from the model", () => {
+    const items = Object.values(WORKSPACE_NAVIGATION).flat();
+    const appSource = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+
+    expect(items.every((item) => (
+      item.label !== undefined
+      && item.icon !== undefined
+      && item.activeRoutes.length > 0
+      && item.action !== undefined
+    ))).toBe(true);
+    expect(appSource).toContain("WORKSPACE_NAVIGATION.work.map");
+    expect(appSource).toContain("WORKSPACE_NAVIGATION.collaboration.map");
+    expect(appSource).toContain("WORKSPACE_NAVIGATION.system.map");
+  });
+
   it.each([
     ["market", { route: "skills" }],
-    ["tools", { route: "settings", settingsSection: "agent-skills" }],
+    ["tools", { route: "settings", settingsSection: "system-diagnostics" }],
     ["audit", { route: "settings", settingsSection: "system-diagnostics" }],
     ["debug", { route: "settings", settingsSection: "system-diagnostics" }],
   ] as const)("normalizes the legacy %s route", (legacyRoute, expected) => {

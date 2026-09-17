@@ -1,22 +1,14 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Brain,
   ChevronDown,
   ChevronRight,
-  Clock3,
-  LineChart,
-  SquarePen,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Sparkles,
   Sun,
-  Settings2,
-  Users,
-  UserRoundCheck,
   Circle,
   Minus,
   Square as WindowSquare,
@@ -29,7 +21,15 @@ import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import { PRODUCT_BRAND } from "./branding";
 import i18n, { setLanguage } from "./i18n";
-import { normalizeWorkspaceRoute, type SettingsSection, type WorkspaceRoute } from "./navigation/workspaceNavigation";
+import {
+  normalizeWorkspaceRoute,
+  WORKSPACE_NAVIGATION,
+  type SettingsSection,
+  type WorkspaceNavigationChild,
+  type WorkspaceNavigationItem,
+  type WorkspaceNavigationLabel,
+  type WorkspaceNavigationTab,
+} from "./navigation/workspaceNavigation";
 import Chat from "./components/Chat";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
@@ -49,7 +49,7 @@ const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
 const Bootstrap = lazy(() => import("./components/Bootstrap"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
-type Tab = WorkspaceRoute | "marketing-dashboard" | "harmony-cut";
+type Tab = WorkspaceNavigationTab;
 type SchoolSubTab = "fish" | "koi";
 
 // Detect if we are running in the overlay window
@@ -366,6 +366,69 @@ function AppContent() {
 
   const highLevelUnlocked = marketingUser?.approvalStatus === "active";
   const userInitial = (marketingUser?.name || marketingUser?.email || "YT").trim().slice(0, 2).toUpperCase();
+  const navigationLabel = (label: WorkspaceNavigationLabel) => (
+    "key" in label ? t(label.key) : label.text
+  );
+  const handleNavigationChildClick = (child: WorkspaceNavigationChild) => {
+    if (child.action === "open-harmony-cut") {
+      openHarmonyCut();
+      return;
+    }
+    navigateTab(child.route);
+  };
+  const handleNavigationItemClick = (item: WorkspaceNavigationItem) => {
+    if (item.action === "new-chat") {
+      setActiveTab("chat");
+      setNewChatRequest((value) => value + 1);
+      return;
+    }
+    if (item.action === "toggle-marketing") {
+      setMarketingExpanded((value) => !value);
+      if (!item.activeRoutes.includes(activeTab)) navigateTab(item.route);
+      return;
+    }
+    if (item.action === "toggle-creative") {
+      setCreativeExpanded((value) => !value);
+      if (!item.activeRoutes.includes(activeTab)) navigateTab(item.route);
+      return;
+    }
+    navigateTab(item.route);
+  };
+  const renderNavigationItem = (item: WorkspaceNavigationItem) => {
+    const Icon = item.icon;
+    const expanded = item.action === "toggle-marketing"
+      ? marketingExpanded
+      : item.action === "toggle-creative"
+        ? creativeExpanded
+        : false;
+
+    return (
+      <Fragment key={item.id}>
+        <button
+          className={`nav-item ${item.activeRoutes.includes(activeTab) ? "active" : ""}`}
+          onClick={() => handleNavigationItemClick(item)}
+          title={navigationLabel(item.label)}
+        >
+          <span className="nav-icon"><Icon size={17} strokeWidth={1.8} /></span>
+          <span className="nav-label">{navigationLabel(item.label)}</span>
+          {item.children && <span className="nav-caret">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>}
+        </button>
+        {item.children && expanded && (
+          <div className="nav-subitems">
+            {item.children.map((child) => (
+              <button
+                key={child.id}
+                className={`nav-subitem ${activeTab === child.route ? "active" : ""}`}
+                onClick={() => handleNavigationChildClick(child)}
+              >
+                {navigationLabel(child.label)}
+              </button>
+            ))}
+          </div>
+        )}
+      </Fragment>
+    );
+  };
   const requireLoginPanel = (title: string) => (
     <div className="locked-page">
       <div className="locked-card card">
@@ -435,79 +498,7 @@ function AppContent() {
         <div className="sidebar-body">
         <nav className="sidebar-nav" aria-label="功能模块">
           <div className="sidebar-section-label">工作</div>
-          <button
-            className={`nav-item ${activeTab === "chat" ? "active" : ""}`}
-            onClick={() => {
-              setActiveTab("chat");
-              setNewChatRequest((value) => value + 1);
-            }}
-            title={t("chat.newChat")}
-          >
-            <span className="nav-icon"><SquarePen size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">{t("chat.newChat")}</span>
-          </button>
-          <button
-            className={`nav-item ${activeTab === "marketing-assets" || activeTab === "marketing-dashboard" || activeTab === "harmony-cut" ? "active" : ""}`}
-            onClick={() => {
-              setMarketingExpanded((value) => !value);
-              if (activeTab !== "marketing-assets" && activeTab !== "marketing-dashboard" && activeTab !== "harmony-cut") {
-                navigateTab("marketing-assets");
-              }
-            }}
-            title="线上营销工作台"
-          >
-            <span className="nav-icon"><LineChart size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">线上营销工作台</span>
-            <span className="nav-caret">{marketingExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-          </button>
-          {marketingExpanded && (
-            <div className="nav-subitems">
-              <button
-                className={`nav-subitem ${activeTab === "marketing-assets" ? "active" : ""}`}
-                onClick={() => navigateTab("marketing-assets")}
-              >
-                素材库
-              </button>
-              <button
-                className={`nav-subitem ${activeTab === "marketing-dashboard" ? "active" : ""}`}
-                onClick={() => navigateTab("marketing-dashboard")}
-              >
-                数据看板
-              </button>
-              <button
-                className={`nav-subitem ${activeTab === "harmony-cut" ? "active" : ""}`}
-                onClick={() => openHarmonyCut()}
-              >
-                商摄快剪
-              </button>
-            </div>
-          )}
-          <button
-            className={`nav-item ${activeTab === "creative-music" || activeTab === "creative-image" ? "active" : ""}`}
-            onClick={() => {
-              setCreativeExpanded((value) => !value);
-              if (activeTab !== "creative-music" && activeTab !== "creative-image") navigateTab("creative-music");
-            }}
-            title="AI 创作"
-          >
-            <span className="nav-icon"><Sparkles size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">AI 创作</span>
-            <span className="nav-caret">{creativeExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-          </button>
-          {creativeExpanded && (
-            <div className="nav-subitems">
-              <button className={`nav-subitem ${activeTab === "creative-music" ? "active" : ""}`} onClick={() => navigateTab("creative-music")}>Harvis 音乐创作</button>
-              <button className={`nav-subitem ${activeTab === "creative-image" ? "active" : ""}`} onClick={() => navigateTab("creative-image")}>Harvis 图片创作</button>
-            </div>
-          )}
-          <button
-            className={`nav-item ${activeTab === "skills" ? "active" : ""}`}
-            onClick={() => navigateTab("skills")}
-            title={t("nav.market")}
-          >
-            <span className="nav-icon"><Sparkles size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">{t("nav.market")}</span>
-          </button>
+          {WORKSPACE_NAVIGATION.work.map(renderNavigationItem)}
 
           <div className="sidebar-section-label sidebar-section-label-collaboration">
             <button
@@ -522,34 +513,12 @@ function AppContent() {
           </div>
           {collaborationExpanded && (
             <div className="sidebar-navigation-group">
-              <button className={`nav-item ${activeTab === "team" ? "active" : ""}`} onClick={() => navigateTab("team")} title="团队">
-                <span className="nav-icon"><Users size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">团队</span>
-              </button>
-              <button className={`nav-item ${activeTab === "members" ? "active" : ""}`} onClick={() => navigateTab("members")} title="成员">
-                <span className="nav-icon"><UserRoundCheck size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">成员</span>
-              </button>
-              <button className={`nav-item ${activeTab === "experts" ? "active" : ""}`} onClick={() => navigateTab("experts")} title="专家">
-                <span className="nav-icon"><Brain size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">专家</span>
-              </button>
-              <button className={`nav-item ${activeTab === "scheduler" ? "active" : ""}`} onClick={() => navigateTab("scheduler")} title={t("nav.scheduler")}>
-                <span className="nav-icon"><Clock3 size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">{t("nav.scheduler")}</span>
-              </button>
-              <button className={`nav-item ${activeTab === "memory" ? "active" : ""}`} onClick={() => navigateTab("memory")} title={t("nav.memory")}>
-                <span className="nav-icon"><Brain size={17} strokeWidth={1.8} /></span>
-                <span className="nav-label">{t("nav.memory")}</span>
-              </button>
+              {WORKSPACE_NAVIGATION.collaboration.map(renderNavigationItem)}
             </div>
           )}
 
           <div className="sidebar-section-label sidebar-section-label-system">系统</div>
-          <button className={`nav-item ${activeTab === "settings" ? "active" : ""}`} onClick={() => navigateTab("settings")} title={t("nav.settings")}>
-            <span className="nav-icon"><Settings2 size={17} strokeWidth={1.8} /></span>
-            <span className="nav-label">{t("nav.settings")}</span>
-          </button>
+          {WORKSPACE_NAVIGATION.system.map(renderNavigationItem)}
         </nav>
         <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label={t("chat.projects")} />
         </div>
