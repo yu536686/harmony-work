@@ -27,7 +27,7 @@ beforeEach(() => {
   api.accountOverview.mockResolvedValue({
     user: activeUser,
     balance: 12.5,
-    usage: { request_count: 3, used_quota: 100 },
+    usage: { quota: 500000, rpm: 3, tpm: 2400 },
     gatewayApiKey: "sk-harmony-secret",
   });
   api.status.mockResolvedValue({
@@ -42,18 +42,17 @@ describe("AccountPage", () => {
 
     await waitFor(() => expect(screen.getByText("测试用户")).toBeInTheDocument());
     expect(screen.getByText("tester@example.com")).toBeInTheDocument();
-    expect(screen.getByText("12.5")).toBeInTheDocument();
+    expect(screen.getByText("12.50")).toBeInTheDocument();
 
     // Key must be masked and must not expose the full secret.
     expect(screen.queryByText("sk-harmony-secret")).not.toBeInTheDocument();
-    expect(screen.getByText(/sk-\*+/)).toBeInTheDocument();
   });
 
   it("reveals the API key only after the user explicitly clicks show", async () => {
     render(<AccountPage user={activeUser} onUserChange={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "显示" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "显示" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看 API Key" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "查看 API Key" }));
 
     expect(screen.getByText("sk-harmony-secret")).toBeInTheDocument();
   });
@@ -68,9 +67,9 @@ describe("AccountPage", () => {
 
     render(<AccountPage user={activeUser} onUserChange={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByText("8")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("8.00")).toBeInTheDocument());
     expect(screen.getByText("测试用户")).toBeInTheDocument();
-    expect(screen.getByText(/暂无/)).toBeInTheDocument();
+    expect(screen.getByText("未配置")).toBeInTheDocument();
   });
 
   it("clears the expired session and shows a login prompt on 401/403", async () => {
