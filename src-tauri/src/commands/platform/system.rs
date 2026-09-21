@@ -17,12 +17,32 @@ pub fn ensure_workspace_shortcut(workspace_root: &str) -> Result<(), String> {
     {
         let desktop = dirs::desktop_dir().ok_or("无法定位桌面目录")?;
         let shortcut = desktop.join("小亨工作空间.url");
-        let target = workspace.canonicalize().unwrap_or(workspace);
+        // Windows 的 `canonicalize` 会返回 `\\?\` 扩展长度前缀；不剥离时 `.url`
+        // 会把 `file://///?/...` 解析成系统目录（System32）。这里统一还原成普通盘符路径。
+        let canonical = workspace.canonicalize().unwrap_or_else(|_| workspace.clone());
+        let target = PathBuf::from(
+            canonical
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .trim_start_matches(r"\\.\")
+                .to_string(),
+        );
         let url_path = target
             .to_string_lossy()
             .replace('\\', "/")
             .replace(' ', "%20");
-        let contents = format!("[InternetShortcut]\r\nURL=file:///{url_path}\r\n");
+        // 图标沿用当前可执行文件，让快捷方式与「小亨 / Harmony Work」一致。
+        let icon_file = std::env::current_exe()
+            .map(|path| {
+                path.to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .replace('\\', "/")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let contents = format!(
+            "[InternetShortcut]\r\nURL=file:///{url_path}\r\nIconFile={icon_file}\r\nIconIndex=0\r\n"
+        );
         std::fs::write(shortcut, contents).map_err(|error| error.to_string())?;
     }
 
