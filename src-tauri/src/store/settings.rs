@@ -729,6 +729,18 @@ pub fn default_workspace_path() -> String {
 fn default_workspace() -> String {
     default_workspace_path()
 }
+
+/// 清理历史版本遗留的外部品牌工作区路径（如旧版 9Xbot 把工作区写进了
+/// `OneDrive/Documents/9xbot`）。这类残留不属于 Harmony Work，加载时统一
+/// 回退到本产品默认工作区，避免快捷方式和新会话继续指向陌生目录。
+fn sanitize_workspace_root(settings: &mut Settings) {
+    let root = settings.workspace_root.to_ascii_lowercase();
+    let stale = root.contains("9xbot") || root.contains("9x-bot") || root.contains("onedrive");
+    if settings.workspace_root.trim().is_empty() || stale {
+        settings.workspace_root = default_workspace_path();
+    }
+}
+
 fn default_language() -> String {
     "zh".into()
 }
@@ -939,6 +951,7 @@ impl Settings {
         };
         settings.config_path = path.to_path_buf();
         settings.migrate_public_service_urls();
+        sanitize_workspace_root(&mut settings);
 
         // Decrypt API keys (hex-encoded ciphertext on disk).
         // If decryption fails the value is likely still plaintext (pre-migration);
