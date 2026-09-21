@@ -713,10 +713,10 @@ pub fn default_heartbeat_prompt() -> String {
 }
 
 fn default_provider() -> String {
-    "anthropic".into()
+    "harmony".into()
 }
 fn default_model() -> String {
-    "claude-sonnet-4-5".into()
+    "deepseek-v4-flash".into()
 }
 pub fn default_workspace_path() -> String {
     dirs::home_dir()

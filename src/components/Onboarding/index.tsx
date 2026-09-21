@@ -1,10 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { PRODUCT_BRAND } from "../../branding";
 import { settingsActions } from "../../store";
-import { openPath, settingsApi } from "../../services/tauri";
+import {
+  accountSettingsSyncApi,
+  openPath,
+  readRememberedMarketingUser,
+  settingsApi,
+} from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 
 interface Props {
@@ -128,17 +133,20 @@ export default function Onboarding({ onComplete }: Props) {
   const { t, i18n } = useTranslation();
   const dispatch = useDispatch();
   const [step, setStep] = useState<Step>("welcome");
-  const [provider, setProvider] = useState("anthropic");
+  const [provider, setProvider] = useState("harmony");
   const [apiKey, setApiKey] = useState("");
   const [customBaseUrl, setCustomBaseUrl] = useState("");
-  const [model, setModel] = useState("claude-sonnet-4-5");
-  const [enabledModels, setEnabledModels] = useState<string[]>(["claude-sonnet-4-5"]);
+  const [model, setModel] = useState("deepseek-v4-flash");
+  const [enabledModels, setEnabledModels] = useState<string[]>(["deepseek-v4-flash"]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [policyMode, setPolicyMode] = useState("balanced");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
+  const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [syncingCloud, setSyncingCloud] = useState(false);
 
   const meta = useMemo(() => providerMeta(provider), [provider]);
   const modelOptions = useMemo(
@@ -231,6 +239,58 @@ export default function Onboarding({ onComplete }: Props) {
       if (provider === "custom") updates.custom_base_url = customBaseUrl.trim();
       if (workspace.trim()) updates.workspace_root = workspace;
 
+      const settings = await settingsApi.save(updates);
+      dispatch(settingsActions.setSettings(settings));
+      dispatch(settingsActions.setConfigured(true));
+      setStep("done");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    const user = readRememberedMarketingUser();
+    if (!user) return;
+    setCloudUserId(user.id);
+    void accountSettingsSyncApi
+      .status()
+      .then((status) => setCloudAvailable(!!status.snapshot))
+      .catch(() => setCloudAvailable(false));
+  }, []);
+
+  const restoreCloud = async () => {
+    if (!cloudUserId) {
+      setError("请先登录账号后再同步云端配置。");
+      return;
+    }
+    setSyncingCloud(true);
+    setError("");
+    try {
+      await accountSettingsSyncApi.restore(cloudUserId);
+      const restored = await settingsApi.get();
+      dispatch(settingsActions.setSettings(restored));
+      dispatch(settingsActions.setConfigured(true));
+      setStep("done");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncingCloud(false);
+    }
+  };
+
+  const skip = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const updates: Record<string, unknown> = {
+        provider,
+        model,
+        enabled_models: uniqStrings([model, ...enabledModels]),
+        policy_mode: policyMode,
+      };
+      if (workspace.trim()) updates.workspace_root = workspace;
       const settings = await settingsApi.save(updates);
       dispatch(settingsActions.setSettings(settings));
       dispatch(settingsActions.setConfigured(true));
@@ -387,11 +447,27 @@ export default function Onboarding({ onComplete }: Props) {
               </p>
             </div>
 
+            {cloudAvailable && (
+              <div style={{ marginTop: 16 }}>
+                <button className="btn btn-secondary" style={{ width: "100%" }} onClick={() => void restoreCloud()} disabled={syncingCloud || saving}>
+                  {syncingCloud ? "同步中..." : "云端配置同步"}
+                </button>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 0" }}>
+                  已检测到云端配置备份，点击可一键恢复提供商、模型与 API Key 等配置。
+                </p>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 24 }}>
               <button className="btn btn-secondary" onClick={() => setStep("welcome")}>{t("onboarding.backBtn")}</button>
-              <button className="btn btn-primary" onClick={() => setStep("policy")} disabled={!apiKey.trim() || !model.trim()}>
-                {t("onboarding.nextBtn")}
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-secondary" onClick={() => void skip()} disabled={saving}>
+                  跳过
+                </button>
+                <button className="btn btn-primary" onClick={() => setStep("policy")} disabled={!apiKey.trim() || !model.trim()}>
+                  {t("onboarding.nextBtn")}
+                </button>
+              </div>
             </div>
           </div>
         )}
