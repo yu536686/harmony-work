@@ -75,8 +75,8 @@ const DEFAULT_SETTINGS: SettingsData = {
   openai_api_key: "",
   deepseek_api_key: "",
   qwen_api_key: "",
-  provider: "anthropic",
-  model: "claude-sonnet-4-5",
+  provider: "harmony",
+  model: "deepseek-v4-flash",
   custom_base_url: "",
   workspace_root: "",
   allow_outside_workspace: false,
@@ -293,7 +293,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [sshShowPassword, setSshShowPassword] = useState(false);
 
   // Named LLM Providers
-  const EMPTY_LLM_PROVIDER: LlmProviderConfig = { id: "", label: "", provider: "anthropic", model: "", enabled_models: [], available_models: [], api_key: "", base_url: "", max_tokens: 0 };
+  const EMPTY_LLM_PROVIDER: LlmProviderConfig = { id: "", label: "", provider: "harmony", model: "", enabled_models: [], available_models: [], api_key: "", base_url: "", max_tokens: 0 };
   const [llmProviders, setLlmProviders] = useState<LlmProviderConfig[]>([]);
   const [llmEditIdx, setLlmEditIdx] = useState<number | null>(null);
   const [llmEditForm, setLlmEditForm] = useState<LlmProviderConfig>(EMPTY_LLM_PROVIDER);
@@ -665,7 +665,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
     setGlobalModelLoading(true);
     setGlobalModelError(null);
     try {
-      const models = await settingsApi.fetchModels(form.provider || "anthropic", globalApiKey, globalBaseUrl);
+      const models = await settingsApi.fetchModels(form.provider || "harmony", globalApiKey, globalBaseUrl);
       const ids = models.map((m: ProviderModelInfo) => m.id);
       setForm((prev) => ({
         ...prev,
@@ -710,7 +710,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
     setNamedModelLoading(true);
     setNamedModelError(null);
     try {
-      const models = await settingsApi.fetchModels(llmEditForm.provider || "anthropic", llmEditForm.api_key, llmProviderBaseUrl);
+      const models = await settingsApi.fetchModels(llmEditForm.provider || "harmony", llmEditForm.api_key, llmProviderBaseUrl);
       const ids = models.map((m: ProviderModelInfo) => m.id);
       setLlmEditForm((prev) => ({
         ...prev,
@@ -922,7 +922,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
 
           <div className="form-group">
             <label className="label">{t("settings.provider")}</label>
-            <select className="input" value={form.provider ?? "anthropic"} onChange={(e) => {
+            <select className="input" value={form.provider ?? "harmony"} onChange={(e) => {
               const next = e.target.value as LlmProviderId;
               const meta = providerMeta(next);
               setForm((prev) => ({
@@ -1030,7 +1030,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
               <>
                 <div className="form-group">
                   <label className="label">{t("settings.visionProvider")}</label>
-                  <select className="input" value={form.vision_provider || "anthropic"} onChange={(e) => update("vision_provider", e.target.value)}>
+                  <select className="input" value={form.vision_provider || "harmony"} onChange={(e) => update("vision_provider", e.target.value)}>
                     <option value="anthropic">{t("settings.providerAnthropic")}</option>
                     <option value="openai">{t("settings.providerOpenai")}</option>
                     <option value="deepseek">{t("settings.providerDeepseek")}</option>
@@ -1093,7 +1093,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
             <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.enableStreamingHint")}</p>
           </div>
 
-          {(form.provider === "anthropic" || !form.provider) && (
+          {(form.provider === "harmony" || !form.provider) && (
             <div className="form-group">
               <label className="label">{t("settings.anthropicKey")}</label>
               <div style={{ position: "relative" }}>
