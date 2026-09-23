@@ -186,6 +186,43 @@ async fn save_result(result_url: &str, target: &Path) -> Result<Value, String> {
 pub async fn harvis_save_result(result_url: String, target_path: String) -> Result<Value, String> {
     save_result(&result_url, Path::new(&target_path)).await
 }
+#[tauri::command]
+pub async fn harvis_preview_result(result_url: String, kind: String) -> Result<Value, String> {
+    let expected = match kind.as_str() {
+        "image" => "image/",
+        "music" => "audio/",
+        _ => return Err("不支持预览此类成品".into()),
+    };
+    let limit = if kind == "image" { 16 * 1024 * 1024 } else { 32 * 1024 * 1024 };
+    let url = media_url(&result_url).ok_or("成品地址无效或已过期")?;
+    if url.starts_with("data:") {
+        let (header, body) = url.split_once(',').ok_or("成品数据格式无效")?;
+        if !header.starts_with(&format!("data:{expected}")) || !header.ends_with(";base64") || body.len() > limit * 4 / 3 + 4 {
+            return Err("成品类型无效或超过预览大小限制".into());
+        }
+        return Ok(json!({"dataUrl": url}));
+    }
+    let mut response = client()?.get(url).send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?;
+    let mime = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()).unwrap_or("")
+        .split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if !mime.starts_with(expected) {
+        return Err("成品链接没有返回可预览的媒体文件".into());
+    }
+    if response.content_length().is_some_and(|size| size > limit as u64) {
+        return Err("成品超过预览大小限制，请下载查看".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len() + chunk.len() > limit {
+            return Err("成品超过预览大小限制，请下载查看".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() { return Err("成品内容为空".into()); }
+    Ok(json!({"dataUrl": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))}))
+}
 #[cfg(test)]
 mod regression_tests {
     use super::*;

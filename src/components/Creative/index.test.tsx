@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   adoptMusicArtifact: vi.fn(),
   saveMusicFeedback: vi.fn(),
   harvisSaveResult: vi.fn(),
+  harvisPreviewResult: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
@@ -30,6 +31,7 @@ vi.mock("../../services/tauri", async (importOriginal) => {
       adoptMusicArtifact: mocks.adoptMusicArtifact,
       saveMusicFeedback: mocks.saveMusicFeedback,
       harvisSaveResult: mocks.harvisSaveResult,
+      harvisPreviewResult: mocks.harvisPreviewResult,
     },
   };
 });
@@ -64,6 +66,7 @@ describe("CreativePage completed job details", () => {
     localStorage.clear();
     vi.mocked(save).mockReset();
     mocks.harvisSaveResult.mockReset();
+    mocks.harvisPreviewResult.mockReset();
     mocks.listJobs.mockReset();
     mocks.getJob.mockReset();
     mocks.musicConfig.mockReset();
@@ -113,15 +116,36 @@ describe("CreativePage completed job details", () => {
       },
     }));
 
-    render(<CreativePage initialKind="image" user={user} onStageToChat={vi.fn()} />);
+    const view = render(<CreativePage initialKind="image" user={user} onStageToChat={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "下载 七夕海报.png" })).toBeInTheDocument();
     expect(mocks.getJob).toHaveBeenCalledWith("image-1");
+    expect(screen.queryByText("music prompt")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByText("music prompt"));
+    view.unmount();
+    render(<CreativePage initialKind="music" user={user} onStageToChat={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /music prompt/ }));
 
     expect(await screen.findByRole("button", { name: "下载 品牌音乐.mp3" })).toBeInTheDocument();
     await waitFor(() => expect(mocks.getJob).toHaveBeenCalledWith("music-1"));
+    expect(screen.queryByText("image prompt")).not.toBeInTheDocument();
+  });
+
+  it("filters local results by page and opens a clicked image in the preview", async () => {
+    localStorage.setItem("workbuddy.harvis.tasks", JSON.stringify([
+      { taskId: "image-1", kind: "image", status: "succeeded", prompt: "portrait", progress: 100, resultUrl: "https://cdn.example/portrait.png", createdAt: Date.now() },
+      { taskId: "music-1", kind: "music", status: "succeeded", prompt: "piano", progress: 100, resultUrl: "https://cdn.example/music.mp3", createdAt: Date.now() },
+    ]));
+    mocks.listJobs.mockResolvedValue({ jobs: [] });
+    mocks.harvisPreviewResult.mockResolvedValue({ dataUrl: "data:image/png;base64,aGVsbG8=" });
+    render(<CreativePage initialKind="image" user={user} onStageToChat={vi.fn()} />);
+
+    expect(screen.getByText("portrait")).toBeInTheDocument();
+    expect(screen.queryByText("piano")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "预览成品" }));
+    expect(await screen.findByRole("dialog", { name: "Harvis 图片成品" })).toBeInTheDocument();
+    expect(mocks.harvisPreviewResult).toHaveBeenCalledWith("https://cdn.example/portrait.png", "image");
   });
 
   it("shows the assistant rationale, confidence, and retrieved cases next to the editable Suno prompt", async () => {

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AlertTriangle, FolderOpen } from "lucide-react";
 import { PRODUCT_BRAND } from "../../branding";
+import { HARMONY_API_BASE } from "../../services/serviceUrls";
 import { settingsActions } from "../../store";
 import {
   accountSettingsSyncApi,
@@ -11,6 +13,7 @@ import {
   settingsApi,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
+import "./Onboarding.css";
 
 interface Props {
   onComplete: () => void;
@@ -141,12 +144,33 @@ export default function Onboarding({ onComplete }: Props) {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [workspace, setWorkspace] = useState("");
+  const [allowOutsideWorkspace, setAllowOutsideWorkspace] = useState(false);
+  const [apiSkipped, setApiSkipped] = useState(false);
   const [policyMode, setPolicyMode] = useState("balanced");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [syncingCloud, setSyncingCloud] = useState(false);
+
+  useEffect(() => {
+    void settingsApi.get().then((settings) => {
+      setWorkspace(settings.workspace_root || "");
+      setAllowOutsideWorkspace(settings.allow_outside_workspace ?? false);
+      setPolicyMode(settings.policy_mode || "balanced");
+      if (settings.provider) {
+        setProvider(settings.provider);
+        setCustomBaseUrl(settings.custom_base_url || "");
+        setModel(settings.model || providerMeta(settings.provider).placeholder);
+        setEnabledModels(settings.enabled_models || []);
+        const keyField = providerMeta(settings.provider).keyField as keyof typeof settings;
+        const key = settings[keyField];
+        if (typeof key === "string") setApiKey(key);
+      }
+    }).catch(() => {
+      void settingsApi.getDefaultWorkspace().then(setWorkspace).catch(() => {});
+    });
+  }, []);
 
   const meta = useMemo(() => providerMeta(provider), [provider]);
   const modelOptions = useMemo(
@@ -174,6 +198,8 @@ export default function Onboarding({ onComplete }: Props) {
   const changeProvider = (next: string) => {
     const nextMeta = providerMeta(next);
     setProvider(next);
+    setApiKey("");
+    setApiSkipped(false);
     setModel(nextMeta.placeholder);
     setEnabledModels([nextMeta.placeholder]);
     setAvailableModels([]);
@@ -216,7 +242,7 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   const handleSave = async () => {
-    if (!apiKey.trim()) {
+    if (!apiSkipped && !apiKey.trim()) {
       setError(t("onboarding.apiKeyRequired"));
       return;
     }
@@ -229,14 +255,17 @@ export default function Onboarding({ onComplete }: Props) {
     try {
       const normalizedEnabledModels = uniqStrings([model, ...enabledModels]);
       const updates: Record<string, unknown> = {
-        provider,
-        model,
-        enabled_models: normalizedEnabledModels,
-        available_models: availableModels,
         policy_mode: policyMode,
-        [meta.keyField]: apiKey.trim(),
+        allow_outside_workspace: allowOutsideWorkspace,
       };
-      if (provider === "custom") updates.custom_base_url = customBaseUrl.trim();
+      if (!apiSkipped) {
+        updates.provider = provider;
+        updates.model = model;
+        updates.enabled_models = normalizedEnabledModels;
+        updates.available_models = availableModels;
+        updates[meta.keyField] = apiKey.trim();
+        if (provider === "custom") updates.custom_base_url = customBaseUrl.trim();
+      }
       if (workspace.trim()) updates.workspace_root = workspace;
 
       const settings = await settingsApi.save(updates);
@@ -271,8 +300,14 @@ export default function Onboarding({ onComplete }: Props) {
       await accountSettingsSyncApi.restore(cloudUserId);
       const restored = await settingsApi.get();
       dispatch(settingsActions.setSettings(restored));
-      dispatch(settingsActions.setConfigured(true));
-      setStep("done");
+      setProvider(restored.provider);
+      setModel(restored.model);
+      setEnabledModels(restored.enabled_models || []);
+      setWorkspace(restored.workspace_root);
+      setAllowOutsideWorkspace(restored.allow_outside_workspace);
+      setPolicyMode(restored.policy_mode || "balanced");
+      setApiSkipped(true);
+      setStep("policy");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -280,30 +315,14 @@ export default function Onboarding({ onComplete }: Props) {
     }
   };
 
-  const skip = async () => {
-    setSaving(true);
+  const skip = () => {
     setError("");
-    try {
-      const updates: Record<string, unknown> = {
-        provider,
-        model,
-        enabled_models: uniqStrings([model, ...enabledModels]),
-        policy_mode: policyMode,
-      };
-      if (workspace.trim()) updates.workspace_root = workspace;
-      const settings = await settingsApi.save(updates);
-      dispatch(settingsActions.setSettings(settings));
-      dispatch(settingsActions.setConfigured(true));
-      setStep("done");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
+    setApiSkipped(true);
+    setStep("policy");
   };
 
   return (
-    <div style={{ display: "flex", alignItems: step === "provider" ? "flex-start" : "center", justifyContent: "center", height: "100vh", minHeight: 0, background: "var(--bg-primary)", padding: 24, paddingBottom: step === "provider" ? 88 : 24, position: "relative", overflowY: "auto", overflowX: "hidden", boxSizing: "border-box" }}>
+    <div style={{ display: "flex", alignItems: step === "provider" || step === "policy" ? "flex-start" : "center", justifyContent: "center", height: "100vh", minHeight: 0, background: "var(--bg-primary)", padding: 24, paddingBottom: step === "provider" || step === "policy" ? 88 : 24, position: "relative", overflowY: "auto", overflowX: "hidden", boxSizing: "border-box" }}>
       <button
         onClick={toggleLang}
         style={{
@@ -428,43 +447,20 @@ export default function Onboarding({ onComplete }: Props) {
               </div>
             </div>
 
-            <div className="form-group">
-              <label className="label">{t("onboarding.workspace")}</label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  className="input"
-                  value={workspace}
-                  onChange={(e) => setWorkspace(e.target.value)}
-                  placeholder={t("onboarding.workspacePlaceholder")}
-                  style={{ flex: 1 }}
-                />
-                <button type="button" className="btn btn-secondary" onClick={browseWorkspace} style={{ whiteSpace: "nowrap", padding: "0 14px" }}>
-                  {t("onboarding.workspaceBrowse")}
-                </button>
-              </div>
-              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                {t("onboarding.workspaceHelp")}
-              </p>
+            <div className="onboarding-cloud-action">
+              <button className="btn btn-secondary" onClick={() => void restoreCloud()} disabled={syncingCloud || saving}>
+                {syncingCloud ? "同步中..." : "同步云端配置"}
+              </button>
+              <span>{cloudAvailable ? "已找到云端备份，恢复后继续确认工作区。" : "登录账号且有云端备份后可使用。"}</span>
             </div>
-
-            {cloudAvailable && (
-              <div style={{ marginTop: 16 }}>
-                <button className="btn btn-secondary" style={{ width: "100%" }} onClick={() => void restoreCloud()} disabled={syncingCloud || saving}>
-                  {syncingCloud ? "同步中..." : "云端配置同步"}
-                </button>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 0" }}>
-                  已检测到云端配置备份，点击可一键恢复提供商、模型与 API Key 等配置。
-                </p>
-              </div>
-            )}
 
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 24 }}>
               <button className="btn btn-secondary" onClick={() => setStep("welcome")}>{t("onboarding.backBtn")}</button>
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-secondary" onClick={() => void skip()} disabled={saving}>
+                <button className="btn btn-secondary" onClick={skip} disabled={saving}>
                   跳过
                 </button>
-                <button className="btn btn-primary" onClick={() => setStep("policy")} disabled={!apiKey.trim() || !model.trim()}>
+                <button className="btn btn-primary" onClick={() => { setApiSkipped(false); setStep("policy"); }} disabled={!apiKey.trim() || !model.trim()}>
                   {t("onboarding.nextBtn")}
                 </button>
               </div>
@@ -480,6 +476,25 @@ export default function Onboarding({ onComplete }: Props) {
             <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
               {t("onboarding.policyDesc")}
             </p>
+
+            <section className="onboarding-workspace" aria-labelledby="onboarding-workspace-heading">
+              <h3 id="onboarding-workspace-heading"><FolderOpen size={17} aria-hidden="true" /> 工作区文件夹</h3>
+              <div className="onboarding-workspace-select">
+                <input className="input" aria-label="工作区文件夹" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={t("onboarding.workspacePlaceholder")} />
+                <button type="button" className="btn btn-secondary" onClick={browseWorkspace}>选择文件夹</button>
+              </div>
+              <p>小亨读取与生成的文件默认保存在此文件夹。桌面上的“小亨工作空间”快捷方式会指向这里。</p>
+              <label className="onboarding-outside-option">
+                <input type="checkbox" checked={allowOutsideWorkspace} onChange={(event) => setAllowOutsideWorkspace(event.target.checked)} />
+                <span>允许读取/写入工作区外的文件</span>
+              </label>
+              <div className="onboarding-workspace-warning" role="note">
+                <AlertTriangle size={16} aria-hidden="true" />
+                <span>{allowOutsideWorkspace
+                  ? "开启后，小亨可能读取或改动工作区外的文件。请仅在确有需要且信任当前任务时开启。"
+                  : "保持关闭更安全：先把要处理的文件放入工作区文件夹，再拖放给小亨；生成文件也只能保存到工作区内。"}</span>
+              </div>
+            </section>
 
             {[
               { value: "strict", label: t("onboarding.policyStrict"), desc: t("onboarding.policyStrictDesc") },
@@ -512,7 +527,7 @@ export default function Onboarding({ onComplete }: Props) {
 
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 24 }}>
               <button className="btn btn-secondary" onClick={() => setStep("provider")}>{t("onboarding.backBtn")}</button>
-              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving || !workspace.trim()}>
                 {saving ? t("common.saving") : t("onboarding.saveAndContinue")}
               </button>
             </div>
@@ -537,4 +552,3 @@ export default function Onboarding({ onComplete }: Props) {
     </div>
   );
 }
-import { HARMONY_API_BASE } from "../../services/serviceUrls";

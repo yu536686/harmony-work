@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useDispatch, useSelector } from "react-redux";
 import { RootState, chatActions, sessionsActions } from "../store";
@@ -141,7 +141,10 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("modified_desc");
-  const [visibleCount, setVisibleCount] = useState(48);
+  const [pageOffset, setPageOffset] = useState(48);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const requestSeq = useRef(0);
   const [assets, setAssets] = useState<MarketingAsset[]>([]);
   const [assetTotal, setAssetTotal] = useState(0);
   const [selectedAsset, setSelectedAsset] = useState<MarketingAsset | null>(null);
@@ -158,12 +161,13 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
 
   const loadAll = async () => {
     if (!active) return;
+    const requestId = ++requestSeq.current;
     setLoading(true);
     setMessage("");
     try {
       const selectedGroups = formatGroups.length ? formatGroups : [];
       const assetRequests = selectedGroups.length
-        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 96, sort }))
+        ? selectedGroups.map((group) => marketingApi.assets({ folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 48, offset: 0, sort }))
         : [Promise.resolve({ assets: [], total: 0 })];
       const [nextSummary, nextFolders, nextAssetGroups, nextCampaign] = await Promise.all([
         marketingApi.summary(),
@@ -171,6 +175,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
         Promise.all(assetRequests),
         marketingApi.campaignSummary(1440),
       ]);
+      if (requestId !== requestSeq.current) return;
       const merged = new Map<string, MarketingAsset>();
       let total = 0;
       for (const groupResult of nextAssetGroups) {
@@ -186,18 +191,49 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       setSummary(nextSummary);
       setFolders(nextFolders.folders ?? []);
       setAssets(nextAssets);
-      setAssetTotal(filteredAssets.length || total);
+      setAssetTotal(total);
+      setPageOffset(48);
+      setHasMore(nextAssetGroups.some((group) => group.total > 48));
       setCampaign(nextCampaign);
-      if (selectedAsset && !merged.has(selectedAsset.id)) {
+      if (selectedAsset && !nextAssets.some((asset) => asset.id === selectedAsset.id)) {
         setSelectedAsset(nextAssets[0] ?? null);
         setPreview(null);
+        setPreviewDataUrl("");
       } else if (!selectedAsset && nextAssets[0]) {
         setSelectedAsset(nextAssets[0]);
       }
     } catch (error) {
-      setMessage(String(error));
+      if (requestId === requestSeq.current) setMessage(String(error));
     } finally {
-      setLoading(false);
+      if (requestId === requestSeq.current) setLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!active || !hasMore || loadingMore) return;
+    const requestId = requestSeq.current;
+    const selectedGroups = formatGroups;
+    setLoadingMore(true);
+    try {
+      const groups = await Promise.all(selectedGroups.map((group) => marketingApi.assets({
+        folder, q: query, formatGroup: group, includeAuxiliary: false, limit: 48, offset: pageOffset, sort,
+      })));
+      if (requestId !== requestSeq.current) return;
+      setAssets((previous) => {
+        const merged = new Map(previous.map((asset) => [asset.id, asset]));
+        for (const group of groups) {
+          for (const asset of group.assets) {
+            if (shouldShowAsset(asset, false) && assetMatchesFormat(asset, selectedGroups)) merged.set(asset.id, asset);
+          }
+        }
+        return Array.from(merged.values()).sort((a, b) => sortAssets(a, b, sort));
+      });
+      setHasMore(groups.some((group) => group.total > pageOffset + 48));
+      setPageOffset(pageOffset + 48);
+    } catch (error) {
+      if (requestId === requestSeq.current) setMessage(String(error));
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -205,12 +241,6 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, folder, view, formatGroups, sort]);
-
-  useEffect(() => {
-    setVisibleCount(48);
-  }, [folder, formatGroups, sort]);
-
-  const visibleAssets = useMemo(() => assets.slice(0, visibleCount), [assets, visibleCount]);
 
   useEffect(() => {
     if (!assets.length) return;
@@ -558,7 +588,6 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                 </select>
                 <select className="input" value={sort} onChange={(event) => setSort(event.target.value)} aria-label="排序">
                   <option value="modified_desc">最近更新</option>
-                  <option value="modified_asc">最早更新</option>
                   <option value="name_asc">名称 A-Z</option>
                   <option value="size_desc">大小降序</option>
                 </select>
@@ -580,7 +609,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                 ))}
               </div>
               <div className="marketing-asset-cards">
-                {visibleAssets.map((asset) => {
+                {assets.map((asset) => {
                   const previewUrl = thumbnailDataUrls[asset.id] || (thumbnailFailures[asset.id] === "preview-load-failed" ? "" : assetPreviewUrl(asset));
                   const dimensions = assetDimensions(asset);
                   return (
@@ -609,12 +638,12 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                   </button>
                   );
                 })}
-                {!visibleAssets.length && <div className="empty-state">没有匹配素材。</div>}
+                {!assets.length && <div className="empty-state">没有匹配素材。</div>}
               </div>
-              {visibleAssets.length < assets.length && (
+              {hasMore && (
                 <div className="marketing-load-more">
-                  <button className="btn btn-secondary" onClick={() => setVisibleCount((value) => value + 48)}>
-                    加载更多（已显示 {visibleAssets.length} / {assets.length}）
+                  <button className="btn btn-secondary" onClick={() => void loadMore()} disabled={loadingMore}>
+                    {loadingMore ? "正在加载…" : `加载更多（已显示 ${assets.length} / ${assetTotal}）`}
                   </button>
                 </div>
               )}

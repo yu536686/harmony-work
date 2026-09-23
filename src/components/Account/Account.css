@@ -232,9 +232,15 @@
 
 .account-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
 }
+.account-confirm-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(20, 20, 25, .55); }
+.account-confirm { width: min(420px, 100%); padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); box-shadow: var(--shadow-lg); }
+.account-confirm h2 { margin: 0 0 10px; font-size: 18px; }
+.account-confirm p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
+.account-confirm .account-actions { justify-content: flex-end; }
 
 .account-btn {
   padding: 7px 14px;

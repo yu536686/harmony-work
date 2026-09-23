@@ -131,7 +131,7 @@ export function resolveCanvasRequest(
 ): CanvasRequest {
   if (canvasPreset === "television") return { canvasPreset, outputWidth: 1536, outputHeight: 1024, providerRatio: "16:9" };
   if (canvasPreset === "vertical") return { canvasPreset, outputWidth: 1024, outputHeight: 1536, providerRatio: "9:16" };
-  if (canvasPreset === "store-poster") return { canvasPreset, outputWidth: 1024, outputHeight: 1536, providerRatio: "3:4" };
+  if (canvasPreset === "store-poster") return { canvasPreset, outputWidth: 420, outputHeight: 592, providerRatio: "3:4" };
   if (canvasPreset === "phone-fullscreen") return { canvasPreset, outputWidth: 1536, outputHeight: 1024, providerRatio: "16:9" };
   if (!width || !height) throw new Error("自定义比例需要填写宽度和高度");
   const ratio = width / height;
@@ -209,7 +209,9 @@ export const creativeApi = {
   harvisQueryTaskContent: (taskId: string, kind: HarvisTaskKind) =>
     invoke<Record<string, unknown>>("harvis_query_task_content", { taskId, kind }),
   harvisSaveResult: (resultUrl: string, targetPath: string) =>
-    invoke<{ localPath: string; sizeBytes: number }>("harvis_save_result", { resultUrl, targetPath })
+    invoke<{ localPath: string; sizeBytes: number }>("harvis_save_result", { resultUrl, targetPath }),
+  harvisPreviewResult: (resultUrl: string, kind: "image" | "music") =>
+    invoke<{ dataUrl: string }>("harvis_preview_result", { resultUrl, kind }),
 };
 
 const HARVIS_TASKS_KEY = "workbuddy.harvis.tasks";

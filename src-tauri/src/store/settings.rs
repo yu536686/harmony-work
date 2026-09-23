@@ -734,8 +734,10 @@ fn default_workspace() -> String {
 /// `OneDrive/Documents/9xbot`）。这类残留不属于 Harmony Work，加载时统一
 /// 回退到本产品默认工作区，避免快捷方式和新会话继续指向陌生目录。
 fn sanitize_workspace_root(settings: &mut Settings) {
-    let root = settings.workspace_root.to_ascii_lowercase();
-    let stale = root.contains("9xbot") || root.contains("9x-bot") || root.contains("onedrive");
+    let stale = std::path::Path::new(&settings.workspace_root)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("9xbot") || name.eq_ignore_ascii_case("9x-bot"));
     if settings.workspace_root.trim().is_empty() || stale {
         settings.workspace_root = default_workspace_path();
     }
@@ -1168,7 +1170,7 @@ pub const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{sanitize_workspace_root, Settings};
 
     #[test]
     fn public_service_urls_migrate_from_cloud_without_changing_keys_or_local_urls() {
@@ -1227,6 +1229,14 @@ mod tests {
         assert!(settings.confirm_file_writes);
         assert_eq!(settings.context_window, 128_000);
         assert!(settings.workspace_root.ends_with("harmony"));
+    }
+
+    #[test]
+    fn keeps_a_user_selected_onedrive_workspace() {
+        let mut settings = Settings::default();
+        settings.workspace_root = "C:\\Users\\one\\OneDrive\\HarmonyProjects".into();
+        sanitize_workspace_root(&mut settings);
+        assert_eq!(settings.workspace_root, "C:\\Users\\one\\OneDrive\\HarmonyProjects");
     }
 
     #[test]

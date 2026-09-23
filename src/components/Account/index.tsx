@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDispatch } from "react-redux";
+import { settingsActions } from "../../store";
 import {
   accountSettingsSyncApi,
   marketingApi,
+  settingsApi,
   type AccountSettingsSyncStatus,
   type MarketingAccountOverview,
   type MarketingUser,
@@ -11,6 +14,8 @@ import "./Account.css";
 type AccountPageProps = {
   user: MarketingUser | null;
   onUserChange: (user: MarketingUser | null) => void;
+  onOpenSettings: () => void;
+  onOpenLogin: () => void;
 };
 
 const QUOTA_PER_YUAN = 500000;
@@ -46,13 +51,17 @@ function fallbackCopy(text: string): boolean {
   }
 }
 
-export default function AccountPage({ user, onUserChange }: AccountPageProps) {
+export default function AccountPage({ user, onUserChange, onOpenSettings, onOpenLogin }: AccountPageProps) {
+  const dispatch = useDispatch();
   const [overview, setOverview] = useState<MarketingAccountOverview | null>(null);
   const [cloudSettings, setCloudSettings] = useState<AccountSettingsSyncStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [confirmUseKey, setConfirmUseKey] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyMessage, setKeyMessage] = useState("");
 
   const load = useCallback(async () => {
     if (!user) {
@@ -95,6 +104,7 @@ export default function AccountPage({ user, onUserChange }: AccountPageProps) {
             <div className="account-empty-art">H</div>
             <h2>请先登录工作台账号</h2>
             <p>登录后即可查看积分、用量与 Harmony API Key。</p>
+            <button className="account-btn account-btn-primary" onClick={onOpenLogin}>去登录</button>
           </div>
         </div>
       </section>
@@ -120,24 +130,46 @@ export default function AccountPage({ user, onUserChange }: AccountPageProps) {
 
   const stats = [
     {
-      name: "今日消耗",
-      value: (Number(usage?.quota ?? 0) / QUOTA_PER_YUAN).toFixed(4),
+      name: "已计费消耗",
+      value: usage && typeof usage.quota === "number" ? (usage.quota / QUOTA_PER_YUAN).toFixed(4) : "—",
       unit: "积分",
-      foot: "用量口径沿用服务端数据",
+      foot: "统计周期以网关为准",
     },
     {
-      name: "调用次数",
-      value: String(Number(usage?.rpm ?? 0)),
-      unit: "次",
-      foot: "今日统计",
+      name: "请求速率",
+      value: usage && typeof usage.rpm === "number" ? String(usage.rpm) : "—",
+      unit: "次/分",
+      foot: "网关当前速率",
     },
     {
-      name: "Token 数",
-      value: formatToken(Number(usage?.tpm ?? 0)),
-      unit: "",
-      foot: "累计",
+      name: "Token 速率",
+      value: usage && typeof usage.tpm === "number" ? formatToken(usage.tpm) : "—",
+      unit: "Token/分",
+      foot: "网关当前速率",
     },
   ];
+
+  const useHarmonyKey = async () => {
+    if (!apiKey) return;
+    setSavingKey(true);
+    setKeyMessage("");
+    try {
+      const updated = await settingsApi.save({
+        provider: "harmony",
+        model: "deepseek-v4-flash",
+        enabled_models: ["deepseek-v4-flash"],
+        harmony_api_key: apiKey,
+      });
+      dispatch(settingsActions.setSettings(updated));
+      dispatch(settingsActions.setConfigured(true));
+      setConfirmUseKey(false);
+      setKeyMessage("Harmony 已设为本机默认模型服务。");
+    } catch (reason) {
+      setKeyMessage(`配置失败：${String(reason)}`);
+    } finally {
+      setSavingKey(false);
+    }
+  };
 
   const copyKey = async () => {
     if (!apiKey) return;
@@ -239,7 +271,9 @@ export default function AccountPage({ user, onUserChange }: AccountPageProps) {
               <button type="button" className="account-btn account-btn-primary" onClick={() => void copyKey()} disabled={!apiKey}>
                 {copied ? "已复制" : "复制 Key"}
               </button>
+              <button type="button" className="account-btn" onClick={() => setConfirmUseKey(true)} disabled={!apiKey}>用于本机</button>
             </div>
+            {keyMessage && <p className="account-card-foot" role="status">{keyMessage}</p>}
             <p className="account-fineprint">Key 仅在本机查看，请妥善保管。</p>
           </article>
 
@@ -283,9 +317,22 @@ export default function AccountPage({ user, onUserChange }: AccountPageProps) {
                 ? `最近备份版本 ${cloudSettings.snapshot.revision} · ${cloudSettings.snapshot.updatedAt}`
                 : "尚未创建云端备份"}
             </p>
+            <button type="button" className="account-btn" onClick={onOpenSettings}>管理云端配置</button>
           </article>
         )}
       </div>
+      {confirmUseKey && (
+        <div className="account-confirm-backdrop" role="presentation">
+          <section className="account-confirm" role="dialog" aria-modal="true" aria-labelledby="account-confirm-title">
+            <h2 id="account-confirm-title">将 Harmony 用于本机？</h2>
+            <p>会把 Harmony 设为默认提供商，并将当前账号的 Key 保存到本机加密设置。现有其他提供商配置仍会保留。</p>
+            <div className="account-actions">
+              <button type="button" className="account-btn" onClick={() => setConfirmUseKey(false)} disabled={savingKey}>取消</button>
+              <button type="button" className="account-btn account-btn-primary" onClick={() => void useHarmonyKey()} disabled={savingKey}>{savingKey ? "正在配置…" : "确认使用"}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

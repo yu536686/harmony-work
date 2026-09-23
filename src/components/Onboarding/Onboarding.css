@@ -1,0 +1,13 @@
+.onboarding-cloud-action { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.onboarding-cloud-action span { min-width: 0; }
+.onboarding-workspace { margin: 0 0 22px; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.onboarding-workspace h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--text-primary); font-size: 15px; }
+.onboarding-workspace-select { display: flex; gap: 8px; min-width: 0; }
+.onboarding-workspace-select .input { min-width: 0; flex: 1; }
+.onboarding-workspace-select .btn { flex: none; white-space: nowrap; }
+.onboarding-workspace p { margin: 8px 0 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.onboarding-outside-option { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 13px; font-weight: 600; cursor: pointer; }
+.onboarding-outside-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
+.onboarding-workspace-warning { display: flex; align-items: flex-start; gap: 9px; margin-top: 10px; padding: 10px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border-color)); border-radius: 6px; background: color-mix(in srgb, var(--warning) 9%, var(--bg-secondary)); color: var(--text-primary); font-size: 12px; line-height: 1.6; }
+.onboarding-workspace-warning svg { flex: none; margin-top: 1px; color: var(--warning); }
+@media (max-width: 560px) { .onboarding-cloud-action { align-items: stretch; flex-direction: column; }.onboarding-workspace-select { flex-wrap: wrap; }.onboarding-workspace-select .btn { width: 100%; } }

@@ -1,17 +1,25 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Provider } from "react-redux";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AccountPage from "./index";
 import type { MarketingUser } from "../../services/tauri";
+import { store } from "../../store";
 
 const api = vi.hoisted(() => ({
   accountOverview: vi.fn(),
   status: vi.fn(),
+  save: vi.fn(),
 }));
 
 vi.mock("../../services/tauri", () => ({
   marketingApi: { accountOverview: api.accountOverview },
   accountSettingsSyncApi: { status: api.status },
+  settingsApi: { save: api.save },
 }));
+
+function renderAccount(user: MarketingUser | null, onUserChange = vi.fn()) {
+  return render(<Provider store={store}><AccountPage user={user} onUserChange={onUserChange} onOpenLogin={vi.fn()} onOpenSettings={vi.fn()} /></Provider>);
+}
 
 const activeUser: MarketingUser = {
   id: "user-1",
@@ -24,6 +32,7 @@ const activeUser: MarketingUser = {
 beforeEach(() => {
   api.accountOverview.mockReset();
   api.status.mockReset();
+  api.save.mockReset();
   api.accountOverview.mockResolvedValue({
     user: activeUser,
     balance: 12.5,
@@ -38,7 +47,7 @@ beforeEach(() => {
 
 describe("AccountPage", () => {
   it("shows identity, balance and a masked API key by default", async () => {
-    render(<AccountPage user={activeUser} onUserChange={vi.fn()} />);
+    renderAccount(activeUser);
 
     await waitFor(() => expect(screen.getByText("测试用户")).toBeInTheDocument());
     expect(screen.getByText("tester@example.com")).toBeInTheDocument();
@@ -49,7 +58,7 @@ describe("AccountPage", () => {
   });
 
   it("reveals the API key only after the user explicitly clicks show", async () => {
-    render(<AccountPage user={activeUser} onUserChange={vi.fn()} />);
+    renderAccount(activeUser);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "查看 API Key" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "查看 API Key" }));
@@ -65,7 +74,7 @@ describe("AccountPage", () => {
       gatewayApiKey: null,
     });
 
-    render(<AccountPage user={activeUser} onUserChange={vi.fn()} />);
+    renderAccount(activeUser);
 
     await waitFor(() => expect(screen.getByText("8.00")).toBeInTheDocument());
     expect(screen.getByText("测试用户")).toBeInTheDocument();
@@ -76,9 +85,19 @@ describe("AccountPage", () => {
     api.accountOverview.mockRejectedValue("登录已过期（HTTP 401），请重新登录");
     const onUserChange = vi.fn();
 
-    render(<AccountPage user={activeUser} onUserChange={onUserChange} />);
+    renderAccount(activeUser, onUserChange);
 
     await waitFor(() => expect(screen.getByText(/登录已过期/)).toBeInTheDocument());
     expect(onUserChange).toHaveBeenCalledWith(null);
+  });
+
+  it("requires confirmation before applying the Harmony key locally", async () => {
+    api.save.mockResolvedValue({ provider: "harmony", harmony_api_key: "sk-harmony-secret" });
+    renderAccount(activeUser);
+    await waitFor(() => expect(screen.getByRole("button", { name: "用于本机" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "用于本机" }));
+    expect(api.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认使用" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(expect.objectContaining({ provider: "harmony", harmony_api_key: "sk-harmony-secret" })));
   });
 });

@@ -34,6 +34,7 @@ export interface Settings {
   custom_base_url: string;
   workspace_root: string;
   allow_outside_workspace: boolean;
+  policy_mode: string;
   language: string;
   max_tokens: number;
   /** Context window size in tokens (input limit). 0 = auto. */

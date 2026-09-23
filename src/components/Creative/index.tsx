@@ -137,9 +137,9 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [jobDetailLoading, setJobDetailLoading] = useState(false);
-  const [preview, setPreview] = useState<{ artifact: CreativeArtifact; dataUrl: string } | null>(null);
+  const [preview, setPreview] = useState<{ fileName: string; kind: "audio" | "image"; dataUrl: string; artifact?: CreativeArtifact; task?: HarvisTask } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   const [harvisTasks, setHarvisTasks] = useState<HarvisTask[]>(() => loadHarvisTasks());
-  const [harvisKindFilter, setHarvisKindFilter] = useState<"all" | "image" | "music">("all");
   const [musicRating, setMusicRating] = useState(0);
   const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
   const [submitToKnowledge, setSubmitToKnowledge] = useState(false);
@@ -176,8 +176,13 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const hasAssistantField = (key: string) => selectedBusinessLine.fields.some((field) => field.key === key);
   const additionalAssistantFields = selectedBusinessLine.fields.filter((field) => !["brand", "collection", "model", "theme", "watchStyle", "desiredStyle", "bpm", "referenceAssets"].includes(field.key));
   const referenceIds = useMemo(() => normalizeReferenceSelection(referenceFiles.map((item) => item.id)), [referenceFiles]);
-  const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
-  const activeJobs = jobs.filter((job) => ["queued", "submitting", "submitted", "processing", "archiving"].includes(job.status));
+  const visibleJobs = jobs.filter((job) => job.kind === initialKind);
+  const selectedJobRaw = visibleJobs.find((job) => job.id === selectedJobId) ?? visibleJobs[0] ?? null;
+  const selectedJob = selectedJobRaw && {
+    ...selectedJobRaw,
+    artifacts: selectedJobRaw.artifacts.filter((artifact) => initialKind === "music" ? artifact.kind === "audio" : artifact.kind === "image"),
+  };
+  const activeJobs = visibleJobs.filter((job) => ["queued", "submitting", "submitted", "processing", "archiving"].includes(job.status));
 
   const refreshJobDetail = useCallback(async (jobId: string) => {
     setJobDetailLoading(true);
@@ -199,7 +204,8 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         ? { ...job, artifacts: hydrated.artifacts }
         : job;
     }));
-    setSelectedJobId((current) => current ?? response.jobs[0]?.id ?? null);
+    setSelectedJobId((current) => response.jobs.some((job) => job.id === current && job.kind === initialKind)
+      ? current : response.jobs.find((job) => job.kind === initialKind)?.id ?? null);
   };
 
   useEffect(() => {
@@ -246,9 +252,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   }, [activeJobs.map((job) => job.id).join(",")]);
 
   const activeHarvisTasks = harvisTasks.filter((task) => task.status === "pending" || task.status === "processing");
-  const filteredHarvisTasks = harvisKindFilter === "all"
-    ? harvisTasks
-    : harvisTasks.filter((task) => task.kind === harvisKindFilter);
+  const filteredHarvisTasks = harvisTasks.filter((task) => task.kind === initialKind);
   useEffect(() => {
     if (!activeHarvisTasks.length) return;
     const timer = window.setInterval(() => {
@@ -487,11 +491,27 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
 
   const showPreview = async (artifact: CreativeArtifact) => {
     if (!artifact.assetId) return;
+    setPreviewLoading(artifact.id);
     try {
       const data = await marketingApi.assetDataUrl(artifact.assetId, artifact.fileName, artifact.kind === "audio" ? 24 * 1024 * 1024 : 16 * 1024 * 1024);
-      setPreview({ artifact, dataUrl: data.dataUrl });
+      setPreview({ artifact, fileName: artifact.fileName, kind: artifact.kind === "audio" ? "audio" : "image", dataUrl: data.dataUrl });
     } catch (error) {
       setNotice(String(error));
+    } finally {
+      setPreviewLoading(null);
+    }
+  };
+
+  const showHarvisPreview = async (task: HarvisTask) => {
+    if (!task.resultUrl || (task.kind !== "image" && task.kind !== "music")) return;
+    setPreviewLoading(task.taskId);
+    try {
+      const result = await creativeApi.harvisPreviewResult(task.resultUrl, task.kind);
+      setPreview({ task, fileName: `Harvis ${task.kind === "music" ? "音乐" : "图片"}成品`, kind: task.kind === "music" ? "audio" : "image", dataUrl: result.dataUrl });
+    } catch (error) {
+      setNotice(`预览失败：${String(error)}。仍可下载成品查看。`);
+    } finally {
+      setPreviewLoading(null);
     }
   };
 
@@ -674,11 +694,43 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
           )}
         </div>
         <aside className="creative-side">
-          <section className="creative-panel"><div className="creative-panel-head"><strong>本地生成任务</strong><span>{filteredHarvisTasks.length}</span></div><div className="creative-kind-filter" style={{ display: "flex", gap: 6, padding: "0 12px 10px" }}>{(["all", "image", "music"] as const).map((kind) => <button key={kind} type="button" className={harvisKindFilter === kind ? "creative-filter active" : "creative-filter"} onClick={() => setHarvisKindFilter(kind)}>{kind === "all" ? "全部" : kind === "image" ? "图片" : "音乐"}</button>)}</div><div className="creative-job-list">{filteredHarvisTasks.map((task) => <div key={task.taskId} className="creative-job" style={{ display: "block", textAlign: "left" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span>{task.kind === "music" ? "音乐" : task.kind === "image" ? "图片" : task.kind}</span><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div><strong style={{ display: "block", margin: "4px 0", fontSize: 13 }}>{task.prompt.slice(0, 40) || "未命名"}</strong>{task.errorMessage && <small style={{ color: "#d33", display: "block" }}>{task.errorMessage}</small>}{task.resultUrl && task.kind === "image" && <img src={task.resultUrl} alt="成品" style={{ width: "100%", borderRadius: 8, marginTop: 6 }} />}{task.resultUrl && task.kind === "music" && <audio controls src={task.resultUrl} style={{ width: "100%", marginTop: 6 }} />}{task.resultUrl && <button type="button" className="btn btn-secondary" onClick={() => void downloadHarvisTask(task)} disabled={downloadingTaskId !== null} style={{ marginTop: 6 }}>{downloadingTaskId === task.taskId ? "正在保存…" : "下载成品"}</button>}</div>)}{!filteredHarvisTasks.length && <div className="creative-empty">暂无本地生成任务</div>}</div></section>
+          <section className="creative-panel">
+            <div className="creative-panel-head"><strong>{isMusic ? "音乐作品任务" : "图片作品任务"}</strong><span>{visibleJobs.length}</span></div>
+            <div className="creative-job-list">
+              {visibleJobs.map((job) => (
+                <button key={job.id} type="button" className={selectedJob?.id === job.id ? "creative-job active" : "creative-job"} onClick={() => setSelectedJobId(job.id)}>
+                  <strong>{job.promptSnapshot || "未命名创作"}</strong><small>{jobStatus(job.status)} {job.progress > 0 ? `${job.progress}%` : ""}</small>
+                </button>
+              ))}
+              {!visibleJobs.length && <div className="creative-empty">暂无作品任务</div>}
+            </div>
+          </section>
+          <section className="creative-panel">
+            <div className="creative-panel-head"><strong>本地生成任务</strong><span>{filteredHarvisTasks.length}</span></div>
+            <div className="creative-job-list">
+              {filteredHarvisTasks.map((task) => (
+                <div key={task.taskId} className="creative-local-job">
+                  <div className="creative-local-job-top"><strong>{task.prompt.slice(0, 48) || "未命名创作"}</strong><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div>
+                  {task.errorMessage && <small className="creative-error">{task.errorMessage}</small>}
+                  {task.resultUrl && (
+                    <div className="creative-local-job-actions">
+                      <button type="button" className="btn btn-secondary" onClick={() => void showHarvisPreview(task)} disabled={previewLoading === task.taskId}>
+                        {previewLoading === task.taskId ? "正在加载…" : "预览成品"}
+                      </button>
+                      <button type="button" className="btn btn-secondary" onClick={() => void downloadHarvisTask(task)} disabled={downloadingTaskId !== null}>
+                        {downloadingTaskId === task.taskId ? "正在保存…" : "下载成品"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!filteredHarvisTasks.length && <div className="creative-empty">暂无本地生成任务</div>}
+            </div>
+          </section>
           <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}{jobDetailLoading ? <div className="creative-empty creative-detail-state">正在同步成品信息…</div> : ["succeeded", "partial_success", "archived"].includes(selectedJob.status) && selectedJob.artifacts.length === 0 ? <div className="creative-empty creative-detail-state">任务已完成，成品仍在归档或等待同步。请稍后刷新任务。</div> : null}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.kind === "music" && selectedJob.artifacts.some((artifact) => artifact.kind === "audio") && <section className="creative-feedback" aria-label="作品采用与评分"><div className="creative-feedback-head"><div><strong>采用与评分</strong><p>采用后可评分；评分 4 星及以上且主动提交的作品会进入管理员审核队列。</p></div><span className="creative-feedback-step">1 / 3</span></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用版本</span>{selectedJob.artifacts.filter((artifact) => artifact.kind === "audio").map((artifact) => <div className="creative-feedback-item" key={`feedback-${artifact.id}`}><div className="creative-feedback-item-info"><span title={artifact.fileName}>{artifact.fileName}</span>{selectedJob.adoptedArtifactId === artifact.id && <em>已采用</em>}</div><button className="btn btn-secondary" onClick={() => void adoptMusicArtifact(selectedJob, artifact)} disabled={busy || selectedJob.adoptedArtifactId === artifact.id}>{selectedJob.adoptedArtifactId === artifact.id ? "当前采用" : "采用此版本"}</button></div>)}</div><div className="creative-feedback-section creative-feedback-rating-row"><span className="creative-feedback-label">本次评分</span><div className="creative-rating" aria-label="评分">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" className={value <= musicRating ? "active" : ""} onClick={() => setMusicRating(value)} aria-label={`${value} 星`}>★</button>)}</div></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用原因</span><div className="creative-feedback-tags">{["风格契合", "镜头节奏合适", "乐器表现好", "品牌感强"].map((tag) => <button type="button" key={tag} className={feedbackTags.includes(tag) ? "active" : ""} onClick={() => setFeedbackTags((previous) => previous.includes(tag) ? previous.filter((value) => value !== tag) : [...previous, tag])}>{tag}</button>)}</div></div><label className="creative-knowledge-choice"><input type="checkbox" aria-label="提交为知识候选" checked={submitToKnowledge} onChange={(event) => setSubmitToKnowledge(event.target.checked)} /><span><strong>提交为知识候选</strong><small>仅采用且评分 4 星及以上的成品会提交审核。</small></span></label><div className="creative-actions"><button className="btn btn-primary" onClick={() => { const artifact = selectedJob.artifacts.find((item) => item.id === selectedJob.adoptedArtifactId) ?? selectedJob.artifacts.find((item) => item.kind === "audio"); if (artifact) void saveMusicFeedback(artifact); }} disabled={busy}>保存评分</button></div></section>}{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
         </aside>
       </div>
-      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.artifact.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => void downloadArtifact(preview.artifact)}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.artifact.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.artifact.fileName} />}</div></div>}
+      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" role="dialog" aria-modal="true" aria-label={preview.fileName} onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => { if (preview.artifact) void downloadArtifact(preview.artifact); else if (preview.task) void downloadHarvisTask(preview.task); }}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.fileName} />}</div></div>}
     </section>
   );
 }

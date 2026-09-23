@@ -80,6 +80,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   custom_base_url: "",
   workspace_root: "",
   allow_outside_workspace: false,
+  policy_mode: "balanced",
   language: "zh",
   max_tokens: 8192,
   context_window: 128000,

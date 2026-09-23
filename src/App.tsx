@@ -57,6 +57,7 @@ type SchoolSubTab = "fish" | "koi";
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
+const ONBOARDING_STORAGE_KEY = "harmony-work.onboardingCompleted";
 import { REGISTER_URL } from "./services/serviceUrls";
 
 function readMigratedStorage(key: string, legacyKey: string): string | null {
@@ -209,7 +210,7 @@ function AppContent() {
         ]);
         dispatch(settingsActions.setSettings(settings));
         dispatch(settingsActions.setConfigured(configured));
-        if (!configured) {
+        if (!configured && localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "done") {
           dispatch(settingsActions.setShowOnboarding(true));
         }
 
@@ -323,6 +324,9 @@ function AppContent() {
     const completeBootstrap = () => {
       localStorage.setItem(BOOTSTRAP_STORAGE_KEY, "done");
       setShowBootstrap(false);
+      if (localStorage.getItem(ONBOARDING_STORAGE_KEY) !== "done") {
+        dispatch(settingsActions.setShowOnboarding(true));
+      }
     };
     return (
       <>
@@ -338,7 +342,10 @@ function AppContent() {
     return (
       <>
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
-          <Onboarding onComplete={() => dispatch(settingsActions.setShowOnboarding(false))} />
+          <Onboarding onComplete={() => {
+            localStorage.setItem(ONBOARDING_STORAGE_KEY, "done");
+            dispatch(settingsActions.setShowOnboarding(false));
+          }} />
         </Suspense>
         <Toaster />
       </>
@@ -530,7 +537,6 @@ function AppContent() {
               <button onClick={() => { setActiveTab("account"); setUserMenuOpen(false); }}>个人账户</button>
               <button onClick={() => { navigateTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
               <button onClick={() => { navigateTab("about"); setUserMenuOpen(false); }}>{t("nav.about")}</button>
-              <button onClick={() => { navigateTab("debug"); setUserMenuOpen(false); }}>{t("nav.debug")}</button>
               <div className="user-menu-separator" />
               {marketingUser ? (
                 <button onClick={() => void handleMarketingLogout()}>退出登录</button>
@@ -604,7 +610,7 @@ function AppContent() {
           )}
           {mountedTabs.has("account") && (
             <div className="tab-panel" hidden={activeTab !== "account"}>
-              <Account user={marketingUser} onUserChange={setMarketingUser} />
+              <Account user={marketingUser} onUserChange={setMarketingUser} onOpenLogin={() => navigateTab("marketing-assets")} onOpenSettings={() => { navigateTab("settings"); setSettingsSection("account-cloud"); }} />
             </div>
           )}
           {mountedTabs.has("creative-music") && (
