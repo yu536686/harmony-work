@@ -53,6 +53,10 @@ pub enum WorkBuddyEvent {
         tool_name: String,
         tool_input: Value,
         description: String,
+        allow_for_session: bool,
+    },
+    PermissionResolved {
+        request_id: String,
     },
     ContextUsage {
         estimated_input_tokens: u32,
@@ -145,30 +149,84 @@ impl CodexEventAdapter {
             "turn/plan/updated" => self.plan_updated(&notification.params),
             "thread/tokenUsage/updated" => self.token_usage_updated(&notification.params),
             "turn/completed" => self.turn_completed(&notification.params),
+            "serverRequest/resolved" => notification
+                .params
+                .get("requestId")
+                .map(|id| {
+                    vec![WorkBuddyEvent::PermissionResolved {
+                        request_id: value_id(id),
+                    }]
+                })
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
     }
 
     pub fn adapt_request(&self, request: &RpcRequest) -> Option<WorkBuddyEvent> {
-        let tool_name = match request.method.as_str() {
-            "item/commandExecution/requestApproval" => "shell",
-            "item/fileChange/requestApproval" => "apply_patch",
-            _ => return None,
-        };
-        let description = sanitize_text(
-            request
+        let (tool_name, tool_input, description, allow_for_session) = if request.method
+            == "mcpServer/elicitation/request"
+        {
+            let meta = request.params.get("_meta")?;
+            if request.params.get("mode").and_then(Value::as_str) != Some("form")
+                || meta.get("codex_approval_kind").and_then(Value::as_str) != Some("mcp_tool_call")
+            {
+                return None;
+            }
+            let server = request
                 .params
-                .get("reason")
+                .get("serverName")
                 .and_then(Value::as_str)
-                .or_else(|| request.params.get("command").and_then(Value::as_str))
-                .unwrap_or("需要用户批准后继续执行"),
-        );
+                .unwrap_or("mcp");
+            let tool = meta
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .or_else(|| meta.get("tool_title").and_then(Value::as_str))
+                .unwrap_or("tool");
+            let persist = meta.get("persist");
+            let allow_for_session = persist.and_then(Value::as_str) == Some("session")
+                || persist
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("session")));
+            (
+                format!("{server}/{tool}"),
+                sanitize_value(meta.get("tool_params").unwrap_or(&Value::Null)),
+                sanitize_text(
+                    request
+                        .params
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("允许调用 MCP 工具吗？"),
+                ),
+                allow_for_session,
+            )
+        } else {
+            let name = match request.method.as_str() {
+                "item/commandExecution/requestApproval" => "shell",
+                "item/fileChange/requestApproval" => "apply_patch",
+                _ => return None,
+            };
+            let description = sanitize_text(
+                request
+                    .params
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .or_else(|| request.params.get("command").and_then(Value::as_str))
+                    .unwrap_or("需要用户批准后继续执行"),
+            );
+            (
+                name.to_string(),
+                sanitize_value(&request.params),
+                description,
+                false,
+            )
+        };
 
         Some(WorkBuddyEvent::PermissionRequest {
             request_id: value_id(&request.id),
-            tool_name: tool_name.to_string(),
-            tool_input: sanitize_value(&request.params),
+            tool_name,
+            tool_input,
             description,
+            allow_for_session,
         })
     }
 
@@ -693,7 +751,41 @@ mod tests {
                 tool_name: "shell".into(),
                 tool_input: json!({"itemId":"cmd1","command":"npm install","cwd":"/work","reason":"需要安装依赖"}),
                 description: "需要安装依赖".into(),
+                allow_for_session: false,
             })
+        );
+    }
+
+    #[test]
+    fn surfaces_mcp_tool_approval_instead_of_leaving_the_turn_pending() {
+        let adapter = CodexEventAdapter::default();
+        let event = adapter.adapt_request(&RpcRequest {
+            id: json!(42),
+            method: "mcpServer/elicitation/request".to_string(),
+            params: json!({
+                "threadId":"thread-1","serverName":"windows_desktop","mode":"form",
+                "message":"允许打开软件吗？",
+                "_meta":{"codex_approval_kind":"mcp_tool_call","tool_name":"windows_launch","tool_params":{"app":"notepad"},"persist":["session","always"]},
+                "requestedSchema":{"type":"object","properties":{}}
+            }),
+        });
+        assert!(
+            matches!(event, Some(WorkBuddyEvent::PermissionRequest { tool_name, description, allow_for_session, .. })
+            if tool_name == "windows_desktop/windows_launch" && description == "允许打开软件吗？" && allow_for_session)
+        );
+    }
+
+    #[test]
+    fn resolves_a_pending_permission_when_codex_clears_the_request() {
+        let mut adapter = CodexEventAdapter::default();
+        assert_eq!(
+            adapter.adapt_notification(&RpcNotification {
+                method: "serverRequest/resolved".into(),
+                params: json!({"threadId":"thread-1","requestId":42}),
+            }),
+            vec![WorkBuddyEvent::PermissionResolved {
+                request_id: "42".into()
+            }]
         );
     }
 }

@@ -58,6 +58,7 @@ interface PermissionRequest {
   toolName: string;
   toolInput: unknown;
   description: string;
+  allowForSession: boolean;
 }
 
 const FILE_MUTATION_TOOLS = new Set(["file_write", "file_edit"]);
@@ -186,9 +187,13 @@ export default function AssistantPanel({
             toolName: evt.tool_name,
             toolInput: evt.tool_input,
             description: evt.description,
+            allowForSession: evt.allow_for_session ?? false,
           });
           append({ kind: "info", text: t("ide.assistantPermissionWaiting", { tool: evt.tool_name }) });
           scrollToBottom();
+          break;
+        case "permission_resolved":
+          setPermissionRequest((current) => current?.requestId === evt.request_id ? null : current);
           break;
         case "interactive_ui":
           setInteractiveCards((prev) => ({
@@ -262,12 +267,12 @@ export default function AssistantPanel({
     t,
   ]);
 
-  const handlePermissionResponse = useCallback(async (approved: boolean) => {
+  const handlePermissionResponse = useCallback(async (approved: boolean, forSession = false) => {
     if (!permissionRequest) return;
     const { requestId } = permissionRequest;
-    setPermissionRequest(null);
     try {
-      await permissionApi.respond(requestId, approved);
+      await permissionApi.respond(requestId, approved, forSession);
+      setPermissionRequest(null);
       append({
         kind: "info",
         text: approved
@@ -389,6 +394,11 @@ export default function AssistantPanel({
               <button type="button" className="btn-allow" onClick={() => handlePermissionResponse(true)}>
                 {t("chat.permissionAllow")}
               </button>
+              {permissionRequest.allowForSession && (
+                <button type="button" className="btn-allow" onClick={() => handlePermissionResponse(true, true)}>
+                  {t("chat.permissionAllowSession")}
+                </button>
+              )}
             </div>
           </div>
         )}

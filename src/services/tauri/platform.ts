@@ -111,8 +111,8 @@ export const windowApi = {
 // ---------------------------------------------------------------------------
 
 export const permissionApi = {
-  respond: (requestId: string, approved: boolean) =>
-    invoke<void>('respond_permission', { requestId, approved }),
+  respond: (requestId: string, approved: boolean, forSession = false) =>
+    invoke<void>('respond_permission', { requestId, approved, forSession }),
 };
 
 // ---------------------------------------------------------------------------

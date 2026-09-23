@@ -23,7 +23,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name":"harvis_image_generate",
-            "description":"Generate an image through the user's Harmony API key. The call waits for a bounded period and returns a resumable task ID if the result is still processing. Text-to-image requires only a prompt; reference_urls enable image-to-image.",
+            "description":"Submit an image task through the user's Harmony API key and return its resumable task ID immediately. Poll with harvis_job_status. Text-to-image requires only a prompt; reference_urls enable image-to-image.",
             "inputSchema":{
                 "type":"object","properties":{
                     "prompt":{"type":"string","minLength":1},
@@ -38,7 +38,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name":"harvis_music_generate",
-            "description":"Create instrumental music or BGM through the user's Harmony API key. Waits briefly for completion and returns a resumable task ID when still processing.",
+            "description":"Submit instrumental music or BGM through the user's Harmony API key and return its resumable task ID immediately. Poll with harvis_job_status.",
             "inputSchema":{
                 "type":"object","properties":{
                     "prompt":{"type":"string","minLength":1},"title":{"type":"string"},
@@ -74,11 +74,19 @@ pub(crate) async fn call(context: &HostContext, name: &str, arguments: &Value) -
     match name {
         "harvis_image_generate" => {
             let request = normalize_image_request(arguments)?;
-            mcp_success(HarmonyClient::new(context)?.submit("image", &request).await?)
+            mcp_success(
+                HarmonyClient::new(context)?
+                    .submit("image", &request)
+                    .await?,
+            )
         }
         "harvis_music_generate" => {
             let request = normalize_music_request(arguments)?;
-            mcp_success(HarmonyClient::new(context)?.submit("music", &request).await?)
+            mcp_success(
+                HarmonyClient::new(context)?
+                    .submit("music", &request)
+                    .await?,
+            )
         }
         "harvis_job_status" => {
             let payload = if let Some(id) = optional_string(arguments, "job_id") {
@@ -86,9 +94,13 @@ pub(crate) async fn call(context: &HostContext, name: &str, arguments: &Value) -
                     let kind = optional_string(arguments, "kind")
                         .or_else(|| job_kind(context, &id))
                         .ok_or_else(|| anyhow!("请提供任务类型 kind（image 或 music）"))?;
-                    HarmonyClient::new(context)?.wait(&id, &kind, Duration::from_secs(70)).await?
+                    HarmonyClient::new(context)?
+                        .wait(&id, &kind, Duration::from_secs(20))
+                        .await?
                 } else {
-                    HarvisClient::new(context)?.get_json(&format!("/api/creative/jobs/{}", urlencoding::encode(&id))).await?
+                    HarvisClient::new(context)?
+                        .get_json(&format!("/api/creative/jobs/{}", urlencoding::encode(&id)))
+                        .await?
                 }
             } else {
                 json!({"jobs":read_jobs(context)?,"source":"local_responses"})
@@ -145,13 +157,19 @@ impl<'a> HarmonyClient<'a> {
             "video" => "harvis_video_model",
             _ => return Err(anyhow!("不支持的 Harvis 任务类型：{kind}")),
         };
-        self.settings.get(field).and_then(Value::as_str).map(str::trim)
+        self.settings
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow!("请先在设置中选择 Harvis {kind} 模型"))
     }
 
     async fn response_json(&self, request: reqwest::RequestBuilder) -> Result<Value> {
-        let response = request.bearer_auth(&self.key).send().await
+        let response = request
+            .bearer_auth(&self.key)
+            .send()
+            .await
             .context("Harmony 创作请求失败")?;
         let status = response.status();
         let body = response.text().await?;
@@ -164,21 +182,29 @@ impl<'a> HarmonyClient<'a> {
     async fn submit(&self, kind: &str, request: &Value) -> Result<Value> {
         let body = harvis_responses::generation_body(self.model(kind)?, kind, request)
             .map_err(|error| anyhow!(error))?;
-        let response = self.response_json(self.client.post(format!("{}/responses", self.base_url)).json(&body)).await?;
-        let id = required_string(&response, "id")
-            .context("Harmony 未返回任务 ID，无法跟踪创作进度")?;
+        let response = self
+            .response_json(
+                self.client
+                    .post(format!("{}/responses", self.base_url))
+                    .json(&body),
+            )
+            .await?;
+        let id =
+            required_string(&response, "id").context("Harmony 未返回任务 ID，无法跟踪创作进度")?;
         record_job(self.context, &id, kind)?;
-        let initial = harvis_responses::task_result(&response, kind, &id);
-        if is_terminal(&initial) { return Ok(initial); }
-        self.wait(&id, kind, Duration::from_secs(90)).await
+        Ok(harvis_responses::task_result(&response, kind, &id))
     }
 
     async fn wait(&self, id: &str, kind: &str, max_wait: Duration) -> Result<Value> {
         let started = Instant::now();
         loop {
-            let response = self.response_json(self.client.get(format!(
-                "{}/responses/{}", self.base_url, urlencoding::encode(id)
-            ))).await?;
+            let response = self
+                .response_json(self.client.get(format!(
+                    "{}/responses/{}",
+                    self.base_url,
+                    urlencoding::encode(id)
+                )))
+                .await?;
             let result = harvis_responses::task_result(&response, kind, id);
             if is_terminal(&result) || started.elapsed() >= max_wait {
                 return Ok(result);
@@ -189,7 +215,10 @@ impl<'a> HarmonyClient<'a> {
 }
 
 fn is_terminal(result: &Value) -> bool {
-    matches!(result.get("status").and_then(Value::as_str), Some("succeeded" | "failed"))
+    matches!(
+        result.get("status").and_then(Value::as_str),
+        Some("succeeded" | "failed")
+    )
 }
 
 fn jobs_path(context: &HostContext) -> PathBuf {
@@ -207,7 +236,10 @@ fn read_jobs(context: &HostContext) -> Result<Vec<Value>> {
 fn record_job(context: &HostContext, id: &str, kind: &str) -> Result<()> {
     let mut jobs = read_jobs(context)?;
     jobs.retain(|job| job.get("job_id").and_then(Value::as_str) != Some(id));
-    jobs.insert(0, json!({"job_id":id,"kind":kind,"created_at":chrono::Utc::now().to_rfc3339()}));
+    jobs.insert(
+        0,
+        json!({"job_id":id,"kind":kind,"created_at":chrono::Utc::now().to_rfc3339()}),
+    );
     jobs.truncate(100);
     std::fs::create_dir_all(&context.app_data_dir)?;
     std::fs::write(jobs_path(context), serde_json::to_vec(&jobs)?)?;
@@ -215,8 +247,13 @@ fn record_job(context: &HostContext, id: &str, kind: &str) -> Result<()> {
 }
 
 fn job_kind(context: &HostContext, id: &str) -> Option<String> {
-    read_jobs(context).ok()?.into_iter().find(|job| job.get("job_id").and_then(Value::as_str) == Some(id))?
-        .get("kind")?.as_str().map(str::to_string)
+    read_jobs(context)
+        .ok()?
+        .into_iter()
+        .find(|job| job.get("job_id").and_then(Value::as_str) == Some(id))?
+        .get("kind")?
+        .as_str()
+        .map(str::to_string)
 }
 
 struct HarvisClient<'a> {
@@ -259,7 +296,9 @@ impl<'a> HarvisClient<'a> {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let store = crate::secrets::SecretStore::new(path.parent().context("Missing session directory")?)?;
+            let store = crate::secrets::SecretStore::new(
+                path.parent().context("Missing session directory")?,
+            )?;
             tokio::fs::write(path, store.encrypt_hex(&cookies.join("; "))?).await?;
         }
         Ok(response)
@@ -342,14 +381,19 @@ fn read_session_cookie(path: &Path) -> Result<Option<String>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if value.is_empty() { return Ok(None); }
+    if value.is_empty() {
+        return Ok(None);
+    }
     // A legacy plaintext cookie has a name=value pair; encrypted data is hex.
-    if value.contains('=') { return Ok(Some(value)); }
+    if value.contains('=') {
+        return Ok(Some(value));
+    }
     let directory = path.parent().context("Missing session directory")?;
     if !directory.join(".secret_key").is_file() {
         return Err(anyhow!("登录凭据无法读取，请在客户端重新登录"));
     }
-    let cookie = crate::secrets::SecretStore::new(directory)?.decrypt_hex(&value)
+    let cookie = crate::secrets::SecretStore::new(directory)?
+        .decrypt_hex(&value)
         .map_err(|_| anyhow!("登录凭据无法解密，请在客户端重新登录"))?;
     Ok(Some(cookie))
 }
@@ -366,11 +410,17 @@ mod session_regression_tests {
         let path = dir.join("marketing.session.cookie");
         let expected = "harmony_session=regression-test";
         std::fs::write(&path, store.encrypt_hex(expected).unwrap()).unwrap();
-        assert_eq!(read_session_cookie(&path).unwrap().as_deref(), Some(expected));
+        assert_eq!(
+            read_session_cookie(&path).unwrap().as_deref(),
+            Some(expected)
+        );
         std::fs::write(&path, "invalid-ciphertext").unwrap();
         assert!(read_session_cookie(&path).is_err());
         std::fs::write(&path, expected).unwrap();
-        assert_eq!(read_session_cookie(&path).unwrap().as_deref(), Some(expected));
+        assert_eq!(
+            read_session_cookie(&path).unwrap().as_deref(),
+            Some(expected)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -387,9 +437,14 @@ async fn json_response(response: reqwest::Response) -> Result<Value> {
 
 fn normalize_image_request(input: &Value) -> Result<Value> {
     let prompt = required_string(input, "prompt")?;
-    let legacy_ids = input.get("reference_ids").and_then(Value::as_array).filter(|items| !items.is_empty());
+    let legacy_ids = input
+        .get("reference_ids")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty());
     if legacy_ids.is_some() {
-        return Err(anyhow!("Harmony 创作需要 reference_urls，旧素材 ID 不能直接作为参考图地址"));
+        return Err(anyhow!(
+            "Harmony 创作需要 reference_urls，旧素材 ID 不能直接作为参考图地址"
+        ));
     }
     let references = input
         .get("reference_urls")
@@ -454,7 +509,9 @@ async fn save_harmony_result(context: &HostContext, input: &Value) -> Result<Val
     let id = required_string(input, "job_id")?;
     let destination = required_string(input, "destination")?;
     if destination != "workspace" {
-        return Err(anyhow!("Harmony Responses 成品请先保存到工作区，再通过素材库导入；旧营销任务仍可直接归档"));
+        return Err(anyhow!(
+            "Harmony Responses 成品请先保存到工作区，再通过素材库导入；旧营销任务仍可直接归档"
+        ));
     }
     let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
     if !workspace_root.is_absolute() {
@@ -466,10 +523,15 @@ async fn save_harmony_result(context: &HostContext, input: &Value) -> Result<Val
     let client = HarmonyClient::new(context)?;
     let result = client.wait(&id, &kind, Duration::ZERO).await?;
     if result["status"] != "succeeded" {
-        return Err(anyhow!("Harvis 任务尚未完成：{}（{}）", result["status"], id));
+        return Err(anyhow!(
+            "Harvis 任务尚未完成：{}（{}）",
+            result["status"],
+            id
+        ));
     }
     let result_url = required_string(&result, "result_url")?;
-    let (bytes, media_type, extension) = download_harmony_media(&client.client, &result_url, &kind).await?;
+    let (bytes, media_type, extension) =
+        download_harmony_media(&client.client, &result_url, &kind).await?;
     let directory = workspace_root.join("marketing-assets");
     tokio::fs::create_dir_all(&directory).await?;
     let file_name = safe_file_name(&format!("Harvis-{id}.{extension}"));
@@ -485,7 +547,11 @@ async fn save_harmony_result(context: &HostContext, input: &Value) -> Result<Val
     ],"structuredContent":payload,"isError":false}))
 }
 
-async fn download_harmony_media(client: &reqwest::Client, result_url: &str, kind: &str) -> Result<(Vec<u8>, String, &'static str)> {
+async fn download_harmony_media(
+    client: &reqwest::Client,
+    result_url: &str,
+    kind: &str,
+) -> Result<(Vec<u8>, String, &'static str)> {
     const LIMIT: usize = 256 * 1024 * 1024;
     let url = harvis_responses::media_url(result_url).ok_or_else(|| anyhow!("成品地址无效"))?;
     let (bytes, content_type) = if url.starts_with("data:") {
@@ -493,27 +559,55 @@ async fn download_harmony_media(client: &reqwest::Client, result_url: &str, kind
         if !header.ends_with(";base64") || encoded.len() > LIMIT * 4 / 3 + 4 {
             return Err(anyhow!("成品超过 256MB 大小限制"));
         }
-        (base64::engine::general_purpose::STANDARD.decode(encoded)?, header.trim_start_matches("data:").trim_end_matches(";base64").to_string())
+        (
+            base64::engine::general_purpose::STANDARD.decode(encoded)?,
+            header
+                .trim_start_matches("data:")
+                .trim_end_matches(";base64")
+                .to_string(),
+        )
     } else {
         let mut response = client.get(&url).send().await?.error_for_status()?;
-        let mime = response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
-            .unwrap_or("").split(';').next().unwrap_or("").to_string();
+        let mime = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .to_string();
         if mime == "text/html" || mime == "application/json" {
             return Err(anyhow!("成品链接没有返回媒体文件"));
         }
-        if response.content_length().is_some_and(|size| size > LIMIT as u64) {
+        if response
+            .content_length()
+            .is_some_and(|size| size > LIMIT as u64)
+        {
             return Err(anyhow!("成品超过 256MB 大小限制"));
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len() + chunk.len() > LIMIT { return Err(anyhow!("成品超过 256MB 大小限制")); }
+            if bytes.len() + chunk.len() > LIMIT {
+                return Err(anyhow!("成品超过 256MB 大小限制"));
+            }
             bytes.extend_from_slice(&chunk);
         }
         (bytes, mime)
     };
-    if bytes.is_empty() { return Err(anyhow!("成品内容为空")); }
-    let expected_prefix = match kind { "image" => "image/", "music" => "audio/", "video" => "video/", _ => "" };
-    if !content_type.is_empty() && !content_type.starts_with(expected_prefix) && content_type != "application/octet-stream" {
+    if bytes.is_empty() {
+        return Err(anyhow!("成品内容为空"));
+    }
+    let expected_prefix = match kind {
+        "image" => "image/",
+        "music" => "audio/",
+        "video" => "video/",
+        _ => "",
+    };
+    if !content_type.is_empty()
+        && !content_type.starts_with(expected_prefix)
+        && content_type != "application/octet-stream"
+    {
         return Err(anyhow!("成品链接返回了不匹配的媒体类型：{content_type}"));
     }
     let (default_mime, default_extension) = match kind {
@@ -523,11 +617,24 @@ async fn download_harmony_media(client: &reqwest::Client, result_url: &str, kind
         _ => return Err(anyhow!("不支持的成品类型")),
     };
     let extension = match content_type.as_str() {
-        "image/jpeg" => "jpg", "image/webp" => "webp", "image/png" => "png",
-        "audio/wav" => "wav", "audio/mp4" => "m4a", "audio/mpeg" => "mp3",
-        "video/mp4" => "mp4", _ => default_extension,
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/png" => "png",
+        "audio/wav" => "wav",
+        "audio/mp4" => "m4a",
+        "audio/mpeg" => "mp3",
+        "video/mp4" => "mp4",
+        _ => default_extension,
     };
-    Ok((bytes, if content_type.is_empty() { default_mime.to_string() } else { content_type }, extension))
+    Ok((
+        bytes,
+        if content_type.is_empty() {
+            default_mime.to_string()
+        } else {
+            content_type
+        },
+        extension,
+    ))
 }
 
 async fn save_result(client: &HarvisClient<'_>, input: &Value) -> Result<Value> {
@@ -713,15 +820,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submits_with_the_personal_key_and_selected_model_to_responses() {
-        let root = std::env::temp_dir().join(format!("harvis-mcp-responses-{}", uuid::Uuid::new_v4()));
+    async fn submits_with_personal_key_and_returns_a_resumable_id_without_polling() {
+        let root =
+            std::env::temp_dir().join(format!("harvis-mcp-responses-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let secret = crate::secrets::SecretStore::new(&root).unwrap();
         let key = secret.encrypt_hex("personal-harmony-key").unwrap();
-        std::fs::write(root.join("config.json"), serde_json::to_vec(&json!({
-            "harmony_api_key":key,"harvis_image_model":"gpt-image2-test"
-        })).unwrap()).unwrap();
-        let context = HostContext::new(root.clone(), root.join("workbuddy.db"), None, vec![], String::new());
+        std::fs::write(
+            root.join("config.json"),
+            serde_json::to_vec(&json!({
+                "harmony_api_key":key,"harvis_image_model":"gpt-image2-test"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let context = HostContext::new(
+            root.clone(),
+            root.join("workbuddy.db"),
+            None,
+            vec![],
+            String::new(),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -730,29 +849,43 @@ mod tests {
             let mut buffer = [0u8; 4096];
             loop {
                 let count = socket.read(&mut buffer).await.unwrap();
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
                 request.extend_from_slice(&buffer[..count]);
                 let headers_end = request.windows(4).position(|part| part == b"\r\n\r\n");
                 if let Some(end) = headers_end {
                     let headers = String::from_utf8_lossy(&request[..end]);
-                    let length = headers.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length: ").and_then(|value| value.trim().parse::<usize>().ok())).unwrap_or(0);
-                    if request.len() >= end + 4 + length { break; }
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
                 }
             }
             let request = String::from_utf8(request).unwrap();
             assert!(request.starts_with("POST /v1/responses HTTP/1.1"));
-            assert!(request.to_ascii_lowercase().contains("authorization: bearer personal-harmony-key"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer personal-harmony-key"));
             assert!(request.contains("\"model\":\"gpt-image2-test\""));
             assert!(request.contains("\"background\":true"));
-            let body = r#"{"id":"resp_test","status":"completed","output":[{"image_url":"https://cdn.example/image.png"}]}"#;
+            let body = r#"{"id":"resp_test","status":"queued"}"#;
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         });
         let mut client = HarmonyClient::new(&context).unwrap();
         client.base_url = format!("http://{address}/v1");
         let request = normalize_image_request(&json!({"prompt":"腕表海报"})).unwrap();
         let result = client.submit("image", &request).await.unwrap();
-        assert_eq!(result["status"], "succeeded");
-        assert_eq!(result["result_url"], "https://cdn.example/image.png");
+        assert_eq!(result["status"], "pending");
+        assert_eq!(result["task_id"], "resp_test");
+        assert_eq!(result["job_id"], "resp_test");
         assert_eq!(job_kind(&context, "resp_test").as_deref(), Some("image"));
         server.await.unwrap();
         std::fs::remove_dir_all(root).unwrap();

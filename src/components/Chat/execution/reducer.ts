@@ -311,6 +311,15 @@ export function reduceExecutionEvent(
       return { ...model, state: "awaiting_approval", steps };
     }
 
+    case "permission_resolved": {
+      const index = model.steps.findIndex((step) => step.id === event.request_id);
+      if (index === -1 || model.steps[index].state !== "awaiting_approval") return model;
+      const steps = model.steps.map((step, position) =>
+        position === index ? { ...step, state: "completed" as const, expanded: false, completedAt: now } : step,
+      );
+      return { ...model, state: model.state === "awaiting_approval" ? "running" : model.state, steps };
+    }
+
     case "plan_update": {
       const plan: ExecutionPlanItem[] = event.items.map((item) => ({
         id: item.id,

@@ -40,6 +40,19 @@ struct ActiveCodexTurn {
 struct ApprovalPreferences {
     confirm_shell_commands: bool,
     confirm_file_writes: bool,
+    confirm_mcp_tool_calls: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PendingApprovalKind {
+    Standard,
+    McpTool { allow_for_session: bool },
+}
+
+#[derive(Debug)]
+struct PendingApproval {
+    rpc_id: Value,
+    kind: PendingApprovalKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,7 +318,15 @@ fn artifact_type_from_path(path: &Path) -> &'static str {
 fn is_workspace_artifact_file(path: &Path) -> bool {
     matches!(
         artifact_type_from_path(path),
-        "pdf" | "document" | "presentation" | "spreadsheet" | "image" | "audio" | "video" | "html" | "text"
+        "pdf"
+            | "document"
+            | "presentation"
+            | "spreadsheet"
+            | "image"
+            | "audio"
+            | "video"
+            | "html"
+            | "text"
     )
 }
 
@@ -422,7 +443,7 @@ pub struct CodexRuntimeState {
     executable_override: Option<PathBuf>,
     environment: Arc<Mutex<HashMap<String, String>>>,
     subscribers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkBuddyEvent>>>>,
-    pending_approvals: Arc<Mutex<HashMap<String, Value>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     approval_preferences: Arc<Mutex<HashMap<String, ApprovalPreferences>>>,
     event_adapter: Arc<Mutex<CodexEventAdapter>>,
     active_turns: Arc<Mutex<HashMap<String, ActiveCodexTurn>>>,
@@ -487,7 +508,8 @@ impl CodexRuntimeState {
         } else {
             crate::codex_runtime::config::render_default_providers_toml()
         };
-        let migrated_config = crate::codex_runtime::config::migrate_public_service_config(&existing_config);
+        let migrated_config =
+            crate::codex_runtime::config::migrate_public_service_config(&existing_config);
         let public_url_changed = migrated_config != existing_config;
         existing_config = migrated_config;
         // 升级场景：旧版 codex.toml 只有 DeepSeek 段，需补齐 Harmony 内置 provider 段，
@@ -708,6 +730,7 @@ impl CodexRuntimeState {
             ApprovalPreferences {
                 confirm_shell_commands: options.confirm_shell_commands,
                 confirm_file_writes: options.confirm_file_writes,
+                confirm_mcp_tool_calls: options.confirm_mcp_tool_calls,
             },
         );
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -748,7 +771,7 @@ impl CodexRuntimeState {
         approved: bool,
         for_session: bool,
     ) -> Result<(), CodexRuntimeStateError> {
-        let rpc_id = self
+        let pending = self
             .pending_approvals
             .lock()
             .await
@@ -757,7 +780,10 @@ impl CodexRuntimeState {
         self.ensure_started()
             .await?
             .client()
-            .respond(rpc_id, approval_result(approved, for_session))
+            .respond(
+                pending.rpc_id,
+                pending_approval_result(pending.kind, approved, for_session),
+            )
             .await?;
         Ok(())
     }
@@ -805,6 +831,11 @@ impl CodexRuntimeState {
             while let Some(event) = process.next_event().await {
                 match event {
                     AppServerEvent::Notification(notification) => {
+                        if notification.method == "serverRequest/resolved" {
+                            if let Some(id) = notification.params.get("requestId") {
+                                state.pending_approvals.lock().await.remove(&rpc_id_key(id));
+                            }
+                        }
                         let thread_id = notification
                             .params
                             .get("threadId")
@@ -820,15 +851,37 @@ impl CodexRuntimeState {
                         }
                     }
                     AppServerEvent::ServerRequest(request) => {
+                        let is_mcp_elicitation = request.method == "mcpServer/elicitation/request";
                         let thread_id = request
                             .params
                             .get("threadId")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        if let (Some(thread_id), Some(event)) = (
-                            thread_id,
-                            state.event_adapter.lock().await.adapt_request(&request),
-                        ) {
+                        let adapted = state.event_adapter.lock().await.adapt_request(&request);
+                        if is_mcp_elicitation && (thread_id.is_none() || adapted.is_none()) {
+                            tracing::warn!("Unsupported MCP elicitation; cancelling instead of leaving the turn pending");
+                            if let Err(error) = process
+                                .client()
+                                .respond(
+                                    request.id,
+                                    pending_approval_result(
+                                        PendingApprovalKind::McpTool {
+                                            allow_for_session: false,
+                                        },
+                                        false,
+                                        false,
+                                    ),
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    "Failed to cancel unsupported MCP elicitation: {}",
+                                    error
+                                );
+                            }
+                            continue;
+                        }
+                        if let (Some(thread_id), Some(event)) = (thread_id, adapted) {
                             let preferences = state
                                 .approval_preferences
                                 .lock()
@@ -838,11 +891,25 @@ impl CodexRuntimeState {
                                 .unwrap_or(ApprovalPreferences {
                                     confirm_shell_commands: true,
                                     confirm_file_writes: true,
+                                    confirm_mcp_tool_calls: true,
                                 });
+                            let kind = if is_mcp_elicitation {
+                                PendingApprovalKind::McpTool {
+                                    allow_for_session: matches!(
+                                        &event,
+                                        WorkBuddyEvent::PermissionRequest {
+                                            allow_for_session: true,
+                                            ..
+                                        }
+                                    ),
+                                }
+                            } else {
+                                PendingApprovalKind::Standard
+                            };
                             if should_auto_approve(&request.method, preferences) {
                                 if let Err(error) = process
                                     .client()
-                                    .respond(request.id, approval_result(true, false))
+                                    .respond(request.id, pending_approval_result(kind, true, false))
                                     .await
                                 {
                                     tracing::warn!(
@@ -853,12 +920,38 @@ impl CodexRuntimeState {
                                 continue;
                             }
                             let request_id = rpc_id_key(&request.id);
-                            state
-                                .pending_approvals
-                                .lock()
-                                .await
-                                .insert(request_id, request.id);
+                            state.pending_approvals.lock().await.insert(
+                                request_id.clone(),
+                                PendingApproval {
+                                    rpc_id: request.id,
+                                    kind,
+                                },
+                            );
                             state.dispatch_events(&thread_id, vec![event]).await;
+                            if is_mcp_elicitation {
+                                let timeout_state = state.clone();
+                                let timeout_process = Arc::clone(&process);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                                    let pending = timeout_state
+                                        .pending_approvals
+                                        .lock()
+                                        .await
+                                        .remove(&request_id);
+                                    if let Some(pending) = pending {
+                                        tracing::warn!(
+                                            "MCP tool approval expired without a response"
+                                        );
+                                        let _ = timeout_process
+                                            .client()
+                                            .respond(
+                                                pending.rpc_id,
+                                                pending_approval_result(pending.kind, false, false),
+                                            )
+                                            .await;
+                                    }
+                                });
+                            }
                         }
                     }
                     AppServerEvent::ProtocolError(error)
@@ -972,7 +1065,23 @@ fn should_auto_approve(method: &str, preferences: ApprovalPreferences) -> bool {
     match method {
         "item/commandExecution/requestApproval" => !preferences.confirm_shell_commands,
         "item/fileChange/requestApproval" => !preferences.confirm_file_writes,
+        "mcpServer/elicitation/request" => !preferences.confirm_mcp_tool_calls,
         _ => false,
+    }
+}
+
+fn pending_approval_result(kind: PendingApprovalKind, approved: bool, for_session: bool) -> Value {
+    match kind {
+        PendingApprovalKind::Standard => approval_result(approved, for_session),
+        PendingApprovalKind::McpTool { allow_for_session } => serde_json::json!({
+            "action": if approved { "accept" } else { "decline" },
+            "content": if approved { serde_json::json!({}) } else { Value::Null },
+            "_meta": if approved && for_session && allow_for_session {
+                serde_json::json!({ "persist": "session" })
+            } else {
+                Value::Null
+            },
+        }),
     }
 }
 
@@ -1027,7 +1136,9 @@ fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
         None
     };
     #[cfg(windows)]
-    let desktop = tool_enabled("computer_use").then(|| bundled("flaui-mcp/FlaUI.Mcp.exe")).flatten();
+    let desktop = tool_enabled("computer_use")
+        .then(|| bundled("flaui-mcp/FlaUI.Mcp.exe"))
+        .flatten();
     #[cfg(not(windows))]
     let desktop: Option<PathBuf> = None;
     let headless = settings
@@ -1056,13 +1167,15 @@ fn bundled_automation_candidates_from(current_exe: &Path, relative: &str) -> Vec
             .join(relative),
     ];
     if relative == "playwright-mcp/cli.js" {
-        candidates.push(Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("node_modules")
-            .join("@playwright")
-            .join("mcp")
-            .join("cli.js"));
+        candidates.push(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("node_modules")
+                .join("@playwright")
+                .join("mcp")
+                .join("cli.js"),
+        );
     }
     candidates
 }
@@ -1340,7 +1453,9 @@ fn validated_message_context(raw: Option<&str>) -> Option<String> {
         _ => return None,
     };
     if items.len() > MAX_MESSAGE_CONTEXT_ITEMS
-        || !items.iter().all(|item| item.is_object() && valid_context_value(item, 0))
+        || !items
+            .iter()
+            .all(|item| item.is_object() && valid_context_value(item, 0))
     {
         return None;
     }
@@ -1372,7 +1487,11 @@ fn valid_context_value(value: &Value, depth: usize) -> bool {
 }
 
 fn annotation_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
-    object.get(key)?.as_str().map(str::trim).filter(|value| !value.is_empty())
+    object
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn normalized_coordinate(object: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
@@ -1383,15 +1502,21 @@ fn normalized_coordinate(object: &serde_json::Map<String, Value>, key: &str) -> 
 }
 
 fn valid_annotation_item(value: &Value) -> bool {
-    let Some(object) = value.as_object() else { return false; };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
     if !matches!(annotation_string(object, "id"), Some(value) if value.chars().count() <= 128) {
         return false;
     }
-    let Some(comment) = annotation_string(object, "comment") else { return false; };
+    let Some(comment) = annotation_string(object, "comment") else {
+        return false;
+    };
     if comment.chars().count() > MAX_ANNOTATION_COMMENT_CHARS {
         return false;
     }
-    let Some(target) = object.get("target").and_then(Value::as_object) else { return false; };
+    let Some(target) = object.get("target").and_then(Value::as_object) else {
+        return false;
+    };
     let target_type = annotation_string(target, "type");
     let target_uri = target
         .get("uri")
@@ -1406,7 +1531,9 @@ fn valid_annotation_item(value: &Value) -> bool {
     {
         return false;
     }
-    let Some(selection) = object.get("selection").and_then(Value::as_object) else { return false; };
+    let Some(selection) = object.get("selection").and_then(Value::as_object) else {
+        return false;
+    };
     match annotation_string(selection, "type") {
         Some("point") => {
             normalized_coordinate(selection, "x").is_some()
@@ -1418,7 +1545,9 @@ fn valid_annotation_item(value: &Value) -> bool {
                 normalized_coordinate(selection, "y"),
                 normalized_coordinate(selection, "width"),
                 normalized_coordinate(selection, "height"),
-            ) else { return false; };
+            ) else {
+                return false;
+            };
             width > 0.0 && height > 0.0 && x + width <= 1.000_001 && y + height <= 1.000_001
         }
         Some("text_range") => {
@@ -1432,39 +1561,44 @@ fn valid_annotation_item(value: &Value) -> bool {
                     if end >= start && start_line >= 1 && end_line >= start_line
                         && excerpt.chars().count() <= MAX_ANNOTATION_EXCERPT_CHARS)
         }
-        Some("page") => target_type == Some("browser")
-            && selection
-            .get("url")
-            .and_then(Value::as_str)
-            .is_some_and(|url| {
-                url.starts_with("http://")
-                    || url.starts_with("https://")
-            })
-            && selection
-                .get("url")
-                .and_then(Value::as_str)
-            .is_some_and(|url| url.chars().count() <= MAX_ANNOTATION_URI_CHARS)
-            && selection.get("url").and_then(Value::as_str) == target_uri,
+        Some("page") => {
+            target_type == Some("browser")
+                && selection
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.starts_with("http://") || url.starts_with("https://"))
+                && selection
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.chars().count() <= MAX_ANNOTATION_URI_CHARS)
+                && selection.get("url").and_then(Value::as_str) == target_uri
+        }
         _ => false,
     }
 }
 
 fn validated_annotation_context(items: Option<&[Value]>) -> Result<Option<String>, String> {
-    let Some(items) = items.filter(|items| !items.is_empty()) else { return Ok(None); };
+    let Some(items) = items.filter(|items| !items.is_empty()) else {
+        return Ok(None);
+    };
     if items.len() > MAX_ANNOTATION_ITEMS {
         return Err(format!("单轮最多添加 {MAX_ANNOTATION_ITEMS} 条批注。"));
     }
     if !items.iter().all(valid_annotation_item) {
         return Err("批注结构无效或内容超出限制，请检查选区和修改要求。".to_string());
     }
-    let serialized = serde_json::to_string(items).map_err(|error| format!("批注序列化失败：{error}"))?;
+    let serialized =
+        serde_json::to_string(items).map_err(|error| format!("批注序列化失败：{error}"))?;
     if serialized.len() > MAX_MESSAGE_CONTEXT_BYTES {
         return Err("批注内容过长，请精简后重试。".to_string());
     }
     Ok(Some(serialized))
 }
 
-fn merge_message_context(user_context: Option<String>, annotation_context: Option<String>) -> Option<String> {
+fn merge_message_context(
+    user_context: Option<String>,
+    annotation_context: Option<String>,
+) -> Option<String> {
     match (user_context, annotation_context) {
         (None, None) => None,
         (Some(user), None) => Some(user),
@@ -1475,7 +1609,8 @@ fn merge_message_context(user_context: Option<String>, annotation_context: Optio
             serde_json::to_string(&serde_json::json!({
                 "userContext": user,
                 "annotations": annotations,
-            })).ok()
+            }))
+            .ok()
         }
     }
 }
@@ -1665,10 +1800,8 @@ pub async fn codex_chat_send(
     let visible_content = content.clone();
     let user_context_json = validated_message_context(user_context.as_deref());
     let annotation_context_json = validated_annotation_context(comment_contexts.as_deref())?;
-    let message_context_json = merge_message_context(
-        user_context_json,
-        annotation_context_json.clone(),
-    );
+    let message_context_json =
+        merge_message_context(user_context_json, annotation_context_json.clone());
     let content = compose_turn_content(
         content,
         explicit_skills,
@@ -1698,6 +1831,7 @@ pub async fn codex_chat_send(
         },
         confirm_shell_commands: settings.confirm_shell_commands,
         confirm_file_writes: settings.confirm_file_writes,
+        confirm_mcp_tool_calls: settings.confirm_mcp_tool_calls,
         developer_instructions: Some(developer_instructions),
         attachments,
     };
@@ -1711,7 +1845,7 @@ pub async fn codex_chat_send(
             &visible_content,
             message_context_json.as_deref(),
         )
-            .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?;
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
     }
@@ -1889,7 +2023,8 @@ pub async fn codex_chat_send(
                             .ok()
                         };
                         if let Some(artifact) = artifact {
-                            let _ = app.emit(&format!("session_artifacts_updated_{session_id}"), artifact);
+                            let _ = app
+                                .emit(&format!("session_artifacts_updated_{session_id}"), artifact);
                         }
                     }
                 }
@@ -2055,15 +2190,16 @@ mod tests {
         let report_path = workspace.join("report.pdf");
         fs::write(&report_path, b"%PDF-1.7").expect("write report");
 
-        let artifacts = discover_workspace_artifacts(
-            workspace.to_str().expect("workspace path"),
-            &before,
-        );
+        let artifacts =
+            discover_workspace_artifacts(workspace.to_str().expect("workspace path"), &before);
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].name, "report.pdf");
         assert_eq!(artifacts[0].artifact_type, "pdf");
-        assert_eq!(normalize_artifact_uri(&artifacts[0].uri), normalize_artifact_uri(report_path.to_str().expect("report path")));
+        assert_eq!(
+            normalize_artifact_uri(&artifacts[0].uri),
+            normalize_artifact_uri(report_path.to_str().expect("report path"))
+        );
         fs::remove_dir_all(&workspace).expect("remove temp workspace");
     }
 
@@ -2129,6 +2265,7 @@ mod tests {
         let preferences = ApprovalPreferences {
             confirm_shell_commands: false,
             confirm_file_writes: true,
+            confirm_mcp_tool_calls: true,
         };
         assert!(should_auto_approve(
             "item/commandExecution/requestApproval",
@@ -2138,6 +2275,42 @@ mod tests {
             "item/fileChange/requestApproval",
             preferences
         ));
+        assert!(!should_auto_approve(
+            "mcpServer/elicitation/request",
+            preferences
+        ));
+        assert!(should_auto_approve(
+            "mcpServer/elicitation/request",
+            ApprovalPreferences {
+                confirm_mcp_tool_calls: false,
+                ..preferences
+            },
+        ));
+    }
+
+    #[test]
+    fn mcp_tool_approval_uses_elicitation_response_contract() {
+        let kind = PendingApprovalKind::McpTool {
+            allow_for_session: true,
+        };
+        assert_eq!(
+            pending_approval_result(kind, true, false),
+            serde_json::json!({
+                "action":"accept", "content":{}, "_meta":null
+            })
+        );
+        assert_eq!(
+            pending_approval_result(kind, true, true),
+            serde_json::json!({
+                "action":"accept", "content":{}, "_meta":{"persist":"session"}
+            })
+        );
+        assert_eq!(
+            pending_approval_result(kind, false, false),
+            serde_json::json!({
+                "action":"decline", "content":null, "_meta":null
+            })
+        );
     }
 
     #[test]
@@ -2314,7 +2487,10 @@ mod tests {
 
         let diagnostic = state.diagnostic(false).await.expect("diagnostic");
         assert!(!diagnostic.running);
-        assert_eq!(diagnostic.display_version, crate::codex_runtime::config::DISPLAY_VERSION);
+        assert_eq!(
+            diagnostic.display_version,
+            crate::codex_runtime::config::DISPLAY_VERSION
+        );
         assert_eq!(diagnostic.target_codex_version, "0.149.0");
         assert_eq!(diagnostic.mapped_sessions, 0);
 

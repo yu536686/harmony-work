@@ -126,6 +126,9 @@ describe("TurnExecutionModel 聚合", () => {
 
     expect(waiting.state).toBe("awaiting_approval");
     expect(waiting.steps.some((step) => step.id === "perm-1" && step.state === "awaiting_approval")).toBe(true);
+    const resolved = reduce(waiting, { type: "permission_resolved", request_id: "perm-1" });
+    expect(resolved.state).toBe("running");
+    expect(resolved.steps.find((step) => step.id === "perm-1")?.state).toBe("completed");
   });
 
   it("done 结束运行状态并停止摘要流式标记", () => {

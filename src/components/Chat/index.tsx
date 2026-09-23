@@ -669,6 +669,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     toolName: string;
     toolInput: any;
     description: string;
+    allowForSession: boolean;
   } | null>(null);
 
   // Pending interactive UI cards from chat_ui (per session; cleared on agent done)
@@ -1399,7 +1400,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             toolName: event.tool_name,
             toolInput: event.tool_input,
             description: event.description,
+            allowForSession: event.allow_for_session ?? false,
           });
+          break;
+        case "permission_resolved":
+          setPermissionRequest((current) => current?.requestId === event.request_id ? null : current);
           break;
         case "interactive_ui":
           setInteractiveCardsBySession((all) => ({
@@ -1460,6 +1465,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           // freezeStreaming and getMessages always target the correct session, even if
           // the user switched to a different session while the agent was running.
           console.log('[Chat] agent done event, boundSid=', boundSessionId);
+          setPermissionRequest(null);
           setInteractiveCardsBySession((all) => ({
             ...all,
             [boundSessionId]: {},
@@ -1512,6 +1518,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             .catch(() => {});
           break;
         case "cancelled":
+          setPermissionRequest(null);
           setInteractiveCardsBySession((all) => ({
             ...all,
             [boundSessionId]: {},
@@ -2428,17 +2435,18 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (displaySessionId) dismissReview(displaySessionId);
   }, [displaySessionId, dismissReview]);
 
-  const handlePermissionResponse = useCallback(async (approved: boolean) => {
+  const handlePermissionResponse = useCallback(async (approved: boolean, forSession = false) => {
     if (!permissionRequest) return;
     try {
       await invoke("respond_permission", {
         requestId: permissionRequest.requestId,
         approved,
+        forSession,
       });
+      setPermissionRequest(null);
     } catch (e) {
       setSendError(`Permission response failed: ${e}`);
     }
-    setPermissionRequest(null);
   }, [permissionRequest]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -3120,6 +3128,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               >
                 {t("chat.permissionAllow")}
               </button>
+              {permissionRequest.allowForSession && (
+                <button className="btn-allow" onClick={() => handlePermissionResponse(true, true)}>
+                  {t("chat.permissionAllowSession")}
+                </button>
+              )}
             </div>
           </div>
         </div>

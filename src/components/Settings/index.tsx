@@ -86,6 +86,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   context_window: 128000,
   confirm_shell_commands: false,
   confirm_file_writes: true,
+  confirm_mcp_tool_calls: true,
   browser_headless: true,
   feishu_app_id: "",
   feishu_app_secret: "",
@@ -1506,6 +1507,13 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{t("settings.confirmFileWriteDesc")}</div>
             </div>
             <input type="checkbox" checked={form.confirm_file_writes ?? true} onChange={(e) => update("confirm_file_writes", e.target.checked)} />
+          </div>
+          <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.confirmMcpToolCalls")}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{t("settings.confirmMcpToolCallsDesc")}</div>
+            </div>
+            <input type="checkbox" checked={form.confirm_mcp_tool_calls ?? true} onChange={(e) => update("confirm_mcp_tool_calls", e.target.checked)} />
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>

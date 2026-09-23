@@ -41,6 +41,7 @@ export interface Settings {
   context_window: number;
   confirm_shell_commands: boolean;
   confirm_file_writes: boolean;
+  confirm_mcp_tool_calls: boolean;
   browser_headless: boolean;
   is_configured?: boolean;
   // IM Gateway

@@ -33,7 +33,6 @@ impl CodexPermissionMode {
             Self::FullAccess => "never",
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +53,7 @@ pub struct CodexTurnOptions {
     pub sandbox_mode: CodexSandboxMode,
     pub confirm_shell_commands: bool,
     pub confirm_file_writes: bool,
+    pub confirm_mcp_tool_calls: bool,
     pub developer_instructions: Option<String>,
     pub attachments: Vec<CodexAttachment>,
 }
@@ -147,6 +147,7 @@ mod tests {
             },
             confirm_shell_commands: false,
             confirm_file_writes: true,
+            confirm_mcp_tool_calls: true,
             developer_instructions: Some("你是小亨，运行于 Harmony Work".to_string()),
             attachments: vec![
                 CodexAttachment {

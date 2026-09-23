@@ -301,6 +301,9 @@ pub struct Settings {
     /// Whether to show permission dialogs for file writes
     #[serde(default = "default_true")]
     pub confirm_file_writes: bool,
+    /// Ask before Codex invokes MCP tools, including computer use and Harvis.
+    #[serde(default = "default_true")]
+    pub confirm_mcp_tool_calls: bool,
     /// Run browser in headless mode (invisible). false = user can see the browser window.
     #[serde(default = "default_true")]
     pub browser_headless: bool,
@@ -737,7 +740,9 @@ fn sanitize_workspace_root(settings: &mut Settings) {
     let stale = std::path::Path::new(&settings.workspace_root)
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("9xbot") || name.eq_ignore_ascii_case("9x-bot"));
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("9xbot") || name.eq_ignore_ascii_case("9x-bot")
+        });
     if settings.workspace_root.trim().is_empty() || stale {
         settings.workspace_root = default_workspace_path();
     }
@@ -797,6 +802,7 @@ impl Default for Settings {
             available_models: vec![],
             confirm_shell_commands: false,
             confirm_file_writes: true,
+            confirm_mcp_tool_calls: true,
             browser_headless: true,
             policy_mode: default_policy_mode(),
             tool_rate_limit_per_minute: default_tool_rate_limit(),
@@ -1184,12 +1190,21 @@ mod tests {
                 {"id":"custom", "label":"Custom", "provider":"custom", "model":"test", "base_url":"https://example.com:13001/v1"}
             ]
         })).unwrap();
-        assert_eq!(settings.custom_base_url, crate::service_urls::HARMONY_API_BASE);
-        assert_eq!(settings.llm_providers[0].base_url, crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(
+            settings.custom_base_url,
+            crate::service_urls::HARMONY_API_BASE
+        );
+        assert_eq!(
+            settings.llm_providers[0].base_url,
+            crate::service_urls::HARMONY_API_BASE
+        );
         assert_eq!(settings.harmony_api_key, "test-account-key");
         assert_eq!(settings.llm_providers[0].api_key, "test-provider-key");
         assert_eq!(settings.vision_base_url, "http://192.168.11.29:13000/v1");
-        assert_eq!(settings.llm_providers[1].base_url, "https://example.com:13001/v1");
+        assert_eq!(
+            settings.llm_providers[1].base_url,
+            "https://example.com:13001/v1"
+        );
     }
 
     #[test]
@@ -1204,20 +1219,39 @@ mod tests {
             name: "Company MCP".into(),
             transport: "http".into(),
             url: "http://www.harmonywatch.cn:8090/mcp".into(),
-            headers: std::collections::HashMap::from([("Authorization".into(), "Bearer test-mcp-key".into())]),
+            headers: std::collections::HashMap::from([(
+                "Authorization".into(),
+                "Bearer test-mcp-key".into(),
+            )]),
             ..Default::default()
         }];
         std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
         let mut loaded = Settings::load(&path).unwrap();
-        assert_eq!(loaded.custom_base_url, crate::service_urls::HARMONY_API_BASE);
+        assert_eq!(
+            loaded.custom_base_url,
+            crate::service_urls::HARMONY_API_BASE
+        );
         assert_eq!(loaded.harmony_api_key, original.harmony_api_key);
-        assert_eq!(loaded.mcp_servers[0].url, "https://portal.harmonywatch.cn/mcp");
-        assert_eq!(loaded.mcp_servers[0].headers, original.mcp_servers[0].headers);
+        assert_eq!(
+            loaded.mcp_servers[0].url,
+            "https://portal.harmonywatch.cn/mcp"
+        );
+        assert_eq!(
+            loaded.mcp_servers[0].headers,
+            original.mcp_servers[0].headers
+        );
         loaded.custom_base_url = original.custom_base_url;
         loaded.save().unwrap();
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved["custom_base_url"], crate::service_urls::HARMONY_API_BASE);
-        assert_eq!(Settings::load(&path).unwrap().harmony_api_key, original.harmony_api_key);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved["custom_base_url"],
+            crate::service_urls::HARMONY_API_BASE
+        );
+        assert_eq!(
+            Settings::load(&path).unwrap().harmony_api_key,
+            original.harmony_api_key
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1236,7 +1270,10 @@ mod tests {
         let mut settings = Settings::default();
         settings.workspace_root = "C:\\Users\\one\\OneDrive\\HarmonyProjects".into();
         sanitize_workspace_root(&mut settings);
-        assert_eq!(settings.workspace_root, "C:\\Users\\one\\OneDrive\\HarmonyProjects");
+        assert_eq!(
+            settings.workspace_root,
+            "C:\\Users\\one\\OneDrive\\HarmonyProjects"
+        );
     }
 
     #[test]

@@ -120,6 +120,7 @@ const CATEGORY_DEFINITIONS: &[CategoryDefinition] = &[
             "language",
             "confirm_shell_commands",
             "confirm_file_writes",
+            "confirm_mcp_tool_calls",
             "policy_mode",
             "tool_rate_limit_per_minute",
             "allow_multiple_instances",

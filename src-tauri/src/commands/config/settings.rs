@@ -143,6 +143,9 @@ pub async fn save_settings(
     if let Some(v) = updates["confirm_file_writes"].as_bool() {
         settings.confirm_file_writes = v;
     }
+    if let Some(v) = updates["confirm_mcp_tool_calls"].as_bool() {
+        settings.confirm_mcp_tool_calls = v;
+    }
     if let Some(v) = updates["browser_headless"].as_bool() {
         settings.browser_headless = v;
     }
@@ -699,7 +702,9 @@ fn normalize_model_base_url(provider: &str, base_url: Option<&str>) -> Result<St
     if raw.trim().is_empty() {
         return Err("Base URL is required for custom model providers".into());
     }
-    Ok(crate::service_urls::migrate_public_service_url(raw).trim_end_matches('/').to_string())
+    Ok(crate::service_urls::migrate_public_service_url(raw)
+        .trim_end_matches('/')
+        .to_string())
 }
 
 /// 依据模型 ID 关键字识别模型种类，用于 Harvis 创作模型分类。

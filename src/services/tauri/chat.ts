@@ -126,7 +126,8 @@ export type AgentEventType =
   | { type: "tool_output_delta"; id: string; delta: string }
   | { type: "tool_end"; id: string; name: string; result: string; is_error: boolean }
   | { type: "message_commit"; message: unknown }
-  | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
+  | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string; allow_for_session?: boolean }
+  | { type: "permission_resolved"; request_id: string }
   | { type: "interactive_ui"; request_id: string; ui_definition: unknown }
   | { type: "interactive_ui_patch"; request_id: string; patch: unknown }
   | { type: "interactive_ui_listen"; request_id: string }

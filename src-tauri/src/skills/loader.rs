@@ -518,7 +518,7 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        const HARVIS_SKILL_VERSION: &str = "2.1";
+        const HARVIS_SKILL_VERSION: &str = "2.2";
         if let Ok(existing) = std::fs::read_to_string(&skill_file) {
             if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
                 return Ok(());
@@ -530,7 +530,7 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "2.1"
+version: "2.2"
 tools:
   - harvis_image_generate
   - harvis_music_generate
@@ -572,7 +572,7 @@ triggers:
 
 ## 进度与交付
 
-Harvis 工具使用客户端已配置的个人 Harmony API Key 和对应创作模型。生成工具会有界等待；若返回 `pending` 或 `processing`，用同一 `job_id` 调用 `harvis_job_status`，每次查询本身会等待一段时间。最多继续查询 3 次；仍未完成时向用户说明任务仍在生成并保留 `job_id`，不要无限轮询或重新提交以免重复计费。
+Harvis 工具使用客户端已配置的个人 Harmony API Key 和对应创作模型。生成工具提交后立即返回 `job_id`；用同一 `job_id` 调用 `harvis_job_status` 查询进度，每次查询最多等待 20 秒。最多继续查询 3 次；仍未完成时向用户说明任务仍在生成并保留 `job_id`，不要无限轮询或重新提交以免重复计费。
 
 任务成功后在回复中嵌入图片成品的 Markdown 图片链接（音乐则给播放/下载链接），并调用 `harvis_save_result` 选择 `workspace`，将成品存到当前会话工作区的 `marketing-assets` 目录，给出本地路径。新的 Harmony Responses 任务不能直接用 `material_library` 归档；如需进入素材库，先保存到工作区再由用户导入。
 "#,
