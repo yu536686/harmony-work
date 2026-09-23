@@ -18,6 +18,9 @@ installer/WorkBuddyBootstrapper/bin/
 installer/WorkBuddyBootstrapper/obj/
 src-tauri/resources/codex/
 src-tauri/resources/workbuddy-mcp-host/
+src-tauri/resources/playwright-mcp/
+src-tauri/resources/flaui-mcp/
+.playwright-mcp/
 release/
 .package-target/
 .verify-target/

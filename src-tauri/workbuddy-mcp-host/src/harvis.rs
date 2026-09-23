@@ -1,9 +1,11 @@
-use crate::HostContext;
+use crate::{harvis_responses, service_urls::HARMONY_API_BASE, HostContext};
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::time::Instant;
 
 const HARVIS_TIMEOUT_SECS: u64 = 180;
 
@@ -21,21 +23,22 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name":"harvis_image_generate",
-            "description":"Generate a new image, poster, invitation, campaign visual, or image-to-image variation with Harvis GPT Image2. Text-to-image requires only a prompt; reference_ids are optional and only enable image-to-image.",
+            "description":"Generate an image through the user's Harmony API key. The call waits for a bounded period and returns a resumable task ID if the result is still processing. Text-to-image requires only a prompt; reference_urls enable image-to-image.",
             "inputSchema":{
                 "type":"object","properties":{
                     "prompt":{"type":"string","minLength":1},
                     "canvas_preset":{"type":"string","enum":["television","vertical","store-poster","phone-fullscreen","custom"],"default":"vertical"},
                     "output_width":{"type":"integer","minimum":256,"maximum":4096},
                     "output_height":{"type":"integer","minimum":256,"maximum":4096},
-                    "reference_ids":{"type":"array","items":{"type":"string"}}
+                    "reference_urls":{"type":"array","items":{"type":"string"}},
+                    "reference_ids":{"type":"array","items":{"type":"string"},"description":"Legacy portal reference IDs are not usable with Harmony Responses; provide public reference_urls instead."}
                 },"required":["prompt"],"additionalProperties":false
             },
             "annotations":{"title":"Harvis 图片生成","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":true}
         }),
         json!({
             "name":"harvis_music_generate",
-            "description":"Create instrumental music or BGM with Harvis Suno V5.5 from a finished music-generation prompt.",
+            "description":"Create instrumental music or BGM through the user's Harmony API key. Waits briefly for completion and returns a resumable task ID when still processing.",
             "inputSchema":{
                 "type":"object","properties":{
                     "prompt":{"type":"string","minLength":1},"title":{"type":"string"},
@@ -47,18 +50,19 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name":"harvis_job_status",
-            "description":"Read a Harvis creative job's progress and completed result metadata. Omit job_id to list recent jobs.",
-            "inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false},
+            "description":"Wait for a Harvis creative task and return progress or completed media. Re-call with the same job_id while processing. Omit job_id to list recent local submissions.",
+            "inputSchema":{"type":"object","properties":{"job_id":{"type":"string"},"kind":{"type":"string","enum":["image","music","video"]}},"additionalProperties":false},
             "annotations":{"title":"查询 Harvis 任务","readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}
         }),
         json!({
             "name":"harvis_save_result",
-            "description":"Save completed Harvis image or music results into the active workspace, or archive them into the material library. Use workspace to make files available to the current conversation.",
+            "description":"Save completed Harvis image or music results into the active workspace. Material-library archiving is supported only for legacy portal jobs. Use workspace to make files available to the current conversation.",
             "inputSchema":{
                 "type":"object","properties":{
                     "job_id":{"type":"string","minLength":1},
                     "destination":{"type":"string","enum":["workspace","material_library"]},
-                    "workspace_root":{"type":"string","description":"Required for workspace destination; absolute active workspace path."}
+                    "workspace_root":{"type":"string","description":"Required for workspace destination; absolute active workspace path."},
+                    "kind":{"type":"string","enum":["image","music","video"]}
                 },"required":["job_id","destination"],"additionalProperties":false
             },
             "annotations":{"title":"保存 Harvis 成品","readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}
@@ -67,37 +71,152 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
 }
 
 pub(crate) async fn call(context: &HostContext, name: &str, arguments: &Value) -> Result<Value> {
-    let client = HarvisClient::new(context)?;
     match name {
         "harvis_image_generate" => {
             let request = normalize_image_request(arguments)?;
-            mcp_success(
-                client
-                    .post_json("/api/creative/image/jobs", request)
-                    .await?,
-            )
+            mcp_success(HarmonyClient::new(context)?.submit("image", &request).await?)
         }
         "harvis_music_generate" => {
             let request = normalize_music_request(arguments)?;
-            mcp_success(
-                client
-                    .post_json("/api/creative/music/jobs", request)
-                    .await?,
-            )
+            mcp_success(HarmonyClient::new(context)?.submit("music", &request).await?)
         }
         "harvis_job_status" => {
             let payload = if let Some(id) = optional_string(arguments, "job_id") {
-                client
-                    .get_json(&format!("/api/creative/jobs/{}", urlencoding::encode(&id)))
-                    .await?
+                if id.starts_with("resp_") {
+                    let kind = optional_string(arguments, "kind")
+                        .or_else(|| job_kind(context, &id))
+                        .ok_or_else(|| anyhow!("请提供任务类型 kind（image 或 music）"))?;
+                    HarmonyClient::new(context)?.wait(&id, &kind, Duration::from_secs(70)).await?
+                } else {
+                    HarvisClient::new(context)?.get_json(&format!("/api/creative/jobs/{}", urlencoding::encode(&id))).await?
+                }
             } else {
-                client.get_json("/api/creative/jobs").await?
+                json!({"jobs":read_jobs(context)?,"source":"local_responses"})
             };
             mcp_success(payload)
         }
-        "harvis_save_result" => save_result(&client, arguments).await,
+        "harvis_save_result" => {
+            let id = required_string(arguments, "job_id")?;
+            if id.starts_with("resp_") {
+                save_harmony_result(context, arguments).await
+            } else {
+                save_result(&HarvisClient::new(context)?, arguments).await
+            }
+        }
         _ => Err(anyhow!("unknown Harvis tool: {name}")),
     }
+}
+
+struct HarmonyClient<'a> {
+    context: &'a HostContext,
+    client: reqwest::Client,
+    key: String,
+    settings: Value,
+    base_url: String,
+}
+
+impl<'a> HarmonyClient<'a> {
+    fn new(context: &'a HostContext) -> Result<Self> {
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(context.app_data_dir.join("config.json"))
+                .context("无法读取 Harmony 配置，请先在客户端完成设置")?,
+        )?;
+        let encrypted = required_string(&settings, "harmony_api_key")
+            .map_err(|_| anyhow!("请先在设置中配置 Harmony API Key"))?;
+        let store = crate::secrets::SecretStore::new(&context.app_data_dir)?;
+        let key = store.decrypt_hex(&encrypted).unwrap_or(encrypted);
+        Ok(Self {
+            context,
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(30))
+                .user_agent("Harmony-Work-MCP/1.0")
+                .build()?,
+            key,
+            settings,
+            base_url: HARMONY_API_BASE.to_string(),
+        })
+    }
+
+    fn model(&self, kind: &str) -> Result<&str> {
+        let field = match kind {
+            "image" => "harvis_image_model",
+            "music" => "harvis_music_model",
+            "video" => "harvis_video_model",
+            _ => return Err(anyhow!("不支持的 Harvis 任务类型：{kind}")),
+        };
+        self.settings.get(field).and_then(Value::as_str).map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("请先在设置中选择 Harvis {kind} 模型"))
+    }
+
+    async fn response_json(&self, request: reqwest::RequestBuilder) -> Result<Value> {
+        let response = request.bearer_auth(&self.key).send().await
+            .context("Harmony 创作请求失败")?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow!("Harmony 创作请求失败（{status}）：{body}"));
+        }
+        serde_json::from_str(&body).context("Harmony 创作响应不是有效 JSON")
+    }
+
+    async fn submit(&self, kind: &str, request: &Value) -> Result<Value> {
+        let body = harvis_responses::generation_body(self.model(kind)?, kind, request)
+            .map_err(|error| anyhow!(error))?;
+        let response = self.response_json(self.client.post(format!("{}/responses", self.base_url)).json(&body)).await?;
+        let id = required_string(&response, "id")
+            .context("Harmony 未返回任务 ID，无法跟踪创作进度")?;
+        record_job(self.context, &id, kind)?;
+        let initial = harvis_responses::task_result(&response, kind, &id);
+        if is_terminal(&initial) { return Ok(initial); }
+        self.wait(&id, kind, Duration::from_secs(90)).await
+    }
+
+    async fn wait(&self, id: &str, kind: &str, max_wait: Duration) -> Result<Value> {
+        let started = Instant::now();
+        loop {
+            let response = self.response_json(self.client.get(format!(
+                "{}/responses/{}", self.base_url, urlencoding::encode(id)
+            ))).await?;
+            let result = harvis_responses::task_result(&response, kind, id);
+            if is_terminal(&result) || started.elapsed() >= max_wait {
+                return Ok(result);
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
+}
+
+fn is_terminal(result: &Value) -> bool {
+    matches!(result.get("status").and_then(Value::as_str), Some("succeeded" | "failed"))
+}
+
+fn jobs_path(context: &HostContext) -> PathBuf {
+    context.app_data_dir.join("harvis-mcp-jobs.json")
+}
+
+fn read_jobs(context: &HostContext) -> Result<Vec<Value>> {
+    match std::fs::read_to_string(jobs_path(context)) {
+        Ok(content) => Ok(serde_json::from_str(&content).context("Harvis 本地任务记录无法解析")?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn record_job(context: &HostContext, id: &str, kind: &str) -> Result<()> {
+    let mut jobs = read_jobs(context)?;
+    jobs.retain(|job| job.get("job_id").and_then(Value::as_str) != Some(id));
+    jobs.insert(0, json!({"job_id":id,"kind":kind,"created_at":chrono::Utc::now().to_rfc3339()}));
+    jobs.truncate(100);
+    std::fs::create_dir_all(&context.app_data_dir)?;
+    std::fs::write(jobs_path(context), serde_json::to_vec(&jobs)?)?;
+    Ok(())
+}
+
+fn job_kind(context: &HostContext, id: &str) -> Option<String> {
+    read_jobs(context).ok()?.into_iter().find(|job| job.get("job_id").and_then(Value::as_str) == Some(id))?
+        .get("kind")?.as_str().map(str::to_string)
 }
 
 struct HarvisClient<'a> {
@@ -268,8 +387,12 @@ async fn json_response(response: reqwest::Response) -> Result<Value> {
 
 fn normalize_image_request(input: &Value) -> Result<Value> {
     let prompt = required_string(input, "prompt")?;
+    let legacy_ids = input.get("reference_ids").and_then(Value::as_array).filter(|items| !items.is_empty());
+    if legacy_ids.is_some() {
+        return Err(anyhow!("Harmony 创作需要 reference_urls，旧素材 ID 不能直接作为参考图地址"));
+    }
     let references = input
-        .get("reference_ids")
+        .get("reference_urls")
         .and_then(Value::as_array)
         .filter(|items| !items.is_empty())
         .cloned();
@@ -294,7 +417,7 @@ fn normalize_image_request(input: &Value) -> Result<Value> {
         ),
         ("outputWidth", input.get("output_width").cloned()),
         ("outputHeight", input.get("output_height").cloned()),
-        ("referenceIds", references.map(Value::Array)),
+        ("referenceUrls", references.map(Value::Array)),
     ]))
 }
 
@@ -325,6 +448,86 @@ fn normalize_music_request(input: &Value) -> Result<Value> {
             )),
         ),
     ]))
+}
+
+async fn save_harmony_result(context: &HostContext, input: &Value) -> Result<Value> {
+    let id = required_string(input, "job_id")?;
+    let destination = required_string(input, "destination")?;
+    if destination != "workspace" {
+        return Err(anyhow!("Harmony Responses 成品请先保存到工作区，再通过素材库导入；旧营销任务仍可直接归档"));
+    }
+    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
+    if !workspace_root.is_absolute() {
+        return Err(anyhow!("workspace_root must be an absolute path"));
+    }
+    let kind = optional_string(input, "kind")
+        .or_else(|| job_kind(context, &id))
+        .ok_or_else(|| anyhow!("无法确定任务类型，请提供 kind（image 或 music）"))?;
+    let client = HarmonyClient::new(context)?;
+    let result = client.wait(&id, &kind, Duration::ZERO).await?;
+    if result["status"] != "succeeded" {
+        return Err(anyhow!("Harvis 任务尚未完成：{}（{}）", result["status"], id));
+    }
+    let result_url = required_string(&result, "result_url")?;
+    let (bytes, media_type, extension) = download_harmony_media(&client.client, &result_url, &kind).await?;
+    let directory = workspace_root.join("marketing-assets");
+    tokio::fs::create_dir_all(&directory).await?;
+    let file_name = safe_file_name(&format!("Harvis-{id}.{extension}"));
+    let path = unique_target(&directory, &file_name);
+    tokio::fs::write(&path, &bytes).await?;
+    let payload = json!({
+        "job_id":id,"kind":kind,"status":"saved",
+        "saved":[{"fileName":file_name,"mediaType":media_type,"localPath":path.to_string_lossy(),"sourceUrl":result_url,"byteSize":bytes.len()}]
+    });
+    Ok(json!({"content":[
+        {"type":"text","text":serde_json::to_string_pretty(&payload)?},
+        {"type":"resource_link","name":file_name,"uri":file_uri(&path),"mimeType":media_type,"size":bytes.len()}
+    ],"structuredContent":payload,"isError":false}))
+}
+
+async fn download_harmony_media(client: &reqwest::Client, result_url: &str, kind: &str) -> Result<(Vec<u8>, String, &'static str)> {
+    const LIMIT: usize = 256 * 1024 * 1024;
+    let url = harvis_responses::media_url(result_url).ok_or_else(|| anyhow!("成品地址无效"))?;
+    let (bytes, content_type) = if url.starts_with("data:") {
+        let (header, encoded) = url.split_once(',').context("成品数据格式无效")?;
+        if !header.ends_with(";base64") || encoded.len() > LIMIT * 4 / 3 + 4 {
+            return Err(anyhow!("成品超过 256MB 大小限制"));
+        }
+        (base64::engine::general_purpose::STANDARD.decode(encoded)?, header.trim_start_matches("data:").trim_end_matches(";base64").to_string())
+    } else {
+        let mut response = client.get(&url).send().await?.error_for_status()?;
+        let mime = response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
+            .unwrap_or("").split(';').next().unwrap_or("").to_string();
+        if mime == "text/html" || mime == "application/json" {
+            return Err(anyhow!("成品链接没有返回媒体文件"));
+        }
+        if response.content_length().is_some_and(|size| size > LIMIT as u64) {
+            return Err(anyhow!("成品超过 256MB 大小限制"));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len() + chunk.len() > LIMIT { return Err(anyhow!("成品超过 256MB 大小限制")); }
+            bytes.extend_from_slice(&chunk);
+        }
+        (bytes, mime)
+    };
+    if bytes.is_empty() { return Err(anyhow!("成品内容为空")); }
+    let expected_prefix = match kind { "image" => "image/", "music" => "audio/", "video" => "video/", _ => "" };
+    if !content_type.is_empty() && !content_type.starts_with(expected_prefix) && content_type != "application/octet-stream" {
+        return Err(anyhow!("成品链接返回了不匹配的媒体类型：{content_type}"));
+    }
+    let (default_mime, default_extension) = match kind {
+        "image" => ("image/png", "png"),
+        "music" => ("audio/mpeg", "mp3"),
+        "video" => ("video/mp4", "mp4"),
+        _ => return Err(anyhow!("不支持的成品类型")),
+    };
+    let extension = match content_type.as_str() {
+        "image/jpeg" => "jpg", "image/webp" => "webp", "image/png" => "png",
+        "audio/wav" => "wav", "audio/mp4" => "m4a", "audio/mpeg" => "mp3",
+        "video/mp4" => "mp4", _ => default_extension,
+    };
+    Ok((bytes, if content_type.is_empty() { default_mime.to_string() } else { content_type }, extension))
 }
 
 async fn save_result(client: &HarvisClient<'_>, input: &Value) -> Result<Value> {
@@ -499,12 +702,59 @@ fn file_uri(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn text_to_image_does_not_require_references() {
         let request = normalize_image_request(&json!({"prompt":"七夕腕表海报"})).unwrap();
         assert_eq!(request["mode"], "text");
         assert_eq!(request["canvasPreset"], "vertical");
-        assert!(request.get("referenceIds").is_none());
+        assert!(request.get("referenceUrls").is_none());
+    }
+
+    #[tokio::test]
+    async fn submits_with_the_personal_key_and_selected_model_to_responses() {
+        let root = std::env::temp_dir().join(format!("harvis-mcp-responses-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let secret = crate::secrets::SecretStore::new(&root).unwrap();
+        let key = secret.encrypt_hex("personal-harmony-key").unwrap();
+        std::fs::write(root.join("config.json"), serde_json::to_vec(&json!({
+            "harmony_api_key":key,"harvis_image_model":"gpt-image2-test"
+        })).unwrap()).unwrap();
+        let context = HostContext::new(root.clone(), root.join("workbuddy.db"), None, vec![], String::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                if count == 0 { break; }
+                request.extend_from_slice(&buffer[..count]);
+                let headers_end = request.windows(4).position(|part| part == b"\r\n\r\n");
+                if let Some(end) = headers_end {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length = headers.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length: ").and_then(|value| value.trim().parse::<usize>().ok())).unwrap_or(0);
+                    if request.len() >= end + 4 + length { break; }
+                }
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("POST /v1/responses HTTP/1.1"));
+            assert!(request.to_ascii_lowercase().contains("authorization: bearer personal-harmony-key"));
+            assert!(request.contains("\"model\":\"gpt-image2-test\""));
+            assert!(request.contains("\"background\":true"));
+            let body = r#"{"id":"resp_test","status":"completed","output":[{"image_url":"https://cdn.example/image.png"}]}"#;
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let mut client = HarmonyClient::new(&context).unwrap();
+        client.base_url = format!("http://{address}/v1");
+        let request = normalize_image_request(&json!({"prompt":"腕表海报"})).unwrap();
+        let result = client.submit("image", &request).await.unwrap();
+        assert_eq!(result["status"], "succeeded");
+        assert_eq!(result["result_url"], "https://cdn.example/image.png");
+        assert_eq!(job_kind(&context, "resp_test").as_deref(), Some("image"));
+        server.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

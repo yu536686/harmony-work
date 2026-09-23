@@ -17,6 +17,9 @@
 .creative-local-job-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .creative-local-job-actions .btn { min-width: 0; font-size: 12px; }
 .creative-local-job progress { display: block; width: 100%; height: 5px; margin-top: 10px; accent-color: var(--accent-color); }
+.creative-job-progress { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+.creative-job-progress progress { flex: 1; min-width: 0; margin-top: 0; }
+.creative-job-progress small { flex: none; color: var(--text-secondary); font-size: 11px; }
 .creative-local-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }
 .creative-local-feedback .creative-rating { margin-left: auto; }
 .creative-local-feedback .creative-rating button:disabled { opacity: .45; cursor: default; }

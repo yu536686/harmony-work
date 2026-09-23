@@ -154,6 +154,66 @@ impl WorkBuddyMcpProfile {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationMcpProfile {
+    node: PathBuf,
+    playwright_entry: PathBuf,
+    windows_desktop: Option<PathBuf>,
+    headless: bool,
+    browser_channel: String,
+}
+
+impl AutomationMcpProfile {
+    pub fn new(
+        node: &Path,
+        playwright_entry: &Path,
+        windows_desktop: Option<&Path>,
+        headless: bool,
+    ) -> Self {
+        Self {
+            node: node.to_path_buf(),
+            playwright_entry: playwright_entry.to_path_buf(),
+            windows_desktop: windows_desktop.map(Path::to_path_buf),
+            headless,
+            browser_channel: if cfg!(windows) { "msedge" } else { "chrome" }.to_string(),
+        }
+    }
+
+    pub fn with_browser_channel(mut self, channel: &str) -> Self {
+        self.browser_channel = channel.to_string();
+        self
+    }
+
+    pub fn render_toml(&self) -> String {
+        let mut rendered = String::new();
+        if !self.node.as_os_str().is_empty() && !self.playwright_entry.as_os_str().is_empty() {
+            let mut args = vec![
+                toml_string(&self.playwright_entry.display().to_string()),
+                toml_string(&format!("--browser={}", self.browser_channel)),
+            ];
+            if self.headless {
+                args.push(toml_string("--headless"));
+            }
+            rendered.push_str(&format!(
+                "[mcp_servers.playwright]\ncommand = {}\nargs = [{}]\nstartup_timeout_sec = 30\ntool_timeout_sec = 180\n",
+                toml_string(&self.node.display().to_string()),
+                args.join(", ")
+            ));
+        }
+        if let Some(executable) = self
+            .windows_desktop
+            .as_ref()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            rendered.push_str(&format!(
+                "\n[mcp_servers.windows_desktop]\ncommand = {}\nstartup_timeout_sec = 30\ntool_timeout_sec = 180\n",
+                toml_string(&executable.display().to_string())
+            ));
+        }
+        rendered
+    }
+}
+
 fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
 }
@@ -308,5 +368,77 @@ command = "host"
         assert!(merged.contains("command = \"host\""));
         assert!(merged.contains("[custom]\nkeep = true"));
         assert!(!merged.contains("\nold\n"));
+    }
+
+    #[test]
+    fn automation_mcp_profile_uses_bundled_executables_and_headless_setting() {
+        let profile = AutomationMcpProfile::new(
+            Path::new("C:/Harmony/runtime/node/node.exe"),
+            Path::new("C:/Program Files/Harmony Work/resources/playwright-mcp/cli.js"),
+            Some(Path::new(
+                "C:/Program Files/Harmony Work/resources/flaui-mcp/FlaUI.Mcp.exe",
+            )),
+            true,
+        );
+        let rendered = profile.render_toml();
+        let parsed: toml::Value = rendered.parse().expect("valid managed MCP TOML");
+
+        assert_eq!(
+            parsed["mcp_servers"]["playwright"]["command"].as_str(),
+            Some("C:/Harmony/runtime/node/node.exe")
+        );
+        assert_eq!(
+            parsed["mcp_servers"]["playwright"]["args"][0].as_str(),
+            Some("C:/Program Files/Harmony Work/resources/playwright-mcp/cli.js")
+        );
+        assert!(rendered.contains("\"--browser=msedge\""));
+        assert!(rendered.contains("\"--headless\""));
+        assert!(rendered.contains("[mcp_servers.windows_desktop]"));
+        assert!(!rendered.contains("npx"));
+        assert!(!rendered.contains("robotz"));
+    }
+
+    #[test]
+    fn automation_mcp_profile_skips_unavailable_servers() {
+        let profile = AutomationMcpProfile::new(
+            Path::new(""),
+            Path::new(""),
+            None,
+            false,
+        );
+        assert!(profile.render_toml().is_empty());
+    }
+
+    #[test]
+    fn browser_channel_does_not_depend_on_desktop_server() {
+        let profile = AutomationMcpProfile::new(
+            Path::new("C:/Node/node.exe"),
+            Path::new("C:/App/playwright-mcp/cli.js"),
+            None,
+            false,
+        );
+        let rendered = profile.render_toml();
+        let expected = if cfg!(windows) {
+            "--browser=msedge"
+        } else {
+            "--browser=chrome"
+        };
+        assert!(rendered.contains(expected));
+        assert!(!rendered.contains("--headless"));
+        assert!(!rendered.contains("windows_desktop"));
+    }
+
+    #[test]
+    fn browser_channel_can_follow_installed_chrome() {
+        let profile = AutomationMcpProfile::new(
+            Path::new("C:/Node/node.exe"),
+            Path::new("C:/App/playwright-mcp/cli.js"),
+            None,
+            true,
+        )
+        .with_browser_channel("chrome");
+        let rendered = profile.render_toml();
+        assert!(rendered.contains("--browser=chrome"));
+        assert!(!rendered.contains("--browser=msedge"));
     }
 }

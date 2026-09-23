@@ -396,7 +396,7 @@ impl SkillLoader {
             (
                 "web-automation",
                 "Web Automation",
-                "Automate web browsing tasks using Chrome",
+                "Automate web browsing tasks using Edge or Chrome",
                 vec!["browser", "web_search", "web_fetch"],
                 vec![
                     "browser",
@@ -419,7 +419,7 @@ impl SkillLoader {
                     "浏览网页",
                     "数据抓取",
                 ],
-                "Use the browser tool to automate web tasks.\n\n\
+                "Use the Playwright MCP browser tools to automate web tasks. Start with browser_navigate and browser_snapshot; use accessible element references for actions.\n\n\
                  ## Capabilities\n\
                  - Navigate to URLs\n\
                  - Fill forms and click buttons\n\
@@ -483,7 +483,7 @@ impl SkillLoader {
                     "桌面自动化",
                     "应用控制",
                 ],
-                "Use `computer_use` to observe and control desktop applications.\n\n\
+                "Use the windows_desktop MCP tools to observe and control desktop applications. Prefer UIA3 snapshots and element references; use screenshots when accessibility data is insufficient.\n\n\
                  ## Capabilities\n\
                  - Find and interact with UI elements\n\
                  - Click buttons, type text, send hotkeys\n\
@@ -518,7 +518,7 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        const HARVIS_SKILL_VERSION: &str = "2.0";
+        const HARVIS_SKILL_VERSION: &str = "2.1";
         if let Ok(existing) = std::fs::read_to_string(&skill_file) {
             if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
                 return Ok(());
@@ -530,7 +530,7 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "2.0"
+version: "2.1"
 tools:
   - harvis_image_generate
   - harvis_music_generate
@@ -568,11 +568,13 @@ triggers:
 {"prompt":"高端腕表主视觉海报，香槟金棚拍，留白构图","canvas_preset":"vertical"}
 ```
 
-比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 `output_width` 和 `output_height`）。只有用户已经上传并明确提供 `reference_ids` 时才传参考图；不传即为文生图。
+比例映射：电视屏幕 `television`、竖屏 `vertical`、门店海报 `store-poster`、手机全屏 `phone-fullscreen`、自定义 `custom`（同时提供 `output_width` 和 `output_height`）。只有用户提供可公开访问的参考图 URL 时才传 `reference_urls`；旧素材 ID 不能直接作为参考图地址。不传即为文生图。
 
 ## 进度与交付
 
-任务提交后报告 job id 和当前状态。需要查询时调用 `harvis_job_status`；不要连续轮询同一个未完成任务。任务成功后调用 `harvis_save_result` 并选择 `workspace`，它会把全部成品下载到当前会话工作区的 `marketing-assets` 目录。`material_library` 只负责归档到素材库，不能视为已保存到本机。
+Harvis 工具使用客户端已配置的个人 Harmony API Key 和对应创作模型。生成工具会有界等待；若返回 `pending` 或 `processing`，用同一 `job_id` 调用 `harvis_job_status`，每次查询本身会等待一段时间。最多继续查询 3 次；仍未完成时向用户说明任务仍在生成并保留 `job_id`，不要无限轮询或重新提交以免重复计费。
+
+任务成功后在回复中嵌入图片成品的 Markdown 图片链接（音乐则给播放/下载链接），并调用 `harvis_save_result` 选择 `workspace`，将成品存到当前会话工作区的 `marketing-assets` 目录，给出本地路径。新的 Harmony Responses 任务不能直接用 `material_library` 归档；如需进入素材库，先保存到工作区再由用户导入。
 "#,
         )?;
         Ok(())

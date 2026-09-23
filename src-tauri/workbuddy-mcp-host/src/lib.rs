@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod harvis;
+#[path = "../../shared/harvis_responses.rs"]
+mod harvis_responses;
 mod im;
 mod office;
 mod process;

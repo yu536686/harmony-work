@@ -1,6 +1,5 @@
 use crate::process::{managed_runtime_executable, std_command};
 use crate::store::{AppState, Settings};
-use robotz_browser::download;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -207,44 +206,24 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
         hint: "Required for git-based skill sources".into(),
     });
 
-    // Browser (Chrome/Brave for browser automation tool)
-    // Check system Chrome/Brave first, then cached Chrome for Testing
-    let chrome_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.harmony.xiaoheng-workbuddy")
-        .join("chrome");
-    let (browser_available, browser_version, browser_hint) =
-        if let Some(sys_path) = download::find_system_chrome() {
-            let name = sys_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("chrome")
-                .to_string();
-            let ver = probe_command(sys_path.to_str().unwrap_or("chrome"), &["--version"])
-                .unwrap_or_else(|| sys_path.to_string_lossy().to_string());
-            (true, Some(ver), format!("System browser: {}", name))
-        } else if let Some(cached) = download::chrome_exists(&chrome_dir) {
-            let ver = probe_command(cached.to_str().unwrap_or(""), &["--version"])
-                .unwrap_or_else(|| "Chrome for Testing (cached)".to_string());
-            (
-                true,
-                Some(ver),
-                "Chrome for Testing (cached, ~111 MB)".to_string(),
-            )
-        } else {
-            (
-                false,
-                None,
-                "No Chromium browser found. Chrome or Brave recommended. \
-                 Chrome for Testing (~111 MB) will be auto-downloaded on first use."
-                    .to_string(),
-            )
-        };
+    let browser = crate::browser_runtime::installed_browser();
+    let (browser_available, browser_version, browser_hint) = match browser {
+        Some(browser) => (
+            true,
+            Some(browser.name.to_string()),
+            format!("{}: {}", browser.name, browser.executable.display()),
+        ),
+        None => (
+            false,
+            None,
+            "安装 Microsoft Edge 或 Google Chrome 后，重启 Harmony Work 以启用浏览器自动化。".to_string(),
+        ),
+    };
     items.push(RuntimeCheckItem {
-        name: "Browser (Chrome/Brave)".into(),
+        name: "Browser (Edge/Chrome)".into(),
         available: browser_available,
         version: browser_version,
-        download_url: "https://www.google.com/chrome/".into(),
+        download_url: "https://www.microsoft.com/edge/download".into(),
         hint: browser_hint,
     });
 

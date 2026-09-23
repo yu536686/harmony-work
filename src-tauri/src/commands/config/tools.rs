@@ -58,7 +58,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "browser".into(),
-            description: "控制 Chrome 浏览器，支持网页导航、点击、截图等操作".into(),
+            description: "通过 Playwright MCP 控制 Edge 或 Chrome，支持导航、点击、快照与截图；设置更改后需重启".into(),
             icon: "🌐".into(),
             windows_only: false,
         },
@@ -118,9 +118,9 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "computer_use".into(),
-            description: "统一感知和操作本地桌面应用，自动选择 UI Automation、截图和键鼠后端".into(),
+            description: "通过 Windows UIA3 MCP 查看并操作桌面控件，必要时使用截图；设置更改后需重启".into(),
             icon: "🖱️".into(),
-            windows_only: false,
+            windows_only: true,
         },
         BuiltinToolInfo {
             name: "pool_org".into(),

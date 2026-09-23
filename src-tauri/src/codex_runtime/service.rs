@@ -1,6 +1,6 @@
 use crate::codex_runtime::client::{AppServerError, AppServerEvent};
 use crate::codex_runtime::config::{
-    merge_managed_mcp_config, CodexRuntimeConfig, WorkBuddyMcpProfile,
+    merge_managed_mcp_config, AutomationMcpProfile, CodexRuntimeConfig, WorkBuddyMcpProfile,
     PINNED_CODEX_VERSION,
 };
 use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
@@ -507,7 +507,9 @@ impl CodexRuntimeState {
             &[skill_root.as_path(), installed_skill_root.as_path()],
             &marketing_base_url,
         );
-        let merged_config = merge_managed_mcp_config(&existing_config, &mcp_profile.render_toml());
+        let automation = automation_mcp_profile(app_data_dir);
+        let managed_mcp = format!("{}{}", mcp_profile.render_toml(), automation.render_toml());
+        let merged_config = merge_managed_mcp_config(&existing_config, &managed_mcp);
         if public_url_changed || harmony_missing || merged_config != existing_config {
             std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
@@ -993,6 +995,76 @@ fn resolve_workbuddy_mcp_host() -> PathBuf {
         .cloned()
         .or_else(|| candidates.into_iter().next())
         .unwrap_or_else(|| PathBuf::from(workbuddy_mcp_host_binary_name(false)))
+}
+
+fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let bundled = |relative| {
+        bundled_automation_candidates_from(&current_exe, relative)
+            .into_iter()
+            .find(|path| path.is_file())
+    };
+    let node = crate::process::managed_runtime_executable("node").or_else(|| {
+        let name = if cfg!(windows) { "node.exe" } else { "node" };
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|directory| directory.join(name))
+                .find(|path| path.is_file())
+        })
+    });
+    let settings = crate::store::Settings::load(&app_data_dir.join("config.json")).ok();
+    let tool_enabled = |name: &str| {
+        settings
+            .as_ref()
+            .and_then(|settings| settings.builtin_tool_enabled.get(name))
+            .copied()
+            .unwrap_or(true)
+    };
+    let browser = crate::browser_runtime::installed_browser();
+    let playwright = if tool_enabled("browser") && browser.is_some() {
+        bundled("playwright-mcp/cli.js")
+    } else {
+        None
+    };
+    #[cfg(windows)]
+    let desktop = tool_enabled("computer_use").then(|| bundled("flaui-mcp/FlaUI.Mcp.exe")).flatten();
+    #[cfg(not(windows))]
+    let desktop: Option<PathBuf> = None;
+    let headless = settings
+        .as_ref()
+        .map(|settings| settings.browser_headless)
+        .unwrap_or(true);
+    let profile = AutomationMcpProfile::new(
+        node.as_deref().unwrap_or_else(|| Path::new("")),
+        playwright.as_deref().unwrap_or_else(|| Path::new("")),
+        desktop.as_deref(),
+        headless,
+    );
+    match browser {
+        Some(installation) => profile.with_browser_channel(installation.channel),
+        None => profile,
+    }
+}
+
+fn bundled_automation_candidates_from(current_exe: &Path, relative: &str) -> Vec<PathBuf> {
+    let directory = current_exe.parent().unwrap_or_else(|| Path::new("."));
+    let mut candidates = vec![
+        directory.join("resources").join(relative),
+        directory.join(relative),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(relative),
+    ];
+    if relative == "playwright-mcp/cli.js" {
+        candidates.push(Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("node_modules")
+            .join("@playwright")
+            .join("mcp")
+            .join("cli.js"));
+    }
+    candidates
 }
 
 fn workbuddy_mcp_host_binary_name(windows: bool) -> &'static str {
@@ -2214,6 +2286,24 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with("Xiaoheng/workbuddy-mcp-host.exe")
         }));
+    }
+
+    #[test]
+    fn automation_mcp_candidates_cover_dev_and_installed_layouts() {
+        let executable = Path::new("C:/Program Files/Harmony Work/harmony-work.exe");
+        let playwright = bundled_automation_candidates_from(executable, "playwright-mcp/cli.js");
+        assert!(playwright.iter().any(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("resources/playwright-mcp/cli.js")
+        }));
+        let desktop = bundled_automation_candidates_from(executable, "flaui-mcp/FlaUI.Mcp.exe");
+        assert!(desktop.iter().any(|path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("resources/flaui-mcp/FlaUI.Mcp.exe")
+        }));
+        assert!(!desktop.iter().any(|path| path.ends_with("mcp/cli.js")));
     }
 
     #[tokio::test]

@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import type { UiBlock } from "./protocol";
+import { messageImageSrc } from "../../../utils/messageImage";
 
 export function ImageBlock({ block }: { block: UiBlock }) {
-  if (!block.url) return null;
+  const src = messageImageSrc(block.url);
+  if (!src) return null;
   return (
     <figure className="ic-image-wrap">
-      <img className="ic-image" src={block.url} alt={block.alt || block.label || ""} loading="lazy" />
+      <img className="ic-image" src={src} alt={block.alt || block.label || ""} loading="lazy" />
       {block.label && <figcaption className="ic-image-caption">{block.label}</figcaption>}
     </figure>
   );

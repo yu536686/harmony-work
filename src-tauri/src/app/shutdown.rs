@@ -1,7 +1,7 @@
 //! Graceful + forced application shutdown.
 //!
 //! Tray quit and other exit paths must cancel long-running agent/IM work and
-//! tear down gateway/browser/PTY resources before calling `app.exit`. Without
+//! tear down gateway/PTY resources before calling `app.exit`. Without
 //! that, Tokio tasks and WebView teardown can stall indefinitely; on Windows the
 //! process may ignore normal termination until force-killed.
 
@@ -26,12 +26,6 @@ pub async fn prepare_shutdown(state: &AppState) {
 
     info!("Shutdown: stopping IM gateway channels");
     let _ = tokio::time::timeout(SHUTDOWN_PREP_TIMEOUT, state.gateway.stop_all()).await;
-
-    info!("Shutdown: closing browser");
-    {
-        let mut browser = state.browser.lock().await;
-        browser.close().await;
-    }
 
     info!("Shutdown: destroying IDE terminals");
     {

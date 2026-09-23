@@ -125,8 +125,6 @@ pub struct AppState {
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags:
         Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
-    /// Shared browser manager (Chrome for Testing)
-    pub browser: robotz_browser::SharedBrowserManager,
     /// Cron scheduler for recurring tasks
     pub scheduler: Arc<crate::scheduler::CronScheduler>,
     /// Active cron job ids keyed by scheduled task id so updates/restarts can replace jobs instead of duplicating them.
@@ -184,12 +182,6 @@ impl AppState {
             settings.save().map_err(|e| anyhow::anyhow!("{e}"))?;
         }
 
-        let browser_options = robotz_browser::BrowserOptions {
-            chrome_dir: app_dir.join("chrome"),
-            headless: settings.browser_headless,
-            ..Default::default()
-        };
-
         let confirm_flags = crate::agent_core::approval::confirm_flags_handle(
             settings.confirm_shell_commands,
             settings.confirm_file_writes,
@@ -201,7 +193,6 @@ impl AppState {
             confirm_flags,
             plan_state: Arc::new(Mutex::new(std::collections::HashMap::new())),
             cancel_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            browser: robotz_browser::create_browser_manager(browser_options),
             scheduler: Arc::new(scheduler),
             scheduled_job_ids: Arc::new(Mutex::new(std::collections::HashMap::new())),
             app_handle: app.clone(),

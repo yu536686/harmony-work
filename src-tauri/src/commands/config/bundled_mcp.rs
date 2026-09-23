@@ -1,7 +1,6 @@
 //! Legacy cleanup for bundled RobotZ MCP entries.
 //!
-//! Desktop automation ships as in-process builtin tools (`robotz-automation` /
-//! `robotz-browser`). Older builds registered a `robotz` MCP sidecar in
+//! Browser and desktop automation now use managed MCP servers. Older builds registered a `robotz` MCP sidecar in
 //! settings — strip it on startup so the MCP tools page only lists external
 //! servers the user configured.
 
@@ -19,7 +18,7 @@ pub fn strip_legacy_robotz_mcp_server(settings: &mut Settings) -> bool {
     let removed = before != settings.mcp_servers.len();
     if removed {
         tracing::info!(
-            "Removed legacy bundled MCP entry '{ROBOTZ_MCP_SERVER_NAME}' (capabilities live under Builtin Tools)"
+            "Removed legacy bundled MCP entry '{ROBOTZ_MCP_SERVER_NAME}' (replaced by managed automation MCP servers)"
         );
     }
     removed

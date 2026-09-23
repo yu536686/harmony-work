@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [package]
 name = "harmony-work"
-version = "1.0.3"
+version = "1.0.4"
 autobins = false
 default-run = "harmony-work"
 description = "Harmony Work desktop AI workbench"
@@ -62,11 +62,6 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Desktop automation and browser infrastructure. Agent-facing access is exposed
-# through Codex/MCP instead of the former in-process Tool compatibility layer.
-robotz-automation = { path = "../third_party/RobotZ/crates/robotz-automation" }
-robotz-browser = { path = "../third_party/RobotZ/crates/robotz-browser" }
-
 # Tauri
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-shell = "2"
@@ -183,7 +178,3 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
-
-# Monorepo sibling checkout - uncomment to override git RobotZ with local crates:
-# robotz-automation = { path = "../../RobotZ/crates/robotz-automation" }
-# robotz-browser = { path = "../../RobotZ/crates/robotz-browser" }

@@ -27,6 +27,7 @@ import { ideApi } from "../../services/tauri/ide";
 import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type PendingAttachmentItem } from "./composerUtils";
 import type { Settings } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
+import { messageImageSrc, safeMessageUrl } from "../../utils/messageImage";
 import remarkGfm from "remark-gfm";
 import InteractiveCard from "./InteractiveCard";
 import ExecutionTimeline from "./ExecutionTimeline";
@@ -3474,7 +3475,7 @@ function MessageContent({ content, onOpenHarmonyCut, onOpenArtifact, onOpenBrows
       <RenderErrorBoundary fallback={fallback}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          urlTransform={(url) => url.startsWith("file://") ? url : (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:") || url.startsWith("#") || url.startsWith("/") || !url.includes(":")) ? url : ""}
+          urlTransform={safeMessageUrl}
           components={{
             // Local paths and web URLs open in the current session workbench.
             a: ({ href, children }) => {
@@ -3508,7 +3509,7 @@ function MessageContent({ content, onOpenHarmonyCut, onOpenArtifact, onOpenBrows
                   </a>
                 );
               }
-              if (!href) return <span>{children}</span>;
+              if (!href || href.startsWith("data:")) return <span>{children}</span>;
               if (/^https?:\/\//i.test(href)) {
                 return (
                   <a
@@ -3566,18 +3567,22 @@ function MessageContent({ content, onOpenHarmonyCut, onOpenArtifact, onOpenBrows
               </div>
             ),
             // Inline images — clickable for full-size view
-            img: ({ src, alt }) => (
-              <img
-                src={src}
-                alt={alt || "image"}
-                className="message-image"
-                onClick={(e) => {
-                  const w = window.open();
-                  if (w) { w.document.write(`<img src="${src}" style="max-width:100%">`); }
-                  e.stopPropagation();
-                }}
-              />
-            ),
+            img: ({ src, alt }) => {
+              const resolvedSrc = messageImageSrc(src);
+              if (!resolvedSrc) return <span>{alt || "图片不可用"}</span>;
+              return (
+                <img
+                  src={resolvedSrc}
+                  alt={alt || "image"}
+                  className="message-image"
+                  onClick={(event) => {
+                    if (src && isLocalPath(src)) onOpenArtifact?.(src);
+                    else if (src && /^https?:\/\//i.test(src)) onOpenBrowser?.(src, alt);
+                    event.stopPropagation();
+                  }}
+                />
+              );
+            },
           }}
         >
           {processed}

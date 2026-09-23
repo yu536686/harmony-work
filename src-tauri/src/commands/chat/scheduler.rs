@@ -1,8 +1,7 @@
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
-use crate::store::{db::ScheduledTask, AppState, Database, Settings};
-use robotz_browser::SharedBrowserManager;
+use crate::store::{db::ScheduledTask, AppState, Database};
 use serde::Serialize;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -278,18 +277,12 @@ pub async fn trigger_consolidation_for_session(
     let app_h = state.app_handle.clone();
     let task_id_clone = task.id.clone();
     let db_arc = state.db.clone();
-    let settings_arc = state.settings.clone();
-    let browser = state.browser.clone();
-    let cancel_flags = state.cancel_flags.clone();
     tokio::spawn(async move {
         execute_task(
             app_h,
             task_id_clone,
             enriched_prompt,
             db_arc,
-            settings_arc,
-            browser,
-            cancel_flags,
         )
         .await;
     });
@@ -315,9 +308,6 @@ pub(crate) async fn register_task_job(state: &AppState, task: &ScheduledTask) {
     let task_id = task.id.clone();
     let task_prompt_clone = task.task_prompt.clone();
     let db_arc = state.db.clone();
-    let settings_arc = state.settings.clone();
-    let browser = state.browser.clone();
-    let cancel_flags = state.cancel_flags.clone();
     let cron = task.cron_expression.clone();
     let sched = state.scheduler.clone();
     let scheduled_job_ids = state.scheduled_job_ids.clone();
@@ -329,18 +319,12 @@ pub(crate) async fn register_task_job(state: &AppState, task: &ScheduledTask) {
             let task_id = task_id.clone();
             let task_prompt = task_prompt_clone.clone();
             let db_arc = db_arc.clone();
-            let settings_arc = settings_arc.clone();
-            let browser = browser.clone();
-            let cancel_flags = cancel_flags.clone();
             Box::pin(async move {
                 execute_task(
                     app_h,
                     task_id,
                     task_prompt,
                     db_arc,
-                    settings_arc,
-                    browser,
-                    cancel_flags,
                 )
                 .await;
             })
@@ -563,9 +547,6 @@ pub async fn run_task_now(state: State<'_, AppState>, task_id: String) -> Result
     let task_id_clone = task.id.clone();
     let task_prompt = task.task_prompt.clone();
     let db_arc = state.db.clone();
-    let settings_arc = state.settings.clone();
-    let browser = state.browser.clone();
-    let cancel_flags = state.cancel_flags.clone();
 
     tokio::spawn(async move {
         execute_task(
@@ -573,9 +554,6 @@ pub async fn run_task_now(state: State<'_, AppState>, task_id: String) -> Result
             task_id_clone,
             task_prompt,
             db_arc,
-            settings_arc,
-            browser,
-            cancel_flags,
         )
         .await;
     });
@@ -611,18 +589,12 @@ pub async fn trigger_task_by_event(
     let app_h = state.app_handle.clone();
     let task_id_clone = task.id.clone();
     let db_arc = state.db.clone();
-    let settings_arc = state.settings.clone();
-    let browser = state.browser.clone();
-    let cancel_flags = state.cancel_flags.clone();
     tokio::spawn(async move {
         execute_task(
             app_h,
             task_id_clone,
             enriched_prompt,
             db_arc,
-            settings_arc,
-            browser,
-            cancel_flags,
         )
         .await;
     });
@@ -640,9 +612,6 @@ pub async fn execute_task(
     task_id: String,
     task_prompt: String,
     db: Arc<Mutex<Database>>,
-    _settings: Arc<Mutex<Settings>>,
-    _browser: SharedBrowserManager,
-    _cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
 ) {
     info!("Executing scheduled task with codex exec: {}", task_id);
     let task_name = {

@@ -23,7 +23,8 @@ function normalizeHarvisStatus(raw: unknown): HarvisTask["status"] {
   if (["succeeded", "success", "completed", "complete", "done"].includes(value)) return "succeeded";
   if (["incomplete", "cancelled", "canceled"].includes(value)) return "failed";
   if (value === "failed" || value.includes("fail") || value.includes("error")) return "failed";
-  if (value === "processing" || value.includes("process") || value.includes("running") || value.includes("pending") || value.includes("queue")) return "processing";
+  if (["queued", "pending", "submitted"].includes(value)) return "pending";
+  if (value === "processing" || value.includes("process") || value.includes("running")) return "processing";
   return "processing";
 }
 
@@ -175,7 +176,9 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
         try {
           const statusResp = await creativeApi.harvisQueryTask(task.taskId, task.kind);
           const status = normalizeHarvisStatus((statusResp as any)?.status ?? (statusResp as any)?.state ?? statusResp);
-          const progress = typeof (statusResp as any)?.progress === "number" ? (statusResp as any).progress : task.progress;
+          const progress = typeof (statusResp as any)?.progress === "number"
+            ? Math.max(0, Math.min(99, (statusResp as any).progress))
+            : undefined;
           if (status === "succeeded") {
             let resultUrl = extractHarvisResultUrl(statusResp);
             if (!resultUrl) {
@@ -188,7 +191,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
           if (status === "failed") {
             return { ...task, status: "failed" as const, errorMessage: String(statusResp.error_message || "生成任务失败") };
           }
-          return { ...task, status: "processing" as const, progress, errorMessage: undefined };
+          return { ...task, status, progress, errorMessage: undefined };
         } catch (error) {
           return { ...task, errorMessage: String(error) };
         }
@@ -197,7 +200,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
       const next = prev.map((task) => {
         if (task.kind !== initialKind) return task;
         const refreshed = updated.find((item) => item.taskId === task.taskId);
-        return refreshed ? { ...refreshed, adopted: task.adopted, rating: task.rating, feedbackTags: task.feedbackTags } : task;
+        return refreshed ? { ...refreshed, progress: refreshed.progress ?? task.progress, adopted: task.adopted, rating: task.rating, feedbackTags: task.feedbackTags } : task;
       });
       saveHarvisTasks(next, initialKind);
       return next;
@@ -206,6 +209,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
 
   useEffect(() => {
     if (!activeHarvisTasks.length) return;
+    void refreshHarvisTasks(activeHarvisTasks);
     const timer = window.setInterval(() => {
       void refreshHarvisTasks(activeHarvisTasks);
     }, 8_000);
@@ -552,9 +556,14 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
             <div className="creative-job-list">
               {filteredHarvisTasks.map((task) => (
                 <div key={task.taskId} className="creative-local-job">
-                  <div className="creative-local-job-top"><strong>{task.prompt.slice(0, 48) || "未命名创作"}</strong><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div>
+                  <div className="creative-local-job-top"><strong>{task.prompt.slice(0, 48) || "未命名创作"}</strong><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : task.status === "pending" ? "排队中" : "生成中…"}</small></div>
                   {task.errorMessage && <small className="creative-error">{task.errorMessage}</small>}
-                  {task.status === "processing" && <progress value={task.progress} max="100" aria-label="生成进度" />}
+                  {(task.status === "pending" || task.status === "processing") && (
+                    <div className="creative-job-progress">
+                      <progress value={task.progress > 0 ? task.progress : undefined} max="100" aria-label="生成进度" />
+                      <small>{task.progress > 0 ? `${Math.round(task.progress)}%` : "进度待更新"}</small>
+                    </div>
+                  )}
                   {task.resultUrl && (
                     <>
                     <div className="creative-local-job-actions">

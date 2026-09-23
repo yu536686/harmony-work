@@ -5,12 +5,15 @@
 
 pub mod agent_core;
 pub mod app;
+mod browser_runtime;
 pub mod codex_runtime;
 mod commands;
 mod coordination;
 mod file_journal;
 mod fish;
 mod gateway;
+#[path = "../shared/harvis_responses.rs"]
+mod harvis_responses;
 mod harmony_cut;
 mod harvis_prompt;
 pub mod headless_cli;

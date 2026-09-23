@@ -383,14 +383,6 @@ fn run_impl() {
                 app_data_dir.clone(),
             );
 
-            // Warm the UIA-click calibration cache as early as possible so the
-            // very first `uia.click` after launch (e.g. via the headless agent)
-            // already benefits from any saved manual calibration. The fit/apply/
-            // store logic now lives in the standalone `robotz-automation` crate.
-            {
-                robotz_automation::calibration::refresh_cache(&app_data_dir);
-            }
-
             {
                 let db = tauri::async_runtime::block_on(state.db.lock());
                 let tasks = db.list_tasks().unwrap_or_default();
@@ -414,7 +406,6 @@ fn run_impl() {
                 let db = state.db.clone();
                 let settings = state.settings.clone();
                 let plan_state = state.plan_state.clone();
-                let browser = state.browser.clone();
                 let cancel_flags = state.cancel_flags.clone();
                 let confirm_resp = state.confirmation_responses.clone();
                 let interactive_resp = state.interactive_responses.clone();
@@ -465,7 +456,6 @@ fn run_impl() {
                                         db: db.clone(),
                                         settings: settings.clone(),
                                         plan_state: plan_state.clone(),
-                                        browser: browser.clone(),
                                         cancel_flags: cancel_flags.clone(),
                                         confirmation_responses: confirm_resp.clone(),
                                         interactive_responses: interactive_resp.clone(),
@@ -632,7 +622,6 @@ fn run_impl() {
                                     db: db.clone(),
                                     settings: settings.clone(),
                                     plan_state: plan_state.clone(),
-                                    browser: browser.clone(),
                                     cancel_flags: cancel_flags.clone(),
                                     confirmation_responses: confirm_resp.clone(),
                                     interactive_responses: interactive_resp.clone(),
@@ -709,7 +698,6 @@ fn run_impl() {
                                     db: db.clone(),
                                     settings: settings.clone(),
                                     plan_state: plan_state.clone(),
-                                    browser: browser.clone(),
                                     cancel_flags: cancel_flags.clone(),
                                     confirmation_responses: confirm_resp.clone(),
                                     interactive_responses: interactive_resp.clone(),
@@ -760,7 +748,6 @@ fn run_impl() {
                 let settings_arc = state.settings.clone();
                 let db_arc = state.db.clone();
                 let plan_state_arc = state.plan_state.clone();
-                let browser_arc = state.browser.clone();
                 let cancel_flags_arc = state.cancel_flags.clone();
                 let confirm_resp_arc = state.confirmation_responses.clone();
                 let interactive_resp_arc = state.interactive_responses.clone();
@@ -805,7 +792,6 @@ fn run_impl() {
                             db: db_arc.clone(),
                             settings: settings_arc.clone(),
                             plan_state: plan_state_arc.clone(),
-                            browser: browser_arc.clone(),
                             cancel_flags: cancel_flags_arc.clone(),
                             confirmation_responses: confirm_resp_arc.clone(),
                             interactive_responses: interactive_resp_arc.clone(),

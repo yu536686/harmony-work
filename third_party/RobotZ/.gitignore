@@ -1,7 +1,0 @@
-/target
-**/target
-Cargo.lock
-*.swp
-.DS_Store
-/target/
-**/target/

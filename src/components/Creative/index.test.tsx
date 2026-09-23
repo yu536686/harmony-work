@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreativePage from "./index";
 
 const mocks = vi.hoisted(() => ({
-  listJobs: vi.fn(), musicConfig: vi.fn(), harvisGenerate: vi.fn(), harvisPreviewResult: vi.fn(),
+  listJobs: vi.fn(), musicConfig: vi.fn(), harvisGenerate: vi.fn(), harvisQueryTask: vi.fn(), harvisPreviewResult: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("../../services/tauri", async (importOriginal) => {
@@ -20,6 +20,10 @@ describe("CreativePage personal-key results", () => {
     localStorage.clear();
     vi.clearAllMocks();
     mocks.musicConfig.mockImplementation(() => new Promise(() => {}));
+    mocks.harvisQueryTask.mockImplementation((taskId: string) => Promise.resolve({
+      status: taskId.endsWith("queued") ? "queued" : "processing",
+      progress: taskId.endsWith("queued") ? null : 37,
+    }));
   });
 
   it("shows only local results for the current kind without loading online jobs", () => {
@@ -50,6 +54,19 @@ describe("CreativePage personal-key results", () => {
     render(<CreativePage initialKind="music" user={user} />);
     expect(screen.getByRole("button", { name: "已采用" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "5 星" })).toHaveClass("active");
+  });
+
+  it("shows submitted and processing progress without inventing a percentage", async () => {
+    localStorage.setItem("workbuddy.harvis.tasks", JSON.stringify([
+      { taskId: "image-queued", kind: "image", status: "pending", prompt: "排队中的图片", progress: 0, createdAt: Date.now() },
+      { taskId: "image-running", kind: "image", status: "processing", prompt: "制作中的图片", progress: 37, createdAt: Date.now() },
+    ]));
+    render(<CreativePage initialKind="image" user={user} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("排队中")).toBeInTheDocument();
+    expect(screen.getByText("进度待更新")).toBeInTheDocument();
+    expect(screen.getByText("37%")).toBeInTheDocument();
+    expect(screen.getAllByRole("progressbar", { name: "生成进度" })).toHaveLength(2);
   });
 
   it("submits a task without exposing its ID or key details", async () => {

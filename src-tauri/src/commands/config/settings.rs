@@ -648,7 +648,6 @@ pub async fn save_settings(
         }
     }
 
-    let headless = settings.browser_headless;
     settings.save().map_err(|e| e.to_string())?;
     let saved = settings.clone();
     crate::agent_core::approval::sync_confirm_flags(
@@ -656,24 +655,11 @@ pub async fn save_settings(
         saved.confirm_shell_commands,
         saved.confirm_file_writes,
     );
-    drop(settings); // release lock before touching browser
+    drop(settings);
 
     crate::commands::platform::system::ensure_workspace_shortcut(&saved.workspace_root)
         .map_err(|error| format!("创建工作区桌面快捷方式失败：{error}"))?;
     let _ = app.emit("workspace_shortcut_ready", &saved.workspace_root);
-
-    // Sync headless mode to browser manager (takes effect on next browser launch)
-    {
-        let mut mgr = state.browser.lock().await;
-        let current = mgr.headless();
-        if current != headless {
-            info!("Browser headless mode changed: {} -> {}", current, headless);
-            if mgr.is_running() {
-                mgr.close().await;
-            }
-            mgr.set_headless(headless);
-        }
-    }
 
     Ok(saved)
 }
