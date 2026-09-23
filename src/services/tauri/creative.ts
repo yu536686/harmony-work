@@ -14,6 +14,9 @@ export interface HarvisTask {
   progress: number;
   resultUrl?: string;
   errorMessage?: string;
+  adopted?: boolean;
+  rating?: number;
+  feedbackTags?: string[];
   createdAt: number;
 }
 
@@ -231,9 +234,10 @@ export function loadHarvisTasks(): HarvisTask[] {
   }
 }
 
-export function saveHarvisTasks(tasks: HarvisTask[]): void {
+export function saveHarvisTasks(tasks: HarvisTask[], kind?: HarvisTaskKind): void {
   try {
-    localStorage.setItem(HARVIS_TASKS_KEY, JSON.stringify(tasks));
+    const next = kind ? [...tasks.filter((task) => task.kind === kind), ...loadHarvisTasks().filter((task) => task.kind !== kind)] : tasks;
+    localStorage.setItem(HARVIS_TASKS_KEY, JSON.stringify(next));
   } catch {
     // ignore quota / serialization errors
   }

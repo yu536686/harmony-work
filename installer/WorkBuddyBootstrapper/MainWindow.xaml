@@ -20,6 +20,7 @@
           <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Foreground="#6A6478" FontSize="12" Text="Harmony Work 安装器" />
         </StackPanel>
         <Button HorizontalAlignment="Right" Width="28" Height="28" BorderThickness="0" Background="Transparent"
+                shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="关闭安装器"
                 Foreground="#9992AB" FontSize="18" Content="×" Click="Close_Click" />
       </Grid>
 
@@ -71,8 +72,8 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1">
-          <CheckBox x:Name="TermsCheckBox" FontSize="12" Foreground="#625B70" IsChecked="True">
-            <TextBlock>我已阅读并同意 <Run Foreground="#7654E8" Text="用户协议" /> 和 <Run Foreground="#7654E8" Text="隐私条款" /></TextBlock>
+          <CheckBox x:Name="TermsCheckBox" FontSize="12" Foreground="#625B70" IsChecked="False">
+            <TextBlock>我已查看 <Hyperlink NavigateUri="https://www.harmonywork.com.cn/legal/terms" RequestNavigate="LegalLink_RequestNavigate" Foreground="#7654E8">用户协议</Hyperlink> 和 <Hyperlink NavigateUri="https://www.harmonywork.com.cn/legal/privacy" RequestNavigate="LegalLink_RequestNavigate" Foreground="#7654E8">隐私条款</Hyperlink> 页面</TextBlock>
           </CheckBox>
           <TextBlock x:Name="ErrorText" Margin="0,10,0,0" FontSize="12" Foreground="#B5382D" TextWrapping="Wrap" Visibility="Collapsed" />
         </StackPanel>

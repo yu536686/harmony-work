@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadHarvisTasks, normalizeReferenceSelection, resolveCanvasRequest } from "./creative";
+import { loadHarvisTasks, saveHarvisTasks, normalizeReferenceSelection, resolveCanvasRequest } from "./creative";
 
 it("migrates cached public result URLs without changing supplier signed URLs", () => {
   const key = "workbuddy.harvis.tasks";
@@ -15,6 +15,18 @@ it("migrates cached public result URLs without changing supplier signed URLs", (
     ]);
   } finally {
     localStorage.removeItem(key);
+  }
+});
+
+it("keeps image results when the music page saves its own tasks", () => {
+  const image = { taskId: "image-1", kind: "image" as const, prompt: "image", status: "succeeded" as const, progress: 100, createdAt: 1 };
+  const music = { taskId: "music-1", kind: "music" as const, prompt: "music", status: "pending" as const, progress: 0, createdAt: 2 };
+  localStorage.setItem("workbuddy.harvis.tasks", JSON.stringify([image]));
+  try {
+    saveHarvisTasks([music], "music");
+    expect(loadHarvisTasks().map((task) => task.taskId)).toEqual(["music-1", "image-1"]);
+  } finally {
+    localStorage.removeItem("workbuddy.harvis.tasks");
   }
 });
 

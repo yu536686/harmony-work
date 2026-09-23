@@ -3,12 +3,8 @@ import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { migratePublicServiceUrl } from "../../services/serviceUrls";
 import {
   creativeApi,
-  marketingApi,
   normalizeReferenceSelection,
   resolveCanvasRequest,
-  type ChatAttachment,
-  type CreativeArtifact,
-  type CreativeJob,
   type MusicAssistantConfig,
   type MarketingUser,
   type HarvisTask,
@@ -20,7 +16,6 @@ import "./Creative.css";
 type CreativePageProps = {
   initialKind: "music" | "image";
   user: MarketingUser | null;
-  onStageToChat: (attachments: ChatAttachment[], draft: string) => void;
 };
 
 function normalizeHarvisStatus(raw: unknown): HarvisTask["status"] {
@@ -107,15 +102,6 @@ const imageTemplates = [
   ["节日社媒图", "节日氛围腕表社交媒体视觉，柔和灯光与节庆元素，品牌级构图，保留安全文案区域"]
 ] as const;
 
-function jobStatus(status: CreativeJob["status"]) {
-  return ({ queued: "排队中", submitting: "提交中", submitted: "已提交", processing: "制作中", partial_success: "部分完成", succeeded: "已完成", archiving: "归档中", archived: "已归档", failed: "制作失败", expired: "已过期" })[status];
-}
-
-function artifactCaption(artifact: CreativeArtifact) {
-  const labels = { audio: "音频", image: "图片", cover: "封面" };
-  return `${labels[artifact.kind]} · ${artifact.fileName}`;
-}
-
 function readPreview(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -125,24 +111,13 @@ function readPreview(file: File): Promise<string> {
   });
 }
 
-function extensionOf(fileName: string) {
-  const extension = fileName.split(".").pop()?.toLowerCase();
-  return extension && extension !== fileName.toLowerCase() ? extension : "bin";
-}
-
-export default function CreativePage({ initialKind, user, onStageToChat }: CreativePageProps) {
-  const [jobs, setJobs] = useState<CreativeJob[]>([]);
+export default function CreativePage({ initialKind, user }: CreativePageProps) {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [jobDetailLoading, setJobDetailLoading] = useState(false);
-  const [preview, setPreview] = useState<{ fileName: string; kind: "audio" | "image"; dataUrl: string; artifact?: CreativeArtifact; task?: HarvisTask } | null>(null);
+  const [preview, setPreview] = useState<{ fileName: string; kind: "audio" | "image"; dataUrl: string; task: HarvisTask } | null>(null);
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   const [harvisTasks, setHarvisTasks] = useState<HarvisTask[]>(() => loadHarvisTasks());
-  const [musicRating, setMusicRating] = useState(0);
-  const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
-  const [submitToKnowledge, setSubmitToKnowledge] = useState(false);
   const [showMusicConfig, setShowMusicConfig] = useState(false);
   const [adminBrandName, setAdminBrandName] = useState("");
   const [adminCollections, setAdminCollections] = useState("");
@@ -176,42 +151,6 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
   const hasAssistantField = (key: string) => selectedBusinessLine.fields.some((field) => field.key === key);
   const additionalAssistantFields = selectedBusinessLine.fields.filter((field) => !["brand", "collection", "model", "theme", "watchStyle", "desiredStyle", "bpm", "referenceAssets"].includes(field.key));
   const referenceIds = useMemo(() => normalizeReferenceSelection(referenceFiles.map((item) => item.id)), [referenceFiles]);
-  const visibleJobs = jobs.filter((job) => job.kind === initialKind);
-  const selectedJobRaw = visibleJobs.find((job) => job.id === selectedJobId) ?? visibleJobs[0] ?? null;
-  const selectedJob = selectedJobRaw && {
-    ...selectedJobRaw,
-    artifacts: selectedJobRaw.artifacts.filter((artifact) => initialKind === "music" ? artifact.kind === "audio" : artifact.kind === "image"),
-  };
-  const activeJobs = visibleJobs.filter((job) => ["queued", "submitting", "submitted", "processing", "archiving"].includes(job.status));
-
-  const refreshJobDetail = useCallback(async (jobId: string) => {
-    setJobDetailLoading(true);
-    try {
-      const response = await creativeApi.getJob(jobId);
-      setJobs((previous) => previous.map((job) => job.id === response.job.id ? response.job : job));
-    } catch (error) {
-      setNotice(`任务详情加载失败：${String(error)}`);
-    } finally {
-      setJobDetailLoading(false);
-    }
-  }, []);
-
-  const refreshJobs = async () => {
-    const response = await creativeApi.listJobs();
-    setJobs((previous) => response.jobs.map((job) => {
-      const hydrated = previous.find((item) => item.id === job.id);
-      return hydrated && hydrated.artifacts.length > job.artifacts.length
-        ? { ...job, artifacts: hydrated.artifacts }
-        : job;
-    }));
-    setSelectedJobId((current) => response.jobs.some((job) => job.id === current && job.kind === initialKind)
-      ? current : response.jobs.find((job) => job.kind === initialKind)?.id ?? null);
-  };
-
-  useEffect(() => {
-    if (!user) return;
-    void refreshJobs().catch((error) => setNotice(String(error)));
-  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -228,35 +167,11 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
       .catch(() => setNotice("音乐助手配置暂不可用，已使用本地回退配置"));
   }, [user?.id]);
 
-  useEffect(() => {
-    if (!user || !selectedJobId) return;
-    void refreshJobDetail(selectedJobId);
-  }, [refreshJobDetail, selectedJobId, user?.id]);
-
-  useEffect(() => {
-    setMusicRating(0);
-    setFeedbackTags([]);
-    setSubmitToKnowledge(false);
-  }, [selectedJobId]);
-
-  useEffect(() => {
-    if (!activeJobs.length) return;
-    const timer = window.setInterval(() => {
-      void Promise.all(activeJobs.map((job) => creativeApi.getJob(job.id)))
-        .then((responses) => {
-          setJobs((previous) => previous.map((job) => responses.find((response) => response.job.id === job.id)?.job ?? job));
-        })
-        .catch(() => undefined);
-    }, 12_000);
-    return () => window.clearInterval(timer);
-  }, [activeJobs.map((job) => job.id).join(",")]);
-
-  const activeHarvisTasks = harvisTasks.filter((task) => task.status === "pending" || task.status === "processing");
+  const activeHarvisTasks = harvisTasks.filter((task) => task.kind === initialKind && (task.status === "pending" || task.status === "processing"));
   const filteredHarvisTasks = harvisTasks.filter((task) => task.kind === initialKind);
-  useEffect(() => {
-    if (!activeHarvisTasks.length) return;
-    const timer = window.setInterval(() => {
-      void Promise.all(activeHarvisTasks.map(async (task) => {
+  const refreshHarvisTasks = useCallback(async (tasks: HarvisTask[]) => {
+    if (!tasks.length) return;
+    const updated = await Promise.all(tasks.map(async (task) => {
         try {
           const statusResp = await creativeApi.harvisQueryTask(task.taskId, task.kind);
           const status = normalizeHarvisStatus((statusResp as any)?.status ?? (statusResp as any)?.state ?? statusResp);
@@ -277,16 +192,33 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         } catch (error) {
           return { ...task, errorMessage: String(error) };
         }
-      })).then((updated) => {
-        setHarvisTasks((prev) => {
-          const next = prev.map((task) => updated.find((u) => u.taskId === task.taskId) ?? task);
-          saveHarvisTasks(next);
-          return next;
-        });
-      }).catch(() => undefined);
+    }));
+    setHarvisTasks((prev) => {
+      const next = prev.map((task) => {
+        if (task.kind !== initialKind) return task;
+        const refreshed = updated.find((item) => item.taskId === task.taskId);
+        return refreshed ? { ...refreshed, adopted: task.adopted, rating: task.rating, feedbackTags: task.feedbackTags } : task;
+      });
+      saveHarvisTasks(next, initialKind);
+      return next;
+    });
+  }, [initialKind]);
+
+  useEffect(() => {
+    if (!activeHarvisTasks.length) return;
+    const timer = window.setInterval(() => {
+      void refreshHarvisTasks(activeHarvisTasks);
     }, 8_000);
     return () => window.clearInterval(timer);
-  }, [activeHarvisTasks.map((task) => task.taskId).join(",")]);
+  }, [activeHarvisTasks.map((task) => task.taskId).join(","), refreshHarvisTasks]);
+
+  const updateLocalTask = (taskId: string, changes: Partial<HarvisTask>) => {
+    setHarvisTasks((prev) => {
+      const next = prev.map((task) => task.taskId === taskId ? { ...task, ...changes } : task);
+      saveHarvisTasks(next, initialKind);
+      return next;
+    });
+  };
 
   const updateBrand = (nextBrand: string) => {
     const nextCollection = musicConfig.brands.find((item) => item.name === nextBrand)?.collections[0] ?? "";
@@ -340,7 +272,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         degraded: Boolean(response.degraded),
         evidenceCases: response.evidenceCases ?? []
       });
-      setNotice(response.degraded ? "模型结构化结果异常，已生成可编辑的保守提示词模板" : `已使用默认模型生成提示词${response.model ? `：${response.model}` : ""}`);
+      if (response.degraded) setNotice("已生成可编辑的提示词，请检查内容后使用");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -364,22 +296,25 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         mode: musicMode
       });
       const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
-      if (taskId) {
+      const resultUrl = extractHarvisResultUrl(result);
+      if (taskId || resultUrl) {
         const task: HarvisTask = {
-          taskId,
+          taskId: taskId || `music-${Date.now()}`,
           kind: "music",
           prompt: musicTags.trim(),
-          status: "pending",
-          progress: 0,
+          status: resultUrl ? "succeeded" : "pending",
+          progress: resultUrl ? 100 : 0,
+          resultUrl,
           createdAt: Date.now(),
         };
         setHarvisTasks((prev) => {
           const next = [task, ...prev];
-          saveHarvisTasks(next);
+          saveHarvisTasks(next, initialKind);
           return next;
         });
+      } else {
+        throw new Error("未收到创作任务或成品，请稍后重试");
       }
-      setNotice(taskId ? `音乐任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "音乐任务已提交（个人 Harmony Key）");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -424,7 +359,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         };
         setHarvisTasks((prev) => {
           const next = [task, ...prev];
-          saveHarvisTasks(next);
+          saveHarvisTasks(next, initialKind);
           return next;
         });
       } else if (taskId) {
@@ -438,11 +373,12 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         };
         setHarvisTasks((prev) => {
           const next = [task, ...prev];
-          saveHarvisTasks(next);
+          saveHarvisTasks(next, initialKind);
           return next;
         });
+      } else {
+        throw new Error("未收到创作任务或成品，请稍后重试");
       }
-      setNotice(resultUrl ? "图片已生成（个人 Harmony Key）" : taskId ? `图片任务已提交（个人 Harmony Key），任务 ID：${taskId}` : "图片任务已提交（个人 Harmony Key）");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -489,19 +425,6 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     });
   };
 
-  const showPreview = async (artifact: CreativeArtifact) => {
-    if (!artifact.assetId) return;
-    setPreviewLoading(artifact.id);
-    try {
-      const data = await marketingApi.assetDataUrl(artifact.assetId, artifact.fileName, artifact.kind === "audio" ? 24 * 1024 * 1024 : 16 * 1024 * 1024);
-      setPreview({ artifact, fileName: artifact.fileName, kind: artifact.kind === "audio" ? "audio" : "image", dataUrl: data.dataUrl });
-    } catch (error) {
-      setNotice(String(error));
-    } finally {
-      setPreviewLoading(null);
-    }
-  };
-
   const showHarvisPreview = async (task: HarvisTask) => {
     if (!task.resultUrl || (task.kind !== "image" && task.kind !== "music")) return;
     setPreviewLoading(task.taskId);
@@ -530,81 +453,11 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         filters: [{ name: "创作成品", extensions: [extension] }]
       });
       if (!path || Array.isArray(path)) return;
-      const saved = await creativeApi.harvisSaveResult(task.resultUrl, path);
-      setNotice(`已保存到 ${saved.localPath}`);
+      await creativeApi.harvisSaveResult(task.resultUrl, path);
     } catch (error) {
       setNotice(String(error));
     } finally {
       setDownloadingTaskId(null);
-    }
-  };
-
-  const downloadArtifact = async (artifact: CreativeArtifact) => {
-    if (!artifact.assetId) {
-      setNotice("该成品尚未归档，暂时无法下载");
-      return;
-    }
-    try {
-      const path = await saveFileDialog({
-        title: "保存 Harvis 创作成品",
-        defaultPath: artifact.fileName,
-        filters: [{ name: artifact.kind === "audio" ? "音频文件" : "图片文件", extensions: [extensionOf(artifact.fileName)] }]
-      });
-      if (!path || Array.isArray(path)) return;
-      const saved = await creativeApi.saveAsset(artifact.assetId, artifact.fileName, path);
-      setNotice(`已保存到 ${saved.localPath}`);
-    } catch (error) {
-      setNotice(String(error));
-    }
-  };
-
-  const stageForChat = async (job: CreativeJob) => {
-    setBusy(true);
-    try {
-      const staged = await creativeApi.stageForChat(job.id);
-      const attachments = await Promise.all(staged.assetIds.map(async (assetId) => {
-        const artifact = job.artifacts.find((item) => item.assetId === assetId);
-        const prepared = await marketingApi.prepareAssetForChat(assetId, artifact?.fileName ?? "Harvis 创作成品");
-        return { path: prepared.localPath, filename: prepared.fileName, media_type: prepared.mediaType };
-      }));
-      onStageToChat(attachments, `请基于这些 Harvis 创作成品继续处理：${job.promptSnapshot}`);
-    } catch (error) {
-      setNotice(String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const adoptMusicArtifact = async (job: CreativeJob, artifact: CreativeArtifact) => {
-    setBusy(true);
-    try {
-      await creativeApi.adoptMusicArtifact(job.id, artifact.id);
-      setJobs((previous) => previous.map((item) => item.id === job.id ? { ...item, adoptedArtifactId: artifact.id } : item));
-      setNotice(`已采用 ${artifact.fileName}`);
-    } catch (error) {
-      setNotice(String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveMusicFeedback = async (artifact: CreativeArtifact) => {
-    if (!musicRating) {
-      setNotice("请先选择 1 到 5 星评分");
-      return;
-    }
-    if (submitToKnowledge && selectedJob?.adoptedArtifactId !== artifact.id) {
-      setNotice("提交知识候选前，请先采用当前音频成品");
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await creativeApi.saveMusicFeedback(artifact.id, musicRating, feedbackTags, "", submitToKnowledge);
-      setNotice(result.candidateId ? "评分已保存，作品已进入待审核知识候选" : "评分已保存");
-    } catch (error) {
-      setNotice(String(error));
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -635,7 +488,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
     <section className="creative-page">
       <header className="creative-header">
         <div><span className="eyebrow">Harvis Creative</span><h1>{isMusic ? "Harvis 音乐创作" : "Harvis 图片创作"}</h1></div>
-        <div className="creative-meta"><span>{activeJobs.length ? `${activeJobs.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => { void refreshJobs(); if (selectedJobId) void refreshJobDetail(selectedJobId); }} disabled={busy || jobDetailLoading}>刷新任务</button></div>
+        <div className="creative-meta"><span>{activeHarvisTasks.length ? `${activeHarvisTasks.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => void refreshHarvisTasks(activeHarvisTasks)} disabled={busy}>刷新成果</button></div>
       </header>
       {notice && <div className="creative-notice">{notice}</div>}
       <div className="creative-layout">
@@ -645,7 +498,7 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
               <div className="creative-panel-head"><div className="creative-tabs"><button className={musicMode === "free" ? "active" : ""} onClick={() => setMusicMode("free")}>自由模式</button><button className={musicMode === "assistant" ? "active" : ""} onClick={() => setMusicMode("assistant")}>助手模式</button></div></div>
               <div className="creative-panel-body">
                 {musicMode === "assistant" && <>
-                  <p className="creative-assistant-tip">选择业务信息后，助手会检索已批准的音乐案例，并由默认模型生成可编辑的 Suno 纯音乐提示词。采用并评分的优秀作品可提交为知识候选，需管理员审核后才会进入知识库。</p>
+                  <p className="creative-assistant-tip">选择业务信息后，助手会检索已批准的音乐案例，并由默认模型生成可编辑的 Suno 纯音乐提示词。成品可在创作成果中预览、下载和评分。</p>
                   <div className="assistant-grid">
                     <label>业务线<select value={businessLine} onChange={(event) => updateBusinessLine(event.target.value)}>{musicConfig.businessLines.map((line) => <option key={line.id} value={line.title}>{line.title}</option>)}</select><small>{selectedBusinessLine.description}</small></label>
                     {hasAssistantField("brand") && <label>品牌<select value={brand} onChange={(event) => updateBrand(event.target.value)}>{musicConfig.brands.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
@@ -695,24 +548,15 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
         </div>
         <aside className="creative-side">
           <section className="creative-panel">
-            <div className="creative-panel-head"><strong>{isMusic ? "音乐作品任务" : "图片作品任务"}</strong><span>{visibleJobs.length}</span></div>
-            <div className="creative-job-list">
-              {visibleJobs.map((job) => (
-                <button key={job.id} type="button" className={selectedJob?.id === job.id ? "creative-job active" : "creative-job"} onClick={() => setSelectedJobId(job.id)}>
-                  <strong>{job.promptSnapshot || "未命名创作"}</strong><small>{jobStatus(job.status)} {job.progress > 0 ? `${job.progress}%` : ""}</small>
-                </button>
-              ))}
-              {!visibleJobs.length && <div className="creative-empty">暂无作品任务</div>}
-            </div>
-          </section>
-          <section className="creative-panel">
-            <div className="creative-panel-head"><strong>本地生成任务</strong><span>{filteredHarvisTasks.length}</span></div>
+            <div className="creative-panel-head"><strong>创作成果</strong><span>{filteredHarvisTasks.length}</span></div>
             <div className="creative-job-list">
               {filteredHarvisTasks.map((task) => (
                 <div key={task.taskId} className="creative-local-job">
                   <div className="creative-local-job-top"><strong>{task.prompt.slice(0, 48) || "未命名创作"}</strong><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : "生成中…"}</small></div>
                   {task.errorMessage && <small className="creative-error">{task.errorMessage}</small>}
+                  {task.status === "processing" && <progress value={task.progress} max="100" aria-label="生成进度" />}
                   {task.resultUrl && (
+                    <>
                     <div className="creative-local-job-actions">
                       <button type="button" className="btn btn-secondary" onClick={() => void showHarvisPreview(task)} disabled={previewLoading === task.taskId}>
                         {previewLoading === task.taskId ? "正在加载…" : "预览成品"}
@@ -721,16 +565,21 @@ export default function CreativePage({ initialKind, user, onStageToChat }: Creat
                         {downloadingTaskId === task.taskId ? "正在保存…" : "下载成品"}
                       </button>
                     </div>
+                    {isMusic && <div className="creative-local-feedback" aria-label="作品采用与评分">
+                      <button type="button" className="btn btn-secondary" onClick={() => updateLocalTask(task.taskId, { adopted: !task.adopted })}>{task.adopted ? "已采用" : "采用作品"}</button>
+                      <div className="creative-rating" aria-label="评分">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" disabled={!task.adopted} className={value <= (task.rating ?? 0) ? "active" : ""} onClick={() => updateLocalTask(task.taskId, { rating: value })} aria-label={`${value} 星`}>★</button>)}</div>
+                      <small>采用与评分仅保存在本机</small>
+                    </div>}
+                    </>
                   )}
                 </div>
               ))}
-              {!filteredHarvisTasks.length && <div className="creative-empty">暂无本地生成任务</div>}
+              {!filteredHarvisTasks.length && <div className="creative-empty">暂无创作成果</div>}
             </div>
           </section>
-          <section className="creative-panel creative-detail"><div className="creative-panel-head"><strong>任务详情</strong>{selectedJob && <span>{jobStatus(selectedJob.status)}</span>}</div>{selectedJob ? <div className="creative-panel-body"><p className="creative-detail-prompt">{selectedJob.promptSnapshot}</p>{selectedJob.errorMessage && <div className="creative-error">{selectedJob.errorMessage}</div>}{jobDetailLoading ? <div className="creative-empty creative-detail-state">正在同步成品信息…</div> : ["succeeded", "partial_success", "archived"].includes(selectedJob.status) && selectedJob.artifacts.length === 0 ? <div className="creative-empty creative-detail-state">任务已完成，成品仍在归档或等待同步。请稍后刷新任务。</div> : null}<div className="creative-artifacts">{selectedJob.artifacts.map((artifact) => <div key={artifact.id} className="creative-artifact-row"><button className="creative-artifact-open" onClick={() => void showPreview(artifact)}>{artifactCaption(artifact)}</button><button className="creative-artifact-download" onClick={() => void downloadArtifact(artifact)} aria-label={`下载 ${artifact.fileName}`}>下载</button></div>)}</div>{selectedJob.kind === "music" && selectedJob.artifacts.some((artifact) => artifact.kind === "audio") && <section className="creative-feedback" aria-label="作品采用与评分"><div className="creative-feedback-head"><div><strong>采用与评分</strong><p>采用后可评分；评分 4 星及以上且主动提交的作品会进入管理员审核队列。</p></div><span className="creative-feedback-step">1 / 3</span></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用版本</span>{selectedJob.artifacts.filter((artifact) => artifact.kind === "audio").map((artifact) => <div className="creative-feedback-item" key={`feedback-${artifact.id}`}><div className="creative-feedback-item-info"><span title={artifact.fileName}>{artifact.fileName}</span>{selectedJob.adoptedArtifactId === artifact.id && <em>已采用</em>}</div><button className="btn btn-secondary" onClick={() => void adoptMusicArtifact(selectedJob, artifact)} disabled={busy || selectedJob.adoptedArtifactId === artifact.id}>{selectedJob.adoptedArtifactId === artifact.id ? "当前采用" : "采用此版本"}</button></div>)}</div><div className="creative-feedback-section creative-feedback-rating-row"><span className="creative-feedback-label">本次评分</span><div className="creative-rating" aria-label="评分">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" className={value <= musicRating ? "active" : ""} onClick={() => setMusicRating(value)} aria-label={`${value} 星`}>★</button>)}</div></div><div className="creative-feedback-section"><span className="creative-feedback-label">采用原因</span><div className="creative-feedback-tags">{["风格契合", "镜头节奏合适", "乐器表现好", "品牌感强"].map((tag) => <button type="button" key={tag} className={feedbackTags.includes(tag) ? "active" : ""} onClick={() => setFeedbackTags((previous) => previous.includes(tag) ? previous.filter((value) => value !== tag) : [...previous, tag])}>{tag}</button>)}</div></div><label className="creative-knowledge-choice"><input type="checkbox" aria-label="提交为知识候选" checked={submitToKnowledge} onChange={(event) => setSubmitToKnowledge(event.target.checked)} /><span><strong>提交为知识候选</strong><small>仅采用且评分 4 星及以上的成品会提交审核。</small></span></label><div className="creative-actions"><button className="btn btn-primary" onClick={() => { const artifact = selectedJob.artifacts.find((item) => item.id === selectedJob.adoptedArtifactId) ?? selectedJob.artifacts.find((item) => item.kind === "audio"); if (artifact) void saveMusicFeedback(artifact); }} disabled={busy}>保存评分</button></div></section>}{selectedJob.artifacts.length > 0 && <div className="creative-actions"><button className="btn btn-secondary" onClick={() => void stageForChat(selectedJob)} disabled={busy}>放入会话输入框</button></div>}</div> : <div className="creative-empty">选择一个任务查看产物</div>}</section>
         </aside>
       </div>
-      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" role="dialog" aria-modal="true" aria-label={preview.fileName} onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => { if (preview.artifact) void downloadArtifact(preview.artifact); else if (preview.task) void downloadHarvisTask(preview.task); }}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.fileName} />}</div></div>}
+      {preview && <div className="creative-preview-mask" onClick={() => setPreview(null)}><div className="creative-preview" role="dialog" aria-modal="true" aria-label={preview.fileName} onClick={(event) => event.stopPropagation()}><div className="creative-panel-head"><strong>{preview.fileName}</strong><div className="creative-preview-actions"><button className="btn btn-secondary" onClick={() => void downloadHarvisTask(preview.task)}>下载</button><button className="btn btn-secondary" onClick={() => setPreview(null)}>关闭</button></div></div>{preview.kind === "audio" ? <audio controls autoPlay src={preview.dataUrl} /> : <img src={preview.dataUrl} alt={preview.fileName} />}</div></div>}
     </section>
   );
 }

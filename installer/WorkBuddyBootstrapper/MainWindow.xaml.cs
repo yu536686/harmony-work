@@ -1,9 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
+using System.Windows.Navigation;
 
 namespace WorkBuddyBootstrapper;
 
@@ -56,6 +58,16 @@ public partial class MainWindow : Window
             return;
         }
         System.Windows.Application.Current.Shutdown();
+    }
+
+    private void LegalLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        try {
+            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        } catch (Exception error) {
+            ShowError($"无法打开浏览器：{error.Message}");
+        }
     }
 
     private void ToggleCustomize_Click(object sender, RoutedEventArgs e)

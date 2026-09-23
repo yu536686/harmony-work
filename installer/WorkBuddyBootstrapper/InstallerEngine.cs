@@ -65,7 +65,7 @@ public sealed class InstallerEngine
         await VerifyPayloadAsync(payloadRoot, manifest, cancellationToken);
 
         progress.Report(new(28, "正在配置必要组件", ""));
-        if (!HasNodeRuntime()) InstallNode(payloadRoot);
+        if (!HasNodeRuntime()) await Task.Run(() => InstallNode(payloadRoot), cancellationToken);
 
         progress.Report(new(40, "正在配置必要组件", ""));
         if (!HasPythonRuntime()) await InstallPythonAsync(payloadRoot, cancellationToken);
@@ -74,7 +74,7 @@ public sealed class InstallerEngine
         if (!HasGitRuntime()) await InstallPortableGitAsync(payloadRoot, cancellationToken);
 
         progress.Report(new(64, "正在配置必要组件", ""));
-        if (!HasWeComCliRuntime()) InstallWeComCli(payloadRoot);
+        if (!HasWeComCliRuntime()) await Task.Run(() => InstallWeComCli(payloadRoot), cancellationToken);
 
         progress.Report(new(78, "正在安装 Harmony Work", ""));
         await InstallApplicationAsync(payloadRoot, options.InstallDirectory, cancellationToken);
@@ -250,7 +250,7 @@ public sealed class InstallerEngine
         var wheelZip = PayloadPath(payloadRoot, "runtime", "harmony-cut-wheelhouse.zip");
         var requirements = PayloadPath(payloadRoot, "runtime", "harmony-cut-requirements.txt");
         var wheelDirectory = Path.Combine(_runtimeRoot, "python-wheelhouse");
-        ReplaceDirectoryFromZip(wheelZip, wheelDirectory);
+        await Task.Run(() => ReplaceDirectoryFromZip(wheelZip, wheelDirectory), cancellationToken);
         await RunProcessAsync(
             Path.Combine(pythonRoot, "python.exe"),
             $"-m pip install --disable-pip-version-check --no-index --find-links \"{wheelDirectory}\" -r \"{requirements}\"",
@@ -260,8 +260,10 @@ public sealed class InstallerEngine
     private async Task InstallPortableGitAsync(string payloadRoot, CancellationToken cancellationToken)
     {
         var gitRoot = Path.Combine(_runtimeRoot, "git");
-        DeleteDirectory(gitRoot);
-        Directory.CreateDirectory(gitRoot);
+        await Task.Run(() => {
+            DeleteDirectory(gitRoot);
+            Directory.CreateDirectory(gitRoot);
+        }, cancellationToken);
         await RunProcessAsync(
             PayloadPath(payloadRoot, "runtime", "PortableGit-2.47.1-64-bit.7z.exe"),
             $"-o\"{gitRoot}\" -y",
@@ -453,6 +455,13 @@ public sealed class InstallerEngine
             CreateNoWindow = true,
             RedirectStandardError = true,
         }) ?? throw new InvalidOperationException($"无法启动：{fileName}");
+        using var cancellationRegistration = cancellationToken.Register(() => {
+            try {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            } catch (InvalidOperationException) {
+                // The process already exited while cancellation was requested.
+            }
+        });
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
         var stderr = await stderrTask;

@@ -104,7 +104,7 @@ const PROVIDERS = [
   },
   {
     id: "harmony",
-    label: "Harmony（内部网关）",
+    label: "Harmony-亨吉利",
     baseUrl: HARMONY_API_BASE,
     keyField: "harmony_api_key",
     placeholder: "deepseek-v4-flash",

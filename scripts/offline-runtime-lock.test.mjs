@@ -115,16 +115,33 @@ test("WPF bootstrapper shows readiness before installation and exits after launc
   assert.match(code, /_closeAfterCancellation/);
 });
 
+test("installer close control receives title-bar clicks and legal links open externally", async () => {
+  const [window, code, engine] = await Promise.all([
+    readFile(new URL("../installer/WorkBuddyBootstrapper/MainWindow.xaml", import.meta.url), "utf8"),
+    readFile(new URL("../installer/WorkBuddyBootstrapper/MainWindow.xaml.cs", import.meta.url), "utf8"),
+    readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
+  ]);
+  assert.match(window, /WindowChrome\.IsHitTestVisibleInChrome="True"/);
+  assert.match(window, /NavigateUri="https:\/\/www\.harmonywork\.com\.cn\/legal\/terms"/);
+  assert.match(window, /NavigateUri="https:\/\/www\.harmonywork\.com\.cn\/legal\/privacy"/);
+  assert.match(window, /x:Name="TermsCheckBox"[^>]*IsChecked="False"/);
+  assert.match(code, /RequestNavigateEventArgs/);
+  assert.match(code, /UseShellExecute = true/);
+  assert.match(engine, /process\.Kill\(entireProcessTree: true\)/);
+  assert.match(engine, /await Task\.Run\(\(\) => InstallNode\(payloadRoot\), cancellationToken\)/);
+  assert.match(engine, /await Task\.Run\(\(\) => InstallWeComCli\(payloadRoot\), cancellationToken\)/);
+});
+
 test("full installer reuses managed runtimes and reports generic user-facing progress", async () => {
   const engine = await readFile(
     new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url),
     "utf8",
   );
 
-  assert.match(engine, /if \(!HasNodeRuntime\(\)\) InstallNode/);
+  assert.match(engine, /if \(!HasNodeRuntime\(\)\) await Task\.Run\(\(\) => InstallNode\(payloadRoot\), cancellationToken\)/);
   assert.match(engine, /if \(!HasPythonRuntime\(\)\) await InstallPythonAsync/);
   assert.match(engine, /if \(!HasGitRuntime\(\)\) await InstallPortableGitAsync/);
-  assert.match(engine, /if \(!HasWeComCliRuntime\(\)\) InstallWeComCli/);
+  assert.match(engine, /if \(!HasWeComCliRuntime\(\)\) await Task\.Run\(\(\) => InstallWeComCli\(payloadRoot\), cancellationToken\)/);
   assert.match(engine, /"正在配置必要组件", ""/);
   assert.match(engine, /CopyPayloadArchiveAsync/);
   assert.match(engine, /ExtractPayloadArchiveAsync/);

@@ -6,7 +6,8 @@ import { PRODUCT_BRAND } from "../../branding";
 import BrandWordmark from "../BrandWordmark";
 import "./About.css";
 
-const HARMONY_SITE_URL = "https://www.harmonywatch.cn";
+const HARMONY_WATCH_SITE_URL = "https://www.harmonywatch.com";
+const HARMONY_WORK_SITE_URL = "https://www.harmonywork.com.cn";
 
 export default function About() {
   const { t } = useTranslation();
@@ -48,10 +49,18 @@ export default function About() {
         <p className="about-team-desc">{t("about.teamDesc")}</p>
         <button
           className="about-link-btn about-link-website about-link-inline"
-          onClick={() => openLink(HARMONY_SITE_URL)}
+          onClick={() => openLink(HARMONY_WATCH_SITE_URL)}
         >
           <span className="about-link-icon">⌘</span>
-          <span>{t("about.website")} · www.harmonywatch.cn</span>
+          <span>{t("about.website")} · www.harmonywatch.com</span>
+          <span className="about-link-arrow">→</span>
+        </button>
+        <button
+          className="about-link-btn about-link-website about-link-inline"
+          onClick={() => openLink(HARMONY_WORK_SITE_URL)}
+        >
+          <span className="about-link-icon">⌘</span>
+          <span>Harmony Work 官网 · www.harmonywork.com.cn</span>
           <span className="about-link-arrow">→</span>
         </button>
       </div>

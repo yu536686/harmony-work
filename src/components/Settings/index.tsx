@@ -1094,7 +1094,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
             <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.enableStreamingHint")}</p>
           </div>
 
-          {(form.provider === "harmony" || !form.provider) && (
+          {form.provider === "anthropic" && (
             <div className="form-group">
               <label className="label">{t("settings.anthropicKey")}</label>
               <div style={{ position: "relative" }}>

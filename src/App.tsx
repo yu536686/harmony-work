@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type ChatAttachment, type MarketingUser } from "./services/tauri";
+import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import { PRODUCT_BRAND } from "./branding";
@@ -471,11 +471,6 @@ function AppContent() {
       setAccountSyncBusy(false);
     }
   };
-  const stageCreativeToChat = (attachments: ChatAttachment[], draft: string) => {
-    dispatch(sessionsActions.openMainChatView({ filter: "chat", composerDraft: draft, composerAttachments: attachments }));
-    setActiveTab("chat");
-  };
-
   return (
     <div className={`app ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className="sidebar">
@@ -615,12 +610,12 @@ function AppContent() {
           )}
           {mountedTabs.has("creative-music") && (
             <div className="tab-panel" hidden={activeTab !== "creative-music"}>
-              {highLevelUnlocked ? <Creative initialKind="music" user={marketingUser} onStageToChat={stageCreativeToChat} /> : requireLoginPanel("Harvis 音乐创作")}
+              {highLevelUnlocked ? <Creative initialKind="music" user={marketingUser} /> : requireLoginPanel("Harvis 音乐创作")}
             </div>
           )}
           {mountedTabs.has("creative-image") && (
             <div className="tab-panel" hidden={activeTab !== "creative-image"}>
-              {highLevelUnlocked ? <Creative initialKind="image" user={marketingUser} onStageToChat={stageCreativeToChat} /> : requireLoginPanel("Harvis 图片创作")}
+              {highLevelUnlocked ? <Creative initialKind="image" user={marketingUser} /> : requireLoginPanel("Harvis 图片创作")}
             </div>
           )}
           {mountedTabs.has("memory") && (
