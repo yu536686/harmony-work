@@ -246,6 +246,9 @@ export interface SkillCatalogItem {
   description: string;
   version: string;
   source: string;
+  path: string;
+  market_id: string | null;
+  market_version: string | null;
   tools: string[];
   dependencies: string[];
   permissions: string[];

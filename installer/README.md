@@ -5,11 +5,12 @@
 ## 打包内容
 
 - Tauri NSIS 应用安装包，包含离线 WebView2。
-- 私有 Node.js 22.14.0、Python 3.12.8、PortableGit 2.47.1。
+- 私有 Node.js 22.14.0、Python 3.12.8 嵌入式运行时、PortableGit 2.47.1。
 - `@wecom/cli` 0.1.9 及 Windows x64 平台二进制。
-- Harmony Cut 所需的离线 Python wheelhouse。
+- Harmony Cut 所需的离线 Python wheelhouse，以及 Playwright MCP、FlaUI MCP 自动化组件。
 
 运行时部署到 `%LOCALAPPDATA%\Harmony\WorkBuddy\runtime`。WorkBuddy 子进程会优先使用该目录，因此不会修改用户系统 PATH 或替换既有开发环境。
+Python 使用应用私有的嵌入式 ZIP，不运行系统 Python 安装器，从而避免已有 Python MSI 产品造成的退出码 1638 冲突。更新时会检测私有运行时，只部署缺失的组件。
 
 企业微信 CLI 的二进制可离线部署，但 `wecom-cli auth init` 仍必须由当前 Windows 用户完成官方授权。AI 密钥、WorkBuddy 账户及机器人凭据同样不会被安装器预置。
 

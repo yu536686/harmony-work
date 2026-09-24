@@ -26,6 +26,7 @@ import {
   type PrimaryChannelId,
   type PrimaryChannelSetupResult,
   readRememberedMarketingUser,
+  windowApi,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 import AccountSettingsSyncPanel from "./AccountSettingsSyncPanel";
@@ -191,6 +192,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [harvisModelOptions, setHarvisModelOptions] = useState<ProviderModelInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<ChannelInfo[]>([]);
@@ -585,6 +587,15 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
           };
         }),
       });
+      if (settings && ([
+        "workspace_root",
+        "allow_outside_workspace",
+        "confirm_shell_commands",
+        "confirm_file_writes",
+        "confirm_mcp_tool_calls",
+      ] as const).some((key) => settings[key] !== updated[key])) {
+        setRestartRequired(true);
+      }
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key || updated.siliconflow_api_key || updated.harmony_api_key)));
       const syncUser = readRememberedMarketingUser();
@@ -1530,6 +1541,16 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
               </div>
             </div>
             <input type="checkbox" checked={form.allow_multiple_instances ?? false} onChange={(e) => update("allow_multiple_instances", e.target.checked)} />
+          </div>
+          <div className="form-group" style={{ padding: 14, border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-secondary)" }}>
+            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: "var(--text-secondary)" }}>
+              {t("settings.securityRestartHint")}
+            </p>
+            {restartRequired && (
+              <button type="button" className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => void windowApi.restartApp().catch((error) => setSaveError(String(error)))}>
+                {t("settings.restartClient")}
+              </button>
+            )}
           </div>
         </section>
 

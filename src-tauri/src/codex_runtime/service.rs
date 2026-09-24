@@ -414,6 +414,21 @@ fn discover_workspace_artifacts(
         .collect()
 }
 
+fn artifact_referenced_in_turn(
+    candidate: &CodexArtifactCandidate,
+    workspace_root: &str,
+    transcript: &CodexTurnTranscript,
+) -> bool {
+    let mut evidence = transcript.assistant_text.clone();
+    evidence.push_str(&serde_json::to_string(&transcript.tool_calls).unwrap_or_default());
+    evidence.push_str(&serde_json::to_string(&transcript.tool_results).unwrap_or_default());
+    let evidence = evidence.replace('\\', "/").to_lowercase();
+    let path = candidate.uri.replace('\\', "/").to_lowercase();
+    let root = workspace_root.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let relative = path.strip_prefix(&(root + "/")).unwrap_or(&path);
+    evidence.contains(&path) || evidence.contains(relative)
+}
+
 fn workspace_artifact_uri(path: &Path) -> String {
     let value = path.to_string_lossy().into_owned();
     value
@@ -1994,7 +2009,7 @@ pub async fn codex_chat_send(
                 if matches!(&event, WorkBuddyEvent::Done { .. }) {
                     let known_artifact_uris: HashSet<String> = {
                         let db = app_state.db.lock().await;
-                        db.list_session_artifacts(&session_id, 1000)
+                        db.list_all_artifacts(10_000)
                             .unwrap_or_default()
                             .into_iter()
                             .filter_map(|artifact| artifact.uri)
@@ -2005,7 +2020,13 @@ pub async fn codex_chat_send(
                         &workspace_root_for_artifact_discovery,
                         &workspace_artifacts_before,
                     ) {
-                        if known_artifact_uris.contains(&normalize_artifact_uri(&candidate.uri)) {
+                        if known_artifact_uris.contains(&normalize_artifact_uri(&candidate.uri))
+                            || !artifact_referenced_in_turn(
+                                &candidate,
+                                &workspace_root_for_artifact_discovery,
+                                &transcript,
+                            )
+                        {
                             continue;
                         }
                         let artifact = {
@@ -2201,6 +2222,24 @@ mod tests {
             normalize_artifact_uri(report_path.to_str().expect("report path"))
         );
         fs::remove_dir_all(&workspace).expect("remove temp workspace");
+    }
+
+    #[test]
+    fn workspace_discovery_requires_current_turn_file_evidence() {
+        let candidate = CodexArtifactCandidate {
+            name: "report.pdf".into(),
+            artifact_type: "pdf".into(),
+            uri: "C:\\work\\session-one\\report.pdf".into(),
+            summary: String::new(),
+            metadata_json: None,
+        };
+        let mut other_session = CodexTurnTranscript::default();
+        other_session.assistant_text = "完成了 slides.pptx".into();
+        assert!(!artifact_referenced_in_turn(&candidate, "C:\\work", &other_session));
+
+        let mut owning_session = CodexTurnTranscript::default();
+        owning_session.assistant_text = "文件在 session-one/report.pdf".into();
+        assert!(artifact_referenced_in_turn(&candidate, "C:\\work", &owning_session));
     }
 
     #[test]
@@ -2491,7 +2530,7 @@ mod tests {
             diagnostic.display_version,
             crate::codex_runtime::config::DISPLAY_VERSION
         );
-        assert_eq!(diagnostic.target_codex_version, "0.149.0");
+        assert_eq!(diagnostic.target_codex_version, "0.156.1");
         assert_eq!(diagnostic.mapped_sessions, 0);
 
         drop(state);

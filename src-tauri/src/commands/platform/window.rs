@@ -330,3 +330,8 @@ pub async fn save_overlay_position(
 pub fn quit_app(app: AppHandle) {
     shutdown::request_app_exit(app);
 }
+
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.request_restart();
+}

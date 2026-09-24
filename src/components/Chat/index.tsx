@@ -1155,6 +1155,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           artifactsApi.list(displaySessionId),
           chatApi.getExecutionHistory(displaySessionId),
         ]);
+        if (cancelled) return;
         setActiveArtifacts(artifacts);
         seedContextUsage(displaySessionId);
         // Use setMessagesWithFrozen: if a frozenBubble exists for this session (set during

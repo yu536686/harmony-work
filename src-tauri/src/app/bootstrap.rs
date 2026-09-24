@@ -1437,6 +1437,7 @@ fn run_impl() {
             commands::platform::window::enter_minimal_mode,
             commands::platform::window::exit_minimal_mode,
             commands::platform::window::quit_app,
+            commands::platform::window::restart_app,
             commands::platform::window::set_overlay_position,
             commands::platform::window::save_overlay_position,
             commands::platform::window::set_app_theme,

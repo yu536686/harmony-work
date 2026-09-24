@@ -10,9 +10,9 @@
     },
     "python": {
       "version": "3.12.8",
-      "fileName": "python-3.12.8-amd64.exe",
-      "url": "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe",
-      "sha256": "71bd44e6b0e91c17558963557e4cdb80b483de9b0a0a9717f06cf896f95ab598"
+      "fileName": "python-3.12.8-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip",
+      "sha256": "8d3f33be9eb810f23c102f08475af2854e50484b8e4e06275e937be61ce3d2fb"
     },
     "portableGit": {
       "version": "2.47.1.windows.1",

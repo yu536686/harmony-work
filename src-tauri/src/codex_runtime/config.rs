@@ -1,5 +1,5 @@
 pub const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const PINNED_CODEX_VERSION: &str = "0.149.0";
+pub const PINNED_CODEX_VERSION: &str = "0.156.1";
 pub const MANAGED_MCP_BEGIN: &str = "# BEGIN WORKBUDDY MCP";
 pub const MANAGED_MCP_END: &str = "# END WORKBUDDY MCP";
 
@@ -326,7 +326,7 @@ command = "host"
 
         assert_eq!(config.package_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(config.display_version, config.package_version);
-        assert_eq!(config.codex_version, "0.149.0");
+        assert_eq!(config.codex_version, "0.156.1");
     }
 
     #[test]

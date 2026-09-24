@@ -1,6 +1,7 @@
 use crate::skills::loader::check_skill_compatibility;
 use crate::store::{db::Skill, AppState};
 use serde::Serialize;
+use futures::StreamExt;
 use tauri::{Emitter, Manager, State};
 use tracing::{info, warn};
 
@@ -315,10 +316,41 @@ pub struct SkillCatalogItem {
     pub description: String,
     pub version: String,
     pub source: String,
+    pub path: String,
+    pub market_id: Option<String>,
+    pub market_version: Option<String>,
     pub tools: Vec<String>,
     pub dependencies: Vec<String>,
     pub permissions: Vec<String>,
     pub platform: Vec<String>,
+}
+
+fn read_market_metadata(path: &std::path::Path) -> (Option<String>, Option<String>) {
+    let Ok(bytes) = std::fs::read(path.join(".harmony-market.json")) else {
+        return (None, None);
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return (None, None);
+    };
+    (
+        value["id"].as_str().map(str::to_string),
+        value["version"].as_str().map(str::to_string),
+    )
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HarmonyInstallProgress<'a> {
+    slug: &'a str,
+    phase: &'a str,
+    percent: u8,
+}
+
+fn emit_harmony_install_progress(state: &State<'_, AppState>, slug: &str, phase: &str, percent: u8) {
+    let _ = state.app_handle.emit(
+        "harmony_skill_install_progress",
+        HarmonyInstallProgress { slug, phase, percent },
+    );
 }
 
 #[tauri::command]
@@ -344,6 +376,9 @@ pub async fn scan_skill_catalog(
             description: s.description.clone(),
             version: s.version.clone(),
             source: s.source.clone(),
+            path: s.source_path.to_string_lossy().into_owned(),
+            market_id: read_market_metadata(&s.source_path).0,
+            market_version: read_market_metadata(&s.source_path).1,
             tools: s.tools.clone(),
             dependencies: s.dependencies.clone(),
             permissions: s.permissions.clone(),
@@ -553,6 +588,9 @@ async fn install_skill_from_content_sourced(
         description: skill.description,
         version: skill.version,
         source: "installed".to_string(),
+        path: skill_dir.to_string_lossy().into_owned(),
+        market_id: None,
+        market_version: None,
         tools: skill.tools,
         dependencies: skill.dependencies,
         permissions: skill.permissions,
@@ -894,6 +932,9 @@ async fn install_skill_from_zip(
         description: skill.description,
         version: skill.version,
         source: "installed".to_string(),
+        path: skill_dir.to_string_lossy().into_owned(),
+        market_id: None,
+        market_version: None,
         tools: skill.tools,
         dependencies: skill.dependencies,
         permissions: skill.permissions,
@@ -954,9 +995,7 @@ pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> 
                 .collect::<String>()
                 .to_lowercase();
             if skill.name.eq_ignore_ascii_case(&skill_name) || parsed_safe_name == safe_name {
-                if let Some(dir) = skill.source_path.parent() {
-                    candidate_dirs.insert(dir.to_path_buf());
-                }
+                candidate_dirs.insert(skill.source_path.clone());
             }
         }
 
@@ -965,7 +1004,7 @@ pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> 
                 continue;
             }
             let canonical_dir = skill_dir.canonicalize().map_err(|e| e.to_string())?;
-            if !canonical_dir.starts_with(&canonical_skills) {
+            if canonical_dir == canonical_skills || !canonical_dir.starts_with(&canonical_skills) {
                 return Err("Path traversal attempt blocked".into());
             }
             tokio::fs::remove_dir_all(&skill_dir).await.map_err(|e| {
@@ -1364,7 +1403,7 @@ pub async fn check_skill_compat(
 
 #[cfg(test)]
 mod runtime_verification_tests {
-    use super::{verify_skill_runtime_from, SkillRuntimeState};
+    use super::{read_market_metadata, verify_skill_runtime_from, SkillRuntimeState};
     use crate::store::db::Skill;
     use std::collections::HashSet;
     use std::fs;
@@ -1405,6 +1444,22 @@ mod runtime_verification_tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn reads_market_identity_and_version_from_installed_skill_directory() {
+        let root = skills_root("market-metadata");
+        let skill_dir = root.join("installed/sample-skill");
+        fs::write(
+            skill_dir.join(".harmony-market.json"),
+            r#"{"id":"ppt-master","version":"6.6.0+main.481e057"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_market_metadata(&skill_dir),
+            (Some("ppt-master".into()), Some("6.6.0+main.481e057".into()))
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1580,7 +1635,21 @@ pub async fn harmony_market_install(
     }
 
     let base = harmony_market_base_url();
+    let market_version = harmony_market_search(String::new(), Some(100))
+        .await
+        .ok()
+        .and_then(|result| result.items.into_iter().find(|item| item.slug == slug))
+        .map(|item| item.version);
+    let app_dir = state.app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let existing = scan_skill_catalog(state.clone()).await?;
+    if let Some(item) = existing.into_iter().find(|item| item.market_id.as_deref() == Some(slug.as_str())) {
+        if market_version.is_some() && market_version.as_deref() == item.market_version.as_deref() {
+            emit_harmony_install_progress(&state, &slug, "complete", 100);
+            return Ok(item);
+        }
+    }
     let url = format!("{}/api/v1/skills/{}/download", base, slug);
+    emit_harmony_install_progress(&state, &slug, "downloading", 0);
     info!("Harmony market install: {}", url);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -1599,10 +1668,19 @@ pub async fn harmony_market_install(
             status, body
         ));
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read Harmony skill package: {}", e))?;
+    let total = resp.content_length();
+    let mut bytes = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Failed to read Harmony skill package: {}", e))?;
+        bytes.extend_from_slice(&chunk);
+        let percent = total
+            .filter(|total| *total > 0)
+            .map(|total| ((bytes.len() as u64 * 85 / total).min(85)) as u8)
+            .unwrap_or(0);
+        emit_harmony_install_progress(&state, &slug, "downloading", percent);
+    }
+    emit_harmony_install_progress(&state, &slug, "installing", 90);
     let tmp_path = std::env::temp_dir().join(format!(
         "harmony-skill-{}-{}.skill.zip",
         slug.replace(['/', '\\'], "-"),
@@ -1614,7 +1692,21 @@ pub async fn harmony_market_install(
     let tmp_string = tmp_path.to_string_lossy().to_string();
     let result = install_skill_from_zip(&state, &tmp_string).await;
     let _ = tokio::fs::remove_file(&tmp_path).await;
-    result
+    let mut item = result?;
+    let version = market_version.unwrap_or_else(|| item.version.clone());
+    let metadata = serde_json::json!({ "id": slug, "version": version });
+    let path = std::path::Path::new(&item.path);
+    if !path.starts_with(app_dir.join("skills")) {
+        return Err("Market skill destination escaped the skills directory".into());
+    }
+    tokio::fs::write(path.join(".harmony-market.json"), metadata.to_string())
+        .await
+        .map_err(|e| format!("Failed to save market version: {}", e))?;
+    item.market_id = Some(slug.clone());
+    item.market_version = Some(version);
+    notify_skills_changed(&state);
+    emit_harmony_install_progress(&state, &slug, "complete", 100);
+    Ok(item)
 }
 
 /// Extract SKILL.md text from a zip archive bytes.

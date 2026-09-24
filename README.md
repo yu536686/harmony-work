@@ -6,14 +6,14 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.4-C69A55?style=flat-square)](https://github.com/yu536686/harmony-work/releases)
+[![Version](https://img.shields.io/badge/version-1.0.6-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
-[下载 Windows 版](https://github.com/yu536686/harmony-work/releases/latest) · [功能概览](#功能概览) · [安装与配置](#windows-安装) · [源码构建](#从源码构建) · [问题排查](#常见问题)
+[下载 Windows 版](https://www.harmonywork.com.cn/downloads/workbuddy/windows) · [功能概览](#功能概览) · [安装与配置](#windows-安装) · [源码构建](#从源码构建) · [常见问题](#常见问题)
 
 </div>
 
@@ -25,7 +25,7 @@ Harmony Work 是一款面向 Windows 的桌面 AI Agent 工作台。它将对话
 
 主会话由 **Codex app-server** 驱动，无人值守任务通过 **Codex exec** 执行；Harvis、Office、技能、记忆、IM、StaffDeck 等业务能力由独立的 **WorkBuddy MCP Host** 提供。界面继续负责项目与会话管理、Todo、活动记录、权限审批和成果展示。
 
-> 当前版本为 Beta，建议先在受控环境中完成模型、权限和工作区配置，再用于正式业务数据。
+产品名为 **Harmony Work**，对话中的助手仍称为 **小亨**。首次使用时，请先设置模型、工作区和文件访问权限；授权范围会影响 Agent 能访问的本机资源。
 
 ## 功能概览
 
@@ -36,7 +36,7 @@ Harmony Work 是一款面向 Windows 的桌面 AI Agent 工作台。它将对话
 | **StaffDeck 多 Agent 协作** | 创建不同职责的人员，分派任务，在看板中跟踪执行状态和交付结果。 |
 | **Harvis AI 创作** | 提供图片与音乐创作页面，支持参考图、提示词助手、任务进度、结果预览与下载。 |
 | **Office 成果生成** | 通过 Artifact Runtime 创建并验证 Word、PowerPoint 和 Excel 文件，生成后直接进入成果区。 |
-| **技能与 MCP** | 统一管理系统技能、市场技能和 MCP 服务，让 Agent 按任务加载对应能力。 |
+| **技能与 MCP** | 浏览多个技能市场渠道，查看已安装版本、下载与安装进度，并可更新、打开目录或卸载技能。 |
 | **长期记忆** | 保存用户偏好、项目事实和执行经验，并通过关键词与向量检索按需注入上下文。 |
 | **素材库与数据看板** | 登录后浏览、筛选和预览素材，将文件暂存到会话，或基于看板数据新建分析任务。 |
 | **个人设置云同步** | 登录后可按类别选择恢复或加密备份模型、提供商、API Key 与通用偏好；云端只保存端到端加密密文，本机路径和 IM 凭据不迁移。 |
@@ -77,15 +77,15 @@ flowchart LR
 - 通过全量安装包安装时，离线 WebView2 Runtime 已内置，无需另行下载。
 - 可访问所选模型服务的网络，以及对应供应商的 API Key。
 - 若使用 Office 桌面控制能力，需要安装 Microsoft Office。
-- 若使用企业微信企业能力，需要安装并初始化 `@wecom/cli`。
+- 若使用企业微信企业能力，安装包已包含 WeCom CLI，但仍需用当前 Windows 账户完成官方授权。
 
 ### 全量离线安装包
 
-发行流程同时生成 `Harmony-Work-1.3.0-alpha.1-x64-setup.exe`。它使用原生 WPF 安装界面，内置离线 WebView2、Node.js、Python、PortableGit、WeCom CLI 和 Harmony Cut 的 Python 依赖；安装后这些运行时仅位于 WorkBuddy 私有目录，不会改写系统 PATH。企业微信 `auth init`、账号登录和 AI 密钥仍需由当前用户在首次启动后完成。
+当前 Windows x64 全量安装包为 `Harmony-Work-1.0.6-x64-setup.exe`。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
 ### 1. 下载安装包
 
-进入 [Releases](https://github.com/yu536686/harmony-work/releases) 页面，下载最新的 Windows x64 安装包：
+从 [Harmony Work 官网](https://www.harmonywork.com.cn/) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN：
 
 ```text
 Harmony-Work-<version>-x64-setup.exe
@@ -97,11 +97,11 @@ Harmony-Work-<version>-x64-setup.exe
 Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
-将输出与对应 Release 中公布的 SHA-256 摘要比较。
+1.0.6 安装包的 SHA-256 为 `89725fc46ba8f288925e1fc5082ac4c3079b3bb0d335f049bc914953998023ca`。其他版本应以官网发布信息中的摘要为准。
 
 ### 2. 运行安装程序
 
-双击安装包并按提示完成安装。当前 Beta 安装包可能尚未包含受信任的 Windows 代码签名，因此 SmartScreen 或智能应用控制可能显示“未知发布者”。请只使用本仓库 Release 提供的安装包，并先核对 SHA-256；正式分发版本应使用受信任证书签名。
+双击安装包并按提示完成安装。安装包可能尚未包含受信任的 Windows 代码签名，因此 SmartScreen 或智能应用控制可能显示“未知发布者”。请只从官网获取安装包并核对 SHA-256；受企业策略限制的设备应由管理员核准，不建议关闭系统安全防护。
 
 ### 3. 运行环境
 
@@ -112,7 +112,7 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 3. PortableGit
 4. WeCom CLI
 
-运行时位于 `%LOCALAPPDATA%\Harmony\WorkBuddy\runtime`，不会修改系统 PATH，也不会覆盖电脑上已有的开发环境。首次启动的环境检查页会直接显示“已安装”；普通 NSIS/MSI 安装包则仍会显示手动安装入口。
+运行时位于 `%LOCALAPPDATA%\Harmony\WorkBuddy\runtime`，不会修改系统 PATH，也不会覆盖电脑上已有的开发环境。更新时会检查已安装组件，仅补装缺失或版本不匹配的载荷。
 
 ### 4. 登录或跳过
 
@@ -134,7 +134,7 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 
 设置界面还提供 Anthropic、通义千问、MiniMax、智谱 GLM、Kimi、SiliconFlow、Harmony 和自定义 OpenAI 兼容接口。实际可用性取决于供应商是否兼容当前 Codex Responses 执行协议。
 
-**Harmony 内部网关（公司统一计费）**：选择「Harmony-亨吉利」后，Base URL 默认为 `https://api.harmonywatch.cn/v1`，填入门户「我的控制台」中生成的 Harmony API Key 即可调用。员工无需自付费用，用量由网关按个人 Key 统一核算。
+**Harmony 内部网关（公司统一计费）**：选择「Harmony-亨吉利」后，Base URL 默认为 `https://api.harmonywatch.cn/v1`，填入门户「我的控制台」中生成的 Harmony API Key 即可调用。用量由网关按个人 Key 统计。
 
 门户入口为 `https://portal.harmonywatch.cn`，技能市场为 `https://market.harmonywatch.cn`。升级时会自动迁移已知旧公网端口地址（8090、8787、13001）；局域网与自定义服务地址保持不变，无需重新填写 API Key。
 
@@ -201,7 +201,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\bootstrap-windows.ps1
 ```
 
-脚本会检查并安装 Node.js、Rust MSVC 工具链和 Visual Studio C++ Build Tools，然后完成依赖安装、前端构建、格式检查、Clippy 检查和安装包构建。
+脚本会检查 Node.js、Rust MSVC 工具链和 Visual Studio C++ Build Tools，并准备构建依赖。开发环境的安装与产品全量离线安装包是两条不同流程。
 
 ### 已有开发环境
 
@@ -222,29 +222,22 @@ cargo test --manifest-path src-tauri\Cargo.toml --workspace
 npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis,msi
 ```
 
-构建产物位于：
+Tauri 内层安装包位于：
 
 ```text
 target\x86_64-pc-windows-msvc\release\bundle\nsis\
 target\x86_64-pc-windows-msvc\release\bundle\msi\
 ```
 
-## 发布版本
+## 全量安装包构建
 
-Windows 安装包在受控的 Windows 构建机上生成并验证后，再上传至 GitHub Release。发布示例：
+在 Windows 构建机上、完成依赖安装后执行：
 
 ```powershell
-git tag -a v1.3.0-alpha.1 -m "Harmony Work 1.3.0 Alpha 1"
-git push origin v1.3.0-alpha.1
+.\scripts\build-full-installer.ps1
 ```
 
-## 路线图
-
-以下为后续功能开发计划：
-
-- **Harvis 创作模型接入**：在设置中选择提供商并获取模型后，按模型种类识别并新增 Harvis 生图、视频、音乐、TTS 四类模型选择；将生图与音乐模型绑定到现有 Harvis 创作模块，使用员工个人 API Key 调用并按人统计用量；视频与 TTS 预留接口，后续逐步实现。
-- **Harmony 供应商完善**：完善门户控制台与个人 Key 的用量、成本、日志展示，深度绑定 token 中转站后台。
-- **微信 / 企业微信登录**：门户与小亨账号系统支持微信、企业微信登录。
+脚本校验离线载荷、构建 Tauri NSIS 内层安装包，再生成 WPF 外层安装器。最终文件位于 `release\full\Harmony-Work-<version>-x64-setup.exe`。构建与安装细节见 [安装器说明](installer/README.md)。运行时载荷和打包产物不提交到 Git。
 
 ## 项目结构
 
@@ -254,8 +247,9 @@ harmony-work/
 ├─ src-tauri/                        Tauri / Rust 应用宿主
 │  └─ workbuddy-mcp-host/            WorkBuddy 业务 MCP Host
 ├─ artifact-runtime/                 Word、PowerPoint、Excel 成果运行时
+├─ installer/                        Windows 全量离线安装器与运行时版本锁
 ├─ scripts/                          环境准备、Sidecar 暂存与构建脚本
-└─ .github/workflows/                Windows CI 构建流程
+└─ docs/                             设计与实施记录
 ```
 
 ## 开发验证
@@ -284,7 +278,7 @@ npm run test:artifact-runtime
 <details>
 <summary><strong>安装程序被 Windows 标记为未知发布者</strong></summary>
 
-当前 Beta 安装包可能尚未完成 Windows 代码签名。请确认文件来自本仓库 Release，并核对 SHA-256。若设备启用了禁止未知应用的企业安全策略，请由管理员完成软件白名单或使用已签名的内部发行包，不建议关闭系统级安全保护。
+安装包可能尚未完成 Windows 代码签名。请确认文件来自官网并核对 SHA-256。若设备启用了禁止未知应用的企业安全策略，请由管理员完成软件白名单或使用已签名的内部发行包，不建议关闭系统级安全保护。
 
 </details>
 
@@ -298,14 +292,14 @@ npm run test:artifact-runtime
 <details>
 <summary><strong>WeCom CLI 已初始化，但应用仍显示未授权</strong></summary>
 
-在安装应用的同一 Windows 账户下执行 `npx --yes @wecom/cli auth init`，确认命令返回已授权状态，然后重启 WorkBuddy 并重新测试。旧版 CLI 才使用 `wecom-cli init`。
+在安装应用的同一 Windows 账户下通过内置 WeCom CLI 完成 `auth init`，确认命令返回已授权状态，然后重启 Harmony Work 并重新测试。旧版 CLI 才使用 `wecom-cli init`。
 
 </details>
 
 <details>
 <summary><strong>首次启动无法通过环境检测</strong></summary>
 
-完成安装后先点击“重新检测”。如果新安装程序尚未进入当前进程的 `PATH`，请退出并重新打开 WorkBuddy。网络受限时使用安装目录旁的离线安装包。
+完成安装后先点击“重新检测”。如私有运行时缺失，请重新运行官网下载的全量安装包；它会检查并补装缺失组件，无须手动修改系统 `PATH`。
 
 </details>
 
@@ -318,7 +312,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：[`v1.3.0-alpha.1`](https://github.com/yu536686/harmony-work/releases/tag/v1.3.0-alpha.1)
+- 当前版本：`1.0.6`，从 [官网](https://www.harmonywork.com.cn/) 下载。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---

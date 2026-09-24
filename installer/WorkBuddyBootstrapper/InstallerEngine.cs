@@ -240,20 +240,12 @@ public sealed class InstallerEngine
     private async Task InstallPythonAsync(string payloadRoot, CancellationToken cancellationToken)
     {
         var pythonRoot = Path.Combine(_runtimeRoot, "python");
-        var installer = PayloadPath(payloadRoot, "runtime", "python-3.12.8-amd64.exe");
         Directory.CreateDirectory(_runtimeRoot);
-        await RunProcessAsync(
-            installer,
-            $"/quiet InstallAllUsers=0 PrependPath=0 Include_pip=1 Include_test=0 TargetDir=\"{pythonRoot}\"",
-            cancellationToken);
-
-        var wheelZip = PayloadPath(payloadRoot, "runtime", "harmony-cut-wheelhouse.zip");
-        var requirements = PayloadPath(payloadRoot, "runtime", "harmony-cut-requirements.txt");
-        var wheelDirectory = Path.Combine(_runtimeRoot, "python-wheelhouse");
-        await Task.Run(() => ReplaceDirectoryFromZip(wheelZip, wheelDirectory), cancellationToken);
+        var runtimeZip = PayloadPath(payloadRoot, "runtime", "python-runtime.zip");
+        await Task.Run(() => ReplaceDirectoryFromZip(runtimeZip, pythonRoot), cancellationToken);
         await RunProcessAsync(
             Path.Combine(pythonRoot, "python.exe"),
-            $"-m pip install --disable-pip-version-check --no-index --find-links \"{wheelDirectory}\" -r \"{requirements}\"",
+            "-c \"import cv2, numpy, starlette, uvicorn, pydantic, imageio_ffmpeg\"",
             cancellationToken);
     }
 
@@ -365,7 +357,8 @@ public sealed class InstallerEngine
 
     private bool HasPythonRuntime() =>
         File.Exists(Path.Combine(_runtimeRoot, "python", "python.exe")) &&
-        Directory.Exists(Path.Combine(_runtimeRoot, "python-wheelhouse"));
+        (Directory.Exists(Path.Combine(_runtimeRoot, "python", "Lib", "site-packages")) ||
+         Directory.Exists(Path.Combine(_runtimeRoot, "python-wheelhouse")));
 
     private bool HasGitRuntime() => File.Exists(Path.Combine(_runtimeRoot, "git", "bin", "git.exe"));
 

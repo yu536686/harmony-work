@@ -13,6 +13,7 @@ import {
   sessionsApi,
   skillEvolutionApi,
   parseSkillConfig,
+  openPath,
   SkillCatalogItem,
   ClawHubSkill,
   ClaudePluginListItem,
@@ -82,6 +83,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
   const [harmonySearching, setHarmonySearching] = useState(false);
   const [harmonyError, setHarmonyError] = useState<string | null>(null);
   const [harmonyInstalling, setHarmonyInstalling] = useState<string | null>(null);
+  const [harmonyProgress, setHarmonyProgress] = useState<{ slug: string; phase: string; percent: number } | null>(null);
 
   // Anthropic official plugins
   const [officialQuery, setOfficialQuery] = useState("");
@@ -133,6 +135,14 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     });
     return () => { unlisten.then((fn) => fn()).catch(() => {}); };
   }, [loadSkills, loadEvolution]);
+
+  useEffect(() => {
+    const unlisten = listen<{ slug: string; phase: string; percent: number }>(
+      "harmony_skill_install_progress",
+      (event) => setHarmonyProgress(event.payload),
+    );
+    return () => { unlisten.then((fn) => fn()).catch(() => {}); };
+  }, []);
 
   const handleSyncFromDisk = useCallback(async () => {
     setSyncing(true);
@@ -380,6 +390,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     try {
       const result = await openaiSkillsApi.install([skillId]);
       await Promise.all(result.installed.map((skill) => refreshInstalledLifecycle(skill.name)));
+      loadSkills();
       const names = result.installed.map((s) => s.name).join(", ");
       if (names) {
         setSuccessMsg(t("skills.openaiInstallSuccess", { names, count: result.installed.length }));
@@ -472,6 +483,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     try {
       const result = await claudePluginsApi.install(pluginId, skillDirs);
       await Promise.all(result.installed.map((skill) => refreshInstalledLifecycle(skill.name)));
+      loadSkills();
       const names = result.installed.map((s) => s.name).join(", ");
       if (names) {
         setSuccessMsg(t("skills.officialInstallSuccess", { names, count: result.installed.length }));
@@ -505,6 +517,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
         version && version !== "latest" ? version : undefined,
       );
       await refreshInstalledLifecycle(installed.name);
+      loadSkills();
       setSuccessMsg(t("skills.installSuccess", { name: installed.name }));
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
@@ -515,17 +528,20 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
 
   const handleHarmonyInstall = async (skill: ClawHubSkill) => {
     setHarmonyInstalling(skill.slug);
+    setHarmonyProgress({ slug: skill.slug, phase: "downloading", percent: 0 });
     setError(null);
     setSuccessMsg(null);
     try {
       const installed = await harmonyMarketApi.install(skill.slug);
       await refreshInstalledLifecycle(installed.name);
+      loadSkills();
       setSuccessMsg(t("skills.installSuccess", { name: installed.name }));
       await handleHarmonySearch();
     } catch (e) {
       setError(t("skills.installFailed", { error: String(e) }));
     } finally {
       setHarmonyInstalling(null);
+      setHarmonyProgress(null);
     }
   };
 
@@ -823,6 +839,11 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                           </span>
                         </div>
                         <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0 }}>{skill.description}</p>
+                        {catalogEntry && (
+                          <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "5px 0 0" }}>
+                            {t("skills.installedVersion", { version: catalogEntry.market_version || catalogEntry.version })}
+                          </p>
+                        )}
                         {catalogEntry && catalogEntry.tools.length > 0 && (
                           <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0 0" }}>
                             {t("skills.toolsBadge", { tools: catalogEntry.tools.join(", ") })}
@@ -853,6 +874,16 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                           />
                           <span className="toggle-slider" />
                         </label>
+                        {canUninstall && (
+                          <button
+                            onClick={() => catalogEntry?.path && void openPath(catalogEntry.path).catch((error) => setError(String(error)))}
+                            disabled={!catalogEntry?.path}
+                            title={t("skills.openSkillFolder")}
+                            style={{ fontSize: 11, background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 8px", color: "var(--text-muted)", cursor: "pointer" }}
+                          >
+                            {t("skills.openSkillFolder")}
+                          </button>
+                        )}
                         {canUninstall && (
                           <button
                             onClick={() => handleUninstall(skill.name)}
@@ -1178,7 +1209,14 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
                             {officialDetail.skills.map((skill) => (
                               <div key={skill.dir_name} style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                                <div style={{ fontWeight: 600, fontSize: 13 }}>{skill.name}</div>
+                                <div style={{ fontWeight: 600, fontSize: 13 }}>
+                                  {skill.name}
+                                  {catalogByName[skill.name.toLowerCase()] && (
+                                    <span style={{ marginLeft: 8, color: "var(--text-muted)", fontWeight: 400, fontSize: 11 }}>
+                                      {catalogByName[skill.name.toLowerCase()].version === skill.version ? t("skills.installed") : t("skills.updateBtn")}
+                                    </span>
+                                  )}
+                                </div>
                                 <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{skill.dir_name}</div>
                                 <p style={{ fontSize: 12, margin: "4px 0 0", color: "var(--text-secondary)" }}>
                                   {skill.description || t("skills.noDescription")}
@@ -1189,12 +1227,14 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <button
                               className="btn btn-primary"
-                              disabled={officialInstalling === officialDetail.plugin.id}
+                              disabled={officialInstalling === officialDetail.plugin.id || officialDetail.skills.every((skill) => catalogByName[skill.name.toLowerCase()]?.version === skill.version)}
                               onClick={() => handleOfficialInstall(officialDetail.plugin.id)}
                             >
                               {officialInstalling === officialDetail.plugin.id
                                 ? t("skills.installing")
-                                : t("skills.officialInstallAll", { count: officialDetail.skills.length })}
+                                : officialDetail.skills.every((skill) => catalogByName[skill.name.toLowerCase()]?.version === skill.version)
+                                  ? t("skills.installed")
+                                  : t("skills.officialInstallAll", { count: officialDetail.skills.length })}
                             </button>
                             <button
                               className="btn btn-secondary"
@@ -1205,6 +1245,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                               {adaptBusy ? t("common.loading") : t("skills.adaptBtn")}
                             </button>
                           </div>
+                          {officialInstalling === officialDetail.plugin.id && <progress aria-label={t("skills.installing")} style={{ width: "100%", marginTop: 8 }} />}
                         </>
                       )}
                     </>
@@ -1305,12 +1346,16 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <button
                           className="btn btn-primary"
-                          disabled={openaiInstalling === openaiDetail.skill.id}
+                          disabled={openaiInstalling === openaiDetail.skill.id || catalogByName[openaiDetail.skill.name.toLowerCase()]?.version === openaiDetail.preview.version}
                           onClick={() => handleOpenaiInstall(openaiDetail.skill.id)}
                         >
                           {openaiInstalling === openaiDetail.skill.id
                             ? t("skills.installing")
-                            : t("skills.installBtn")}
+                            : catalogByName[openaiDetail.skill.name.toLowerCase()]?.version === openaiDetail.preview.version
+                              ? t("skills.installed")
+                              : catalogByName[openaiDetail.skill.name.toLowerCase()]
+                                ? t("skills.updateBtn")
+                                : t("skills.installBtn")}
                         </button>
                         <button
                           className="btn btn-secondary"
@@ -1321,6 +1366,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                           {adaptBusy ? t("common.loading") : t("skills.adaptBtn")}
                         </button>
                       </div>
+                      {openaiInstalling === openaiDetail.skill.id && <progress aria-label={t("skills.installing")} style={{ width: "100%", marginTop: 8 }} />}
                     </>
                   )}
                 </div>
@@ -1375,6 +1421,10 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
               {harmonyResults.map((skill) => {
                 const isInstalling = harmonyInstalling === skill.slug;
+                const installed = catalog.find((item) => item.market_id === skill.slug)
+                  ?? catalogByName[skill.name.toLowerCase()];
+                const upToDate = !!installed && (installed.market_version ?? installed.version) === skill.version;
+                const progress = harmonyProgress?.slug === skill.slug ? harmonyProgress : null;
                 return (
                   <div key={skill.slug} className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
@@ -1396,12 +1446,20 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                       <button
                         className="btn btn-primary"
                         onClick={() => handleHarmonyInstall(skill)}
-                        disabled={isInstalling}
+                        disabled={isInstalling || upToDate}
                         style={{ flexShrink: 0, fontSize: 12, padding: "4px 12px" }}
                       >
-                        {isInstalling ? t("skills.installing") : t("skills.installBtn")}
+                        {isInstalling ? t("skills.installing") : upToDate ? t("skills.installed") : installed ? t("skills.updateBtn") : t("skills.installBtn")}
                       </button>
                     </div>
+                    {progress && (
+                      <div role="status" aria-label={progress.phase === "installing" ? t("skills.installing") : t("skills.downloading")}>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>
+                          {progress.phase === "installing" ? t("skills.installing") : t("skills.downloading")} {progress.percent > 0 ? `${progress.percent}%` : ""}
+                        </div>
+                        <progress value={progress.percent || undefined} max={100} style={{ width: "100%", height: 7, accentColor: "var(--accent)" }} />
+                      </div>
+                    )}
                     <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--text-muted)" }}>
                       <span>{skill.author}</span>
                       {skill.tags.slice(0, 4).map((tag) => (
@@ -1465,6 +1523,8 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
               {hubResults.map((skill) => {
                 const isInstalling = hubInstalling === skill.slug;
                 const incompatible = skill.compatible === false;
+                const installed = catalogByName[skill.name.toLowerCase()];
+                const upToDate = !!installed && skill.version !== "latest" && installed.version === skill.version;
                 return (
                   <div
                     key={skill.slug}
@@ -1531,13 +1591,14 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                       <button
                         className={`btn ${incompatible ? "btn-secondary" : "btn-primary"}`}
                         onClick={() => handleHubInstall(skill)}
-                        disabled={isInstalling || incompatible}
+                        disabled={isInstalling || incompatible || upToDate}
                         title={incompatible ? skill.compat_issues.join("; ") : undefined}
                         style={{ flexShrink: 0, fontSize: 12, padding: "4px 12px" }}
                       >
-                        {isInstalling ? t("skills.installing") : incompatible ? t("skills.compatFail") : t("skills.installBtn")}
+                        {isInstalling ? t("skills.installing") : incompatible ? t("skills.compatFail") : upToDate ? t("skills.installed") : installed ? t("skills.updateBtn") : t("skills.installBtn")}
                       </button>
                     </div>
+                    {isInstalling && <progress aria-label={t("skills.installing")} style={{ width: "100%", height: 7 }} />}
                     <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--text-muted)" }}>
                       <span>👤 {skill.author}</span>
                       <span>⭐ {skill.stars}</span>
