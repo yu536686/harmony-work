@@ -27,7 +27,7 @@
 - [x] Create and verify a recoverable baseline before edits.
 - [x] Separate Windows and macOS working copies and dependency trees.
 - [x] Add host-independent platform defaults and regression tests.
-- [x] Keep Windows artifact URI normalization behavior stable while supporting macOS paths.
+- [x] Keep Windows artifact URI comparison case-insensitive and resolve existing path aliases while supporting macOS paths.
 - [x] Add two-OS CI and packaging contracts.
 - [x] Validate macOS: frontend and contract tests, production frontend build, 219 native unit tests.
 - [ ] Validate Windows on the same commit before merging to `main`.

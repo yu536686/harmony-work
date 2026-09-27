@@ -449,9 +449,13 @@ fn normalize_artifact_uri_for_platform(uri: &str, platform: DesktopPlatform) -> 
             .strip_prefix("file:///")
             .or_else(|| trimmed.strip_prefix("file://"))
             .unwrap_or(trimmed);
-        return local_path
+        let local_path = local_path
             .strip_prefix("\\\\?\\")
-            .unwrap_or(local_path)
+            .unwrap_or(local_path);
+        return Path::new(local_path)
+            .canonicalize()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| local_path.to_string())
             .replace('/', "\\")
             .to_ascii_lowercase();
     }
@@ -2270,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_uri_normalization_keeps_windows_legacy_behavior() {
+    fn artifact_uri_normalization_keeps_windows_paths_case_insensitive() {
         assert_eq!(
             normalize_artifact_uri_for_platform(
                 "file:///C:/Work/Report.PDF",
