@@ -29,5 +29,7 @@
 - [x] Add host-independent platform defaults and regression tests.
 - [x] Keep Windows artifact URI comparison case-insensitive and resolve existing path aliases while supporting macOS paths.
 - [x] Add two-OS CI and packaging contracts.
-- [x] Validate macOS: frontend and contract tests, production frontend build, 219 native unit tests.
-- [ ] Validate Windows on the same commit before merging to `main`.
+- [x] Validate macOS locally: frontend and contract tests, production frontend build, 219 native unit tests.
+- [x] Validate Windows in CI on commit `5d0a62e`: frontend and contract tests, production frontend build, native unit tests.
+- [ ] Complete macOS hosted CI on the final code. An earlier macOS run passed; the run for `5d0a62e` passed frontend/build but stalled during native tests and was manually cancelled.
+- [ ] Smoke-test native release bundles on both platforms before merging to `main` or shipping an installer.
