@@ -25,7 +25,7 @@ test("macOS build overrides Windows-only staging and bundle payloads", async () 
   assert.equal(macConfig.app.windows.find((window) => window.label === "main").minWidth, 980);
   const main = macConfig.app.windows.find((window) => window.label === "main");
   assert.equal(main.transparent, true);
-  assert.ok(main.windowEffects.effects.includes("sidebar"));
+  assert.equal(main.windowEffects, undefined);
   assert.equal(macConfig.bundle.macOS.minimumSystemVersion, "13.0");
   assert.equal(macConfig.app.macOSPrivateApi, true);
 });
@@ -35,4 +35,17 @@ test("macOS desktop automation is optional on Windows installs", async () => {
   assert.equal(packageJson.optionalDependencies["mac-use-mcp"], "^1.1.1");
   assert.equal(lockfile.packages["node_modules/mac-use-mcp"].optional, true);
   assert.deepEqual(lockfile.packages["node_modules/mac-use-mcp"].os, ["darwin"]);
+});
+
+test("Tauri declares the macOS private window feature directly", async () => {
+  const [cargo, base, dev, build] = await Promise.all([
+    readFile(path.join(root, "src-tauri/Cargo.toml"), "utf8"),
+    json("src-tauri/tauri.conf.json"),
+    readFile(path.join(root, "scripts/dev-mac.sh"), "utf8"),
+    readFile(path.join(root, "scripts/build-mac.sh"), "utf8"),
+  ]);
+  assert.match(cargo, /tauri\s*=\s*\{[^\n]*"macos-private-api"/);
+  assert.equal(base.app.macOSPrivateApi, true);
+  assert.match(dev, /tauri\.macos\.conf\.json/);
+  assert.match(build, /tauri\.macos\.conf\.json/);
 });

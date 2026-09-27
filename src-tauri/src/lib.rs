@@ -18,6 +18,7 @@ mod harmony_cut;
 mod harvis_prompt;
 pub mod headless_cli;
 pub mod lsp;
+mod mac_native_shell;
 pub mod notify;
 pub mod pool;
 pub mod process;

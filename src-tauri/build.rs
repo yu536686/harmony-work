@@ -1,4 +1,15 @@
 fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        cc::Build::new()
+            .file("native/HWNativeShell.m")
+            .flag("-fobjc-arc")
+            .compile("harmony_native_shell");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rerun-if-changed=native/HWNativeShell.m");
+    }
+
     #[cfg(target_os = "windows")]
     {
         let mut attributes = tauri_build::Attributes::new();

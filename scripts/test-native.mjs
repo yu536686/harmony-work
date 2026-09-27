@@ -9,7 +9,7 @@ const tauriConfig = {
 
 // Unit tests do not stage installer payloads or activate macOS-only window effects.
 if (process.platform === "darwin") {
-  tauriConfig.app = { macOSPrivateApi: false };
+  tauriConfig.app = { macOSPrivateApi: true };
 }
 
 const result = spawnSync("cargo", ["test", "--locked", "--lib"], {

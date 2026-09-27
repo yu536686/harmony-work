@@ -36,7 +36,7 @@ test("native tests exclude staged payloads without changing release bundles", as
     read(".github/workflows/cross-platform.yml"),
   ]);
   assert.match(nativeTest, /resources: \[\]/);
-  assert.match(nativeTest, /macOSPrivateApi: false/);
+  assert.match(nativeTest, /macOSPrivateApi: true/);
   assert.match(nativeTest, /"cargo", \["test", "--locked", "--lib"\]/);
   assert.match(workflow, /windows-latest/);
   assert.match(workflow, /macos-14/);

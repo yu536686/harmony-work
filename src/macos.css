@@ -1,70 +1,173 @@
-/* macOS-only chrome. Content stays opaque; material is reserved for navigation. */
+/* macOS interface layer. The native AppKit views provide window chrome and sidebar material. */
 :root[data-platform="macos"] {
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
   --font-mono: "SFMono-Regular", ui-monospace, Menlo, monospace;
-  --chrome-header-height: 52px;
-  --control-height: 32px;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --bg-primary: #f5f5f7;
+  --bg-primary: #f6f6f8;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f1f3;
-  --bg-hover: rgba(70, 74, 86, 0.09);
-  --text-primary: #1d1d1f;
-  --text-secondary: #5b5b60;
-  --text-muted: #74747c;
-  --border: rgba(60, 60, 67, 0.17);
-  --sidebar-bg: rgba(238, 239, 243, 0.88);
-  --panel-sidebar-bg: rgba(238, 239, 243, 0.88);
-  --topbar-bg: rgba(249, 249, 251, 0.78);
+  --bg-tertiary: #f0f0f2;
+  --bg-hover: rgba(55, 61, 75, 0.08);
+  --text-primary: #202126;
+  --text-secondary: #5e606a;
+  --text-muted: #777983;
+  --border: rgba(61, 64, 76, 0.13);
+  --sidebar-bg: transparent;
+  --panel-sidebar-bg: #f2f2f4;
+  --topbar-bg: rgba(255, 255, 255, 0.74);
+  --accent: #3974d9;
+  --accent-dim: rgba(57, 116, 217, 0.12);
+  --chrome-header-height: 48px;
+  --control-height: 30px;
+  --control-font-size: 13px;
+  --radius: 7px;
+  --radius-lg: 10px;
+  --motion-fast: 120ms;
+  --motion-standard: 180ms;
+  --motion-slow: 220ms;
+  --motion-ease: cubic-bezier(.2, .7, .2, 1);
+  color-scheme: light;
 }
 
 :root[data-platform="macos"][data-color-mode="dark"] {
-  --bg-primary: #1d1d1f;
-  --bg-secondary: #252527;
-  --bg-tertiary: #303033;
-  --bg-hover: rgba(255, 255, 255, 0.12);
-  --text-primary: #f5f5f7;
-  --text-secondary: #ceced3;
-  --text-muted: #a7a7af;
-  --border: rgba(235, 235, 245, 0.17);
-  --sidebar-bg: rgba(37, 37, 40, 0.88);
-  --panel-sidebar-bg: rgba(37, 37, 40, 0.88);
-  --topbar-bg: rgba(39, 39, 42, 0.78);
+  --bg-primary: #1d1e22;
+  --bg-secondary: #292a2e;
+  --bg-tertiary: #34353a;
+  --bg-hover: rgba(255, 255, 255, 0.10);
+  --text-primary: #f2f2f5;
+  --text-secondary: #c4c5cb;
+  --text-muted: #a5a7b1;
+  --border: rgba(235, 235, 245, 0.14);
+  --panel-sidebar-bg: #26272c;
+  --topbar-bg: rgba(37, 38, 43, 0.78);
+  --accent: #77a7ff;
+  --accent-dim: rgba(119, 167, 255, 0.16);
+  color-scheme: dark;
 }
 
-:root[data-platform="macos"] body {
-  background: transparent;
-  color: var(--text-primary);
+@supports (color: AccentColor) {
+  :root[data-platform="macos"] { --accent: AccentColor; }
 }
 
-:root[data-platform="macos"][data-color-mode="dark"] body {
-  background: transparent;
-}
-
-:root[data-platform="macos"] .chat-main,
-:root[data-platform="macos"] .main-content {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-
+:root[data-platform="macos"] body,
 :root[data-platform="macos"] .desktop-window,
 :root[data-platform="macos"] .desktop-window-content,
-:root[data-platform="macos"] .app,
-:root[data-platform="macos"] .chat-layout {
+:root[data-platform="macos"] .app {
   background: transparent;
+  color: var(--text-primary);
 }
 
-:root[data-platform="macos"] .sidebar,
-:root[data-platform="macos"] .chat-session-sidebar {
-  background: color-mix(in srgb, var(--sidebar-bg) 55%, transparent);
-  backdrop-filter: saturate(160%) blur(28px);
-  -webkit-backdrop-filter: saturate(160%) blur(28px);
-  border-color: var(--border);
+:root[data-platform="macos"] .app { isolation: isolate; }
+
+:root[data-platform="macos"] .sidebar {
+  padding: 12px 10px 10px;
+  background: transparent;
+  border-right: 1px solid var(--border);
+  box-shadow: none;
 }
 
 :root[data-platform="macos"] .sidebar-header {
-  min-height: 52px;
+  min-height: 44px;
+  padding: 0 9px 10px;
+  margin-bottom: 6px;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+}
+
+:root[data-platform="macos"] .sidebar-brand { gap: 9px; }
+:root[data-platform="macos"] .sidebar-brand .logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+:root[data-platform="macos"] .app-name { font-size: 14px; font-weight: 600; }
+
+:root[data-platform="macos"] .color-mode-toggle,
+:root[data-platform="macos"] .sidebar-collapse-toggle {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+:root[data-platform="macos"] .color-mode-toggle:hover,
+:root[data-platform="macos"] .sidebar-collapse-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+:root[data-native-shell="true"] .sidebar-collapse-toggle { display: none; }
+:root[data-native-shell="true"] .sidebar-is-collapsed .sidebar-header {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+}
+
+:root[data-platform="macos"] .sidebar-nav { gap: 1px; }
+:root[data-platform="macos"] .sidebar-section-label,
+:root[data-platform="macos"] .project-rail-heading {
+  padding-inline: 11px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+}
+:root[data-platform="macos"] .sidebar-section-label { padding-top: 12px; padding-bottom: 5px; }
+:root[data-platform="macos"] .sidebar-section-label-collaboration,
+:root[data-platform="macos"] .sidebar-section-label-system { margin-top: 4px; }
+
+:root[data-platform="macos"] .nav-item,
+:root[data-platform="macos"] .nav-subitem,
+:root[data-platform="macos"] .project-tree-folder,
+:root[data-platform="macos"] .project-session-row {
+  min-height: 32px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 450;
+  color: var(--text-primary);
+  transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
+}
+:root[data-platform="macos"] .nav-item { padding: 5px 9px; gap: 9px; }
+:root[data-platform="macos"] .nav-icon { width: 19px; color: var(--text-secondary); }
+:root[data-platform="macos"] .nav-item:hover { transform: none; }
+:root[data-platform="macos"] .nav-item.active,
+:root[data-platform="macos"] .nav-subitem.active,
+:root[data-platform="macos"] .project-session-row.active,
+:root[data-platform="macos"] .settings-navigation-item.is-active {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: none;
+  border-color: transparent;
+}
+:root[data-platform="macos"] .nav-item.active .nav-icon { color: var(--accent); }
+:root[data-platform="macos"] .nav-subitems { gap: 1px; padding-left: 28px; }
+:root[data-platform="macos"] .nav-subitem { height: 29px; padding-inline: 10px; }
+:root[data-platform="macos"] .project-tree-folder,
+:root[data-platform="macos"] .project-session-select { font-size: 12px; }
+
+:root[data-platform="macos"] .sidebar-footer {
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+:root[data-platform="macos"] .user-card { padding: 6px 9px; }
+:root[data-platform="macos"] .user-avatar { width: 29px; height: 29px; }
+:root[data-platform="macos"] .user-menu {
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-platform="macos"] .main-content,
+:root[data-platform="macos"][data-color-mode="dark"] .main-content,
+:root[data-platform="macos"] .chat-main,
+:root[data-platform="macos"] .workbench-panel {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--border);
+  box-shadow: none;
 }
 
 :root[data-platform="macos"] .feature-topbar,
@@ -72,64 +175,172 @@
 :root[data-platform="macos"] .page-header,
 :root[data-platform="macos"] .workbench-header,
 :root[data-platform="macos"] .workbench-tabs {
+  height: 48px;
+  min-height: 48px;
+  padding-inline: 20px;
   background: var(--topbar-bg);
-  backdrop-filter: saturate(160%) blur(22px);
-  -webkit-backdrop-filter: saturate(160%) blur(22px);
+  backdrop-filter: saturate(125%) blur(18px);
+  -webkit-backdrop-filter: saturate(125%) blur(18px);
   border-color: var(--border);
+  box-shadow: none;
 }
-
-:root[data-platform="macos"] .nav-item,
-:root[data-platform="macos"] .nav-subitem {
-  font-weight: 500;
-  border-radius: 7px;
-}
-
-:root[data-platform="macos"] .nav-item:hover {
-  transform: none;
-}
-
-:root[data-platform="macos"] .nav-item.active,
-:root[data-platform="macos"] .nav-subitem.active,
-:root[data-platform="macos"] .project-session-row.active {
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-:root[data-platform="macos"] .workbench-panel {
-  background: var(--bg-primary);
-  border-color: var(--border);
-}
-
+:root[data-platform="macos"] .feature-topbar-title { font-size: 15px; font-weight: 600; }
+:root[data-platform="macos"] .chat-layout { background: var(--bg-primary); }
 :root[data-platform="macos"] .input-area {
-  border-color: var(--border);
-  box-shadow: 0 8px 24px rgba(15, 15, 20, 0.08);
+  width: min(calc(100% - 36px), 820px);
+  bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--bg-secondary);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.09);
+  backdrop-filter: none;
 }
 
+:root[data-platform="macos"] :is(.btn, .btn-primary, .btn-secondary, .btn-header, .settings-navigation-item) {
+  min-height: 28px;
+  border-radius: 7px;
+  font-family: var(--font);
+  font-size: 13px;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+:root[data-platform="macos"] :is(.btn-primary, .btn-header.is-active) {
+  background: var(--accent);
+  color: #fff;
+}
+:root[data-platform="macos"] :is(.btn-secondary, .btn-header) {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+:root[data-platform="macos"] :is(input, textarea, select) {
+  font-family: var(--font);
+  color: var(--text-primary);
+  accent-color: var(--accent);
+}
+:root[data-platform="macos"] :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  border-radius: 7px;
+  border-color: var(--border);
+  box-shadow: none;
+}
 :root[data-platform="macos"] :is(button, a, input, textarea, select):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+:root[data-platform="macos"] :is(button, a, input, textarea, select):disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
+:root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 35px;
+  height: 21px;
+  min-width: 35px;
+  margin: 0 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-tertiary);
+  position: relative;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) ease;
+}
+:root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.23);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+:root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: transparent;
+}
+:root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"]:checked::before {
+  transform: translateX(14px);
+}
+
+:root[data-platform="macos"] .creative-tabs {
+  width: max-content;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+}
+:root[data-platform="macos"] .creative-tabs button {
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+:root[data-platform="macos"] .creative-tabs button.active {
+  background: var(--bg-secondary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.13);
+  font-weight: 600;
+}
+
+:root[data-platform="macos"] .settings-navigation {
+  width: 204px;
+  flex-basis: 204px;
+}
+:root[data-platform="macos"] .settings-navigation-item {
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 0;
+  background: transparent;
+}
+:root[data-platform="macos"] .settings-navigation-item:hover { background: var(--bg-hover); }
+:root[data-platform="macos"] .settings-page { background: var(--bg-primary); }
+
+:root[data-platform="macos"] .sidebar-is-collapsed .sidebar {
+  padding-inline: 8px;
+}
+:root[data-platform="macos"] .sidebar-is-collapsed .sidebar-header {
+  padding-inline: 0;
+}
+:root[data-platform="macos"] .sidebar-is-collapsed .nav-item {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+@media (max-width: 1100px) {
+  :root[data-platform="macos"] .settings-navigation {
+    width: 100%;
+    flex-basis: auto;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
   :root[data-platform="macos"] .desktop-window,
   :root[data-platform="macos"] .app,
-  :root[data-platform="macos"] .chat-layout {
-    background: var(--bg-primary);
-  }
-  :root[data-platform="macos"] .sidebar,
-  :root[data-platform="macos"] .chat-session-sidebar,
-  :root[data-platform="macos"] .feature-topbar,
-  :root[data-platform="macos"] .chat-topbar,
-  :root[data-platform="macos"] .page-header,
-  :root[data-platform="macos"] .workbench-header,
-  :root[data-platform="macos"] .workbench-tabs {
+  :root[data-platform="macos"] .sidebar { background: var(--bg-primary); }
+  :root[data-platform="macos"] :is(.feature-topbar, .chat-topbar, .page-header, .workbench-header, .workbench-tabs) {
+    background: var(--bg-secondary);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background: var(--bg-secondary);
   }
 }
 
 @media (prefers-contrast: more) {
   :root[data-platform="macos"] { --border: currentColor; }
+  :root[data-platform="macos"] :is(.nav-item.active, .nav-subitem.active, .project-session-row.active) {
+    outline: 1px solid currentColor;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-platform="macos"] *,
+  :root[data-platform="macos"] *::before,
+  :root[data-platform="macos"] *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }

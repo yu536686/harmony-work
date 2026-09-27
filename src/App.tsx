@@ -2,6 +2,7 @@ import { Fragment, Suspense, lazy, useEffect, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   ChevronDown,
   ChevronRight,
@@ -59,6 +60,7 @@ const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") ==
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const IS_MACOS = navigator.userAgent.includes("Macintosh");
 if (IS_MACOS) document.documentElement.dataset.platform = "macos";
+if (IS_MACOS && isTauri()) document.documentElement.dataset.nativeShell = "true";
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
 const ONBOARDING_STORAGE_KEY = "harmony-work.onboardingCompleted";
 import { REGISTER_URL } from "./services/serviceUrls";
@@ -111,6 +113,22 @@ function AppContent() {
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
+
+  useEffect(() => {
+    if (!IS_MACOS) return;
+    const toggleSidebar = () => setSidebarCollapsed((value) => !value);
+    const newChat = () => {
+      setActiveTab("chat");
+      setNewChatRequest((value) => value + 1);
+    };
+    window.addEventListener("harmony:native-toggle-sidebar", toggleSidebar);
+    window.addEventListener("harmony:native-new-chat", newChat);
+    return () => {
+      window.removeEventListener("harmony:native-toggle-sidebar", toggleSidebar);
+      window.removeEventListener("harmony:native-new-chat", newChat);
+    };
+  }, []);
+
   const [chatSidebarHost, setChatSidebarHost] = useState<HTMLDivElement | null>(null);
   const [newChatRequest, setNewChatRequest] = useState(0);
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
@@ -129,6 +147,11 @@ function AppContent() {
     return (readMigratedStorage('workbuddy-color-mode', 'piscis-color-mode') as 'light' | 'dark')
       || (IS_MACOS && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   });
+  useEffect(() => {
+    if (IS_MACOS && isTauri()) {
+      void invoke("set_macos_shell_state", { width: sidebarCollapsed ? 64 : 280, dark: colorMode === "dark" });
+    }
+  }, [sidebarCollapsed, colorMode]);
   const [followsSystemColorMode, setFollowsSystemColorMode] = useState(
     () => IS_MACOS && localStorage.getItem('workbuddy-color-mode') === null,
   );

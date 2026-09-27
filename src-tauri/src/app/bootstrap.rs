@@ -352,6 +352,13 @@ fn run_impl() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = crate::mac_native_shell::install(&window) {
+                    tracing::warn!("Could not install macOS native shell: {error}");
+                }
+            }
+
             let app_data_dir = app_handle
                 .path()
                 .app_data_dir()
@@ -1211,6 +1218,7 @@ fn run_impl() {
         })
         .invoke_handler(tauri::generate_handler![
             open_path,
+            crate::mac_native_shell::set_macos_shell_state,
             crate::codex_runtime::service::codex_runtime_diagnostic,
             crate::codex_runtime::service::codex_chat_send,
             crate::codex_runtime::service::codex_chat_cancel,
