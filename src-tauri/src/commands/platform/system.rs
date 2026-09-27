@@ -216,14 +216,14 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
         None => (
             false,
             None,
-            "安装 Google Chrome 或 Microsoft Edge 后，重启 Harmony Work 以启用浏览器自动化。".to_string(),
+            crate::platform_profile::DesktopPlatform::current().browser_missing_hint().to_string(),
         ),
     };
     items.push(RuntimeCheckItem {
         name: "Browser (Edge/Chrome)".into(),
         available: browser_available,
         version: browser_version,
-        download_url: "https://www.google.com/chrome/".into(),
+        download_url: crate::platform_profile::DesktopPlatform::current().browser_download_url().into(),
         hint: browser_hint,
     });
 

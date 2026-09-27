@@ -17,7 +17,7 @@
     "stage:macos-runtime": "node scripts/stage-macos-runtime.mjs",
     "stage:flaui-mcp": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stage-flaui-mcp.ps1",
     "tauri": "tauri",
-    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs scripts/tauri-dev-contract.test.mjs scripts/conversation-layout-contract.test.mjs scripts/stage-playwright-mcp.test.mjs scripts/automation-runtime-contract.test.mjs scripts/macos-build-contract.test.mjs",
+    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs scripts/tauri-dev-contract.test.mjs scripts/conversation-layout-contract.test.mjs scripts/stage-playwright-mcp.test.mjs scripts/automation-runtime-contract.test.mjs scripts/macos-build-contract.test.mjs scripts/platform-isolation-contract.test.mjs",
     "test:installer": "node --test scripts/offline-runtime-lock.test.mjs",
     "test:codex-sdk": "node --test scripts/codex-sdk-runner.test.mjs",
     "test:codex-sidecar": "node --test scripts/stage-codex-sidecar.test.mjs",
@@ -25,6 +25,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:artifact-runtime": "vitest run --config artifact-runtime/vitest.config.ts",
+    "test:native": "node scripts/test-native.mjs",
     "typecheck:artifact-runtime": "tsc -p artifact-runtime/tsconfig.json"
   },
   "dependencies": {

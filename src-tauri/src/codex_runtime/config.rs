@@ -3,6 +3,7 @@ pub const PINNED_CODEX_VERSION: &str = "0.156.1";
 pub const MANAGED_MCP_BEGIN: &str = "# BEGIN WORKBUDDY MCP";
 pub const MANAGED_MCP_END: &str = "# END WORKBUDDY MCP";
 
+use crate::platform_profile::DesktopPlatform;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +178,7 @@ impl AutomationMcpProfile {
             windows_desktop: windows_desktop.map(Path::to_path_buf),
             macos_desktop: None,
             headless,
-            browser_channel: if cfg!(windows) { "msedge" } else { "chrome" }.to_string(),
+            browser_channel: DesktopPlatform::current().browser_channel().to_string(),
         }
     }
 

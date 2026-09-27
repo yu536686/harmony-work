@@ -1,3 +1,4 @@
+use crate::platform_profile::DesktopPlatform;
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -19,6 +20,7 @@ pub async fn list_builtin_tools(
 }
 
 fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
+    let platform = DesktopPlatform::current();
     vec![
         BuiltinToolInfo {
             name: "file_read".into(),
@@ -34,7 +36,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "shell".into(),
-            description: "执行系统 Shell 命令（Windows PowerShell / macOS zsh / Linux shell）".into(),
+            description: platform.shell_description().into(),
             icon: "⌨️".into(),
             windows_only: false,
         },
@@ -58,7 +60,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "browser".into(),
-            description: "通过 Playwright MCP 控制 Chrome 或 Edge，支持导航、点击、快照与截图；设置更改后需重启".into(),
+            description: platform.browser_description().into(),
             icon: "🌐".into(),
             windows_only: false,
         },
@@ -118,9 +120,9 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "computer_use".into(),
-            description: "通过系统辅助功能 MCP 查看并操作桌面控件，必要时使用截图；设置更改后需重启".into(),
+            description: platform.computer_use_description().into(),
             icon: "🖱️".into(),
-            windows_only: false,
+            windows_only: platform == DesktopPlatform::Windows,
         },
         BuiltinToolInfo {
             name: "pool_org".into(),

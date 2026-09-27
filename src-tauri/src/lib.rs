@@ -21,6 +21,7 @@ pub mod lsp;
 pub mod notify;
 pub mod pool;
 pub mod process;
+mod platform_profile;
 pub mod scheduler;
 mod skills;
 pub mod store;

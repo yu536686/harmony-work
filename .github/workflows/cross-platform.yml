@@ -1,0 +1,37 @@
+name: Cross-platform checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feat/cross-platform-foundation
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install platform-local dependencies
+        run: npm ci
+      - name: Run frontend and packaging contracts
+        run: npm test
+      - name: Build shared frontend
+        run: npm run build:web
+      - name: Test native runtime
+        run: npm run test:native

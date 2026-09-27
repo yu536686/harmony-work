@@ -17,6 +17,7 @@ use crate::codex_runtime::runner::{
 use crate::codex_runtime::session_map::{
     CodexSessionMapError, CodexSessionMapStore, NewCodexSessionBinding,
 };
+use crate::platform_profile::DesktopPlatform;
 use crate::store::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -438,16 +439,26 @@ fn workspace_artifact_uri(path: &Path) -> String {
 }
 
 fn normalize_artifact_uri(uri: &str) -> String {
+    normalize_artifact_uri_for_platform(uri, DesktopPlatform::current())
+}
+
+fn normalize_artifact_uri_for_platform(uri: &str, platform: DesktopPlatform) -> String {
     let trimmed = uri.trim();
+    if platform == DesktopPlatform::Windows {
+        let local_path = trimmed
+            .strip_prefix("file:///")
+            .or_else(|| trimmed.strip_prefix("file://"))
+            .unwrap_or(trimmed);
+        return local_path
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(local_path)
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+    }
     let local_path = if let Some(file_path) = trimmed.strip_prefix("file://") {
-        let path = if cfg!(windows) {
-            file_path.trim_start_matches('/')
-        } else {
-            file_path
-        };
-        urlencoding::decode(path)
+        urlencoding::decode(file_path)
             .map(|decoded| decoded.into_owned())
-            .unwrap_or_else(|_| path.to_string())
+            .unwrap_or_else(|_| file_path.to_string())
     } else {
         trimmed.to_string()
     };
@@ -458,11 +469,7 @@ fn normalize_artifact_uri(uri: &str) -> String {
         .canonicalize()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| local_path.to_string());
-    if cfg!(windows) {
-        normalized.replace('/', "\\").to_ascii_lowercase()
-    } else {
-        normalized.replace('\\', "/")
-    }
+    normalized.replace('\\', "/")
 }
 
 #[derive(Clone)]
@@ -1144,7 +1151,12 @@ fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
             .find(|path| path.is_file())
     };
     let node = crate::process::managed_runtime_executable("node")
-        .or_else(|| bundled("node/bin/node"))
+        .or_else(|| {
+            DesktopPlatform::current()
+                .uses_bundled_node()
+                .then(|| bundled("node/bin/node"))
+                .flatten()
+        })
         .or_else(|| {
             let name = if cfg!(windows) { "node.exe" } else { "node" };
             std::env::var_os("PATH").and_then(|paths| {
@@ -2255,6 +2267,35 @@ mod tests {
             normalize_artifact_uri(&artifacts[0].uri)
         );
         fs::remove_dir_all(&workspace).expect("remove temp workspace");
+    }
+
+    #[test]
+    fn artifact_uri_normalization_keeps_windows_legacy_behavior() {
+        assert_eq!(
+            normalize_artifact_uri_for_platform(
+                "file:///C:/Work/Report.PDF",
+                DesktopPlatform::Windows,
+            ),
+            "c:\\work\\report.pdf"
+        );
+        assert_eq!(
+            normalize_artifact_uri_for_platform(
+                "\\\\?\\C:\\Work\\Report.PDF",
+                DesktopPlatform::Windows,
+            ),
+            "c:\\work\\report.pdf"
+        );
+    }
+
+    #[test]
+    fn artifact_uri_normalization_decodes_macos_file_urls() {
+        assert_eq!(
+            normalize_artifact_uri_for_platform(
+                "file:///tmp/Harmony%20Work/Report.PDF",
+                DesktopPlatform::Macos,
+            ),
+            "/tmp/Harmony Work/Report.PDF"
+        );
     }
 
     #[test]
