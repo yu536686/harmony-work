@@ -35,6 +35,7 @@ import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
 import "./theme.css";
 import "./App.css";
+import "./macos.css";
 
 const Memory = lazy(() => import("./components/Memory"));
 const SchoolPage = lazy(() => import("./components/School"));
@@ -56,6 +57,8 @@ type SchoolSubTab = "fish" | "koi";
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
+const IS_MACOS = navigator.userAgent.includes("Macintosh");
+if (IS_MACOS) document.documentElement.dataset.platform = "macos";
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
 const ONBOARDING_STORAGE_KEY = "harmony-work.onboardingCompleted";
 import { REGISTER_URL } from "./services/serviceUrls";
@@ -123,8 +126,12 @@ function AppContent() {
     return (readMigratedStorage('workbuddy-theme', 'piscis-theme') as 'violet' | 'gold') || 'violet';
   });
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(() => {
-    return (readMigratedStorage('workbuddy-color-mode', 'piscis-color-mode') as 'light' | 'dark') || 'light';
+    return (readMigratedStorage('workbuddy-color-mode', 'piscis-color-mode') as 'light' | 'dark')
+      || (IS_MACOS && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   });
+  const [followsSystemColorMode, setFollowsSystemColorMode] = useState(
+    () => IS_MACOS && localStorage.getItem('workbuddy-color-mode') === null,
+  );
   const [accountSyncPrompt, setAccountSyncPrompt] = useState<AccountSettingsSyncPrompt | null>(null);
   const [accountSyncBusy, setAccountSyncBusy] = useState(false);
   const [accountSyncError, setAccountSyncError] = useState("");
@@ -183,8 +190,16 @@ function AppContent() {
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.setAttribute('data-color-mode', colorMode);
     localStorage.setItem('workbuddy-theme', theme);
-    localStorage.setItem('workbuddy-color-mode', colorMode);
-  }, [theme, colorMode]);
+    if (!followsSystemColorMode) localStorage.setItem('workbuddy-color-mode', colorMode);
+  }, [theme, colorMode, followsSystemColorMode]);
+
+  useEffect(() => {
+    if (!followsSystemColorMode) return;
+    const appearance = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = (event: MediaQueryListEvent) => setColorMode(event.matches ? 'dark' : 'light');
+    appearance.addEventListener('change', update);
+    return () => appearance.removeEventListener('change', update);
+  }, [followsSystemColorMode]);
 
   useEffect(() => {
     const unlisten = listen<string>("app_theme_changed", (event) => {
@@ -484,7 +499,10 @@ function AppContent() {
             className="color-mode-toggle"
             title={colorMode === "dark" ? t("nav.colorModeLight") : t("nav.colorModeDark")}
             aria-label={colorMode === "dark" ? t("nav.colorModeLight") : t("nav.colorModeDark")}
-            onClick={() => setColorMode((m) => (m === "dark" ? "light" : "dark"))}
+            onClick={() => {
+              setFollowsSystemColorMode(false);
+              setColorMode((m) => (m === "dark" ? "light" : "dark"));
+            }}
           >
             {colorMode === "dark" ? <Sun size={15} strokeWidth={1.8} /> : <Moon size={15} strokeWidth={1.8} />}
           </button>

@@ -59,7 +59,7 @@ impl CompatibilityCheck {
 /// Check whether a skill can be installed on the current system.
 ///
 /// Checks:
-/// 1. `platform` field — must include "windows" (or be empty/absent).
+/// 1. `platform` field — must include the current OS (or be empty/absent).
 /// 2. `dependencies` field — each entry is checked for availability via PATH lookup.
 ///    Recognised dependency names: python, python3, node, npm, npx, ruby, go, java, dotnet, git, ffmpeg.
 pub async fn check_skill_compatibility(skill: &SkillDefinition) -> CompatibilityCheck {
@@ -68,14 +68,21 @@ pub async fn check_skill_compatibility(skill: &SkillDefinition) -> Compatibility
 
     // ── Platform check ────────────────────────────────────────────────────────
     if !skill.platform.is_empty() {
-        let supported = skill.platform.iter().any(|p| {
-            let p = p.to_lowercase();
-            p == "windows" || p == "win" || p == "win32" || p == "win64"
+        let current_os = std::env::consts::OS;
+        let supported = skill.platform.iter().any(|platform| {
+            let platform = platform.to_lowercase();
+            match current_os {
+                "windows" => matches!(platform.as_str(), "windows" | "win" | "win32" | "win64"),
+                "macos" => matches!(platform.as_str(), "macos" | "mac" | "darwin" | "osx"),
+                "linux" => platform == "linux",
+                other => platform == other,
+            }
         });
         if !supported {
             issues.push(format!(
-                "此技能仅支持 {} 平台，当前系统为 Windows",
-                skill.platform.join(" / ")
+                "此技能仅支持 {} 平台，当前系统为 {}",
+                skill.platform.join(" / "),
+                current_os
             ));
         }
     }

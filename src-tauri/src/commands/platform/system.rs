@@ -216,14 +216,14 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
         None => (
             false,
             None,
-            "安装 Microsoft Edge 或 Google Chrome 后，重启 Harmony Work 以启用浏览器自动化。".to_string(),
+            "安装 Google Chrome 或 Microsoft Edge 后，重启 Harmony Work 以启用浏览器自动化。".to_string(),
         ),
     };
     items.push(RuntimeCheckItem {
         name: "Browser (Edge/Chrome)".into(),
         available: browser_available,
         version: browser_version,
-        download_url: "https://www.microsoft.com/edge/download".into(),
+        download_url: "https://www.google.com/chrome/".into(),
         hint: browser_hint,
     });
 
@@ -368,16 +368,16 @@ pub fn collect_system_dependencies(settings: &Settings) -> Vec<SystemDependencyI
 
     #[cfg(target_os = "macos")]
     {
-        let desktop_enabled = tool_enabled("desktop_automation");
+        let desktop_enabled = tool_enabled("computer_use");
         items.push(build_dependency_item(
             "cliclick",
             "cliclick",
             "desktop_automation",
             command_exists("cliclick"),
-            desktop_enabled,
+            false,
             None,
-            "Mouse, keyboard, drag, and click automation on macOS.",
-            Some("Install cliclick with Homebrew: `brew install cliclick`."),
+            "Optional command-line input helper; bundled desktop automation does not require it.",
+            Some("Optional: install cliclick with Homebrew if you use custom scripts."),
             dependency_action_for_key("cliclick"),
         ));
 

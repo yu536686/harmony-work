@@ -20,6 +20,8 @@ src-tauri/resources/codex/
 src-tauri/resources/workbuddy-mcp-host/
 src-tauri/resources/playwright-mcp/
 src-tauri/resources/flaui-mcp/
+src-tauri/resources/mac-use-mcp/
+src-tauri/resources/node/
 .playwright-mcp/
 release/
 .package-target/

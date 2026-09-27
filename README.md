@@ -239,6 +239,20 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 脚本校验离线载荷、构建 Tauri NSIS 内层安装包，再生成 WPF 外层安装器。最终文件位于 `release\full\Harmony-Work-<version>-x64-setup.exe`。构建与安装细节见 [安装器说明](installer/README.md)。运行时载荷和打包产物不提交到 Git。
 
+## macOS 开发预览
+
+macOS 版本正在同一仓库的功能分支开发，暂未提供签名、Apple 公证或官网正式下载。当前只验证了 Apple Silicon 构建；Intel Mac 和完整功能回归尚未完成。最低系统版本为 macOS 13。
+
+构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools，以及可用的网络来安装锁定的 npm/Cargo 依赖。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。
+
+```sh
+npm ci
+npm test
+./scripts/build-mac.sh
+```
+
+脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。桌面操控首次使用时仍需用户在“系统设置 → 隐私与安全性”中授予辅助功能和屏幕录制权限；安装包不能代为授权。
+
 ## 项目结构
 
 ```text

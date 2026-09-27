@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port 1420",
     "build": "npm run stage:codex && npm run stage:mcp-host && npm run stage:playwright-mcp && npm run stage:flaui-mcp && npm run build:artifact-runtime && npm run build:web",
+    "build:mac": "npm run stage:codex && npm run stage:mcp-host && npm run stage:playwright-mcp && npm run stage:macos-runtime && npm run build:artifact-runtime && npm run build:web",
     "build:artifact-runtime": "npm run typecheck:artifact-runtime && node scripts/build-artifact-runtime.mjs",
     "build:web": "tsc && vite build",
     "build:tauri": "npm run build",
@@ -13,9 +14,10 @@
     "stage:codex": "node scripts/stage-codex-sidecar.mjs",
     "stage:mcp-host": "node scripts/stage-workbuddy-mcp-host.mjs",
     "stage:playwright-mcp": "node scripts/stage-playwright-mcp.mjs",
+    "stage:macos-runtime": "node scripts/stage-macos-runtime.mjs",
     "stage:flaui-mcp": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stage-flaui-mcp.ps1",
     "tauri": "tauri",
-    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs scripts/tauri-dev-contract.test.mjs scripts/conversation-layout-contract.test.mjs scripts/stage-playwright-mcp.test.mjs scripts/automation-runtime-contract.test.mjs",
+    "test": "vitest run && node --test scripts/offline-runtime-lock.test.mjs scripts/branding-contract.test.mjs scripts/tauri-dev-contract.test.mjs scripts/conversation-layout-contract.test.mjs scripts/stage-playwright-mcp.test.mjs scripts/automation-runtime-contract.test.mjs scripts/macos-build-contract.test.mjs",
     "test:installer": "node --test scripts/offline-runtime-lock.test.mjs",
     "test:codex-sdk": "node --test scripts/codex-sdk-runner.test.mjs",
     "test:codex-sidecar": "node --test scripts/stage-codex-sidecar.test.mjs",
@@ -55,6 +57,9 @@
     "react-redux": "^9.1.2",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1"
+  },
+  "optionalDependencies": {
+    "mac-use-mcp": "^1.1.1"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.95",

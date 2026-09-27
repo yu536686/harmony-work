@@ -1060,8 +1060,13 @@ pub async fn ide_terminal_create(
     // Fall back to PowerShell which is always available on Windows 10/11.
     #[cfg(windows)]
     let shell = "powershell.exe".to_string();
-    #[cfg(not(windows))]
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+    #[cfg(target_os = "macos")]
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|value| Path::new(value).is_file())
+        .unwrap_or_else(|| "/bin/zsh".to_string());
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     let mut cmd = CommandBuilder::new(shell);
     cmd.cwd(&root);
     cmd.env("TERM", "xterm-256color");

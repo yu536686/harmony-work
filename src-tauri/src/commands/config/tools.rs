@@ -34,7 +34,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "shell".into(),
-            description: "执行系统 Shell 命令（cmd.exe / bash）".into(),
+            description: "执行系统 Shell 命令（Windows PowerShell / macOS zsh / Linux shell）".into(),
             icon: "⌨️".into(),
             windows_only: false,
         },
@@ -58,7 +58,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "browser".into(),
-            description: "通过 Playwright MCP 控制 Edge 或 Chrome，支持导航、点击、快照与截图；设置更改后需重启".into(),
+            description: "通过 Playwright MCP 控制 Chrome 或 Edge，支持导航、点击、快照与截图；设置更改后需重启".into(),
             icon: "🌐".into(),
             windows_only: false,
         },
@@ -118,9 +118,9 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "computer_use".into(),
-            description: "通过 Windows UIA3 MCP 查看并操作桌面控件，必要时使用截图；设置更改后需重启".into(),
+            description: "通过系统辅助功能 MCP 查看并操作桌面控件，必要时使用截图；设置更改后需重启".into(),
             icon: "🖱️".into(),
-            windows_only: true,
+            windows_only: false,
         },
         BuiltinToolInfo {
             name: "pool_org".into(),

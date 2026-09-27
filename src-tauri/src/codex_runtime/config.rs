@@ -159,6 +159,7 @@ pub struct AutomationMcpProfile {
     node: PathBuf,
     playwright_entry: PathBuf,
     windows_desktop: Option<PathBuf>,
+    macos_desktop: Option<PathBuf>,
     headless: bool,
     browser_channel: String,
 }
@@ -174,6 +175,7 @@ impl AutomationMcpProfile {
             node: node.to_path_buf(),
             playwright_entry: playwright_entry.to_path_buf(),
             windows_desktop: windows_desktop.map(Path::to_path_buf),
+            macos_desktop: None,
             headless,
             browser_channel: if cfg!(windows) { "msedge" } else { "chrome" }.to_string(),
         }
@@ -181,6 +183,11 @@ impl AutomationMcpProfile {
 
     pub fn with_browser_channel(mut self, channel: &str) -> Self {
         self.browser_channel = channel.to_string();
+        self
+    }
+
+    pub fn with_macos_desktop(mut self, entry: Option<&Path>) -> Self {
+        self.macos_desktop = entry.map(Path::to_path_buf);
         self
     }
 
@@ -208,6 +215,13 @@ impl AutomationMcpProfile {
             rendered.push_str(&format!(
                 "\n[mcp_servers.windows_desktop]\ncommand = {}\nstartup_timeout_sec = 30\ntool_timeout_sec = 180\n",
                 toml_string(&executable.display().to_string())
+            ));
+        }
+        if let Some(entry) = self.macos_desktop.as_ref().filter(|_| !self.node.as_os_str().is_empty()) {
+            rendered.push_str(&format!(
+                "\n[mcp_servers.macos_desktop]\ncommand = {}\nargs = [{}]\nstartup_timeout_sec = 30\ntool_timeout_sec = 180\n",
+                toml_string(&self.node.display().to_string()),
+                toml_string(&entry.display().to_string()),
             ));
         }
         rendered
@@ -391,7 +405,12 @@ command = "host"
             parsed["mcp_servers"]["playwright"]["args"][0].as_str(),
             Some("C:/Program Files/Harmony Work/resources/playwright-mcp/cli.js")
         );
-        assert!(rendered.contains("\"--browser=msedge\""));
+        let expected_browser = if cfg!(windows) {
+            "\"--browser=msedge\""
+        } else {
+            "\"--browser=chrome\""
+        };
+        assert!(rendered.contains(expected_browser));
         assert!(rendered.contains("\"--headless\""));
         assert!(rendered.contains("[mcp_servers.windows_desktop]"));
         assert!(!rendered.contains("npx"));
@@ -440,5 +459,25 @@ command = "host"
         let rendered = profile.render_toml();
         assert!(rendered.contains("--browser=chrome"));
         assert!(!rendered.contains("--browser=msedge"));
+    }
+
+    #[test]
+    fn macos_desktop_uses_bundled_node_without_changing_windows_profile() {
+        let profile = AutomationMcpProfile::new(
+            Path::new("/Applications/Harmony Work.app/Contents/Resources/resources/node/bin/node"),
+            Path::new(""),
+            None,
+            false,
+        )
+        .with_macos_desktop(Some(Path::new(
+            "/Applications/Harmony Work.app/Contents/Resources/resources/mac-use-mcp/dist/helpers/cli.mjs",
+        )));
+        let rendered = profile.render_toml();
+        let parsed: toml::Value = rendered.parse().expect("valid managed MCP TOML");
+        assert_eq!(
+            parsed["mcp_servers"]["macos_desktop"]["args"][0].as_str(),
+            Some("/Applications/Harmony Work.app/Contents/Resources/resources/mac-use-mcp/dist/helpers/cli.mjs")
+        );
+        assert!(!rendered.contains("windows_desktop"));
     }
 }

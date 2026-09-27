@@ -1,0 +1,61 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build:mac"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harmony Work",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 980,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "dragDropEnabled": true,
+        "fullscreen": false,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["sidebar"]
+        }
+      },
+      {
+        "label": "overlay",
+        "title": "Harmony Work Overlay",
+        "url": "index.html?overlay=1",
+        "width": 280,
+        "height": 56,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "x": 20,
+        "y": 20
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "resources": [
+      "resources/codex",
+      "resources/workbuddy-mcp-host",
+      "resources/playwright-mcp",
+      "resources/mac-use-mcp",
+      "resources/node",
+      "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
+    ]
+  }
+}

@@ -439,15 +439,30 @@ fn workspace_artifact_uri(path: &Path) -> String {
 
 fn normalize_artifact_uri(uri: &str) -> String {
     let trimmed = uri.trim();
-    let local_path = trimmed
-        .strip_prefix("file:///")
-        .or_else(|| trimmed.strip_prefix("file://"))
-        .unwrap_or(trimmed);
-    local_path
+    let local_path = if let Some(file_path) = trimmed.strip_prefix("file://") {
+        let path = if cfg!(windows) {
+            file_path.trim_start_matches('/')
+        } else {
+            file_path
+        };
+        urlencoding::decode(path)
+            .map(|decoded| decoded.into_owned())
+            .unwrap_or_else(|_| path.to_string())
+    } else {
+        trimmed.to_string()
+    };
+    let local_path = local_path
         .strip_prefix("\\\\?\\")
-        .unwrap_or(local_path)
-        .replace('/', "\\")
-        .to_ascii_lowercase()
+        .unwrap_or(local_path.as_str());
+    let normalized = Path::new(local_path)
+        .canonicalize()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| local_path.to_string());
+    if cfg!(windows) {
+        normalized.replace('/', "\\").to_ascii_lowercase()
+    } else {
+        normalized.replace('\\', "/")
+    }
 }
 
 #[derive(Clone)]
@@ -1128,14 +1143,16 @@ fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
             .into_iter()
             .find(|path| path.is_file())
     };
-    let node = crate::process::managed_runtime_executable("node").or_else(|| {
-        let name = if cfg!(windows) { "node.exe" } else { "node" };
-        std::env::var_os("PATH").and_then(|paths| {
-            std::env::split_paths(&paths)
-                .map(|directory| directory.join(name))
-                .find(|path| path.is_file())
-        })
-    });
+    let node = crate::process::managed_runtime_executable("node")
+        .or_else(|| bundled("node/bin/node"))
+        .or_else(|| {
+            let name = if cfg!(windows) { "node.exe" } else { "node" };
+            std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|directory| directory.join(name))
+                    .find(|path| path.is_file())
+            })
+        });
     let settings = crate::store::Settings::load(&app_data_dir.join("config.json")).ok();
     let tool_enabled = |name: &str| {
         settings
@@ -1156,6 +1173,10 @@ fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
         .flatten();
     #[cfg(not(windows))]
     let desktop: Option<PathBuf> = None;
+    #[cfg(target_os = "macos")]
+    let macos_desktop = tool_enabled("computer_use")
+        .then(|| bundled("mac-use-mcp/dist/helpers/cli.mjs"))
+        .flatten();
     let headless = settings
         .as_ref()
         .map(|settings| settings.browser_headless)
@@ -1166,6 +1187,8 @@ fn automation_mcp_profile(app_data_dir: &Path) -> AutomationMcpProfile {
         desktop.as_deref(),
         headless,
     );
+    #[cfg(target_os = "macos")]
+    let profile = profile.with_macos_desktop(macos_desktop.as_deref());
     match browser {
         Some(installation) => profile.with_browser_channel(installation.channel),
         None => profile,
@@ -1181,6 +1204,12 @@ fn bundled_automation_candidates_from(current_exe: &Path, relative: &str) -> Vec
             .join("resources")
             .join(relative),
     ];
+    if let Some(contents) = directory
+        .parent()
+        .filter(|path| path.file_name().and_then(|value| value.to_str()) == Some("Contents"))
+    {
+        candidates.push(contents.join("Resources").join("resources").join(relative));
+    }
     if relative == "playwright-mcp/cli.js" {
         candidates.push(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2221,6 +2250,10 @@ mod tests {
             normalize_artifact_uri(&artifacts[0].uri),
             normalize_artifact_uri(report_path.to_str().expect("report path"))
         );
+        assert_eq!(
+            normalize_artifact_uri(&format!("file://{}", report_path.display())),
+            normalize_artifact_uri(&artifacts[0].uri)
+        );
         fs::remove_dir_all(&workspace).expect("remove temp workspace");
     }
 
@@ -2516,6 +2549,15 @@ mod tests {
                 .ends_with("resources/flaui-mcp/FlaUI.Mcp.exe")
         }));
         assert!(!desktop.iter().any(|path| path.ends_with("mcp/cli.js")));
+    }
+
+    #[test]
+    fn automation_mcp_candidates_include_macos_app_resources() {
+        let executable = Path::new("/Applications/Harmony Work.app/Contents/MacOS/harmony-work");
+        let candidates = bundled_automation_candidates_from(executable, "mac-use-mcp/dist/helpers/cli.mjs");
+        assert!(candidates.iter().any(|path| path == Path::new(
+            "/Applications/Harmony Work.app/Contents/Resources/resources/mac-use-mcp/dist/helpers/cli.mjs"
+        )));
     }
 
     #[tokio::test]
