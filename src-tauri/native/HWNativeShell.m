@@ -98,6 +98,15 @@ void hw_set_shell_state(void *windowPointer, double width, bool dark) {
     NSAppearance *appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
     window.appearance = appearance;
     sidebar.appearance = appearance;
+    window.backgroundColor = dark
+        ? [NSColor colorWithCalibratedRed:0.10 green:0.11 blue:0.14 alpha:1]
+        : [NSColor windowBackgroundColor];
+    if ([sidebar respondsToSelector:@selector(setTintColor:)]) {
+        NSColor *tint = dark
+            ? [NSColor colorWithCalibratedRed:0.10 green:0.11 blue:0.14 alpha:0.70]
+            : nil;
+        [sidebar setValue:tint forKey:@"tintColor"];
+    }
     NSRect frame = sidebar.frame;
     frame.size.width = MAX(0, MIN(width, 420));
     sidebar.frame = frame;

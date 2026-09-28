@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { Settings2 } from "lucide-react";
 import { RootState, settingsActions } from "../../store";
 import {
   settingsApi,
@@ -42,6 +43,7 @@ import { primaryChannelStatusLabel } from "./channelLifecycle";
 import "./Settings.css";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
+const IS_MACOS = navigator.userAgent.includes("Macintosh");
 
 const LLM_PROVIDER_OPTIONS = [
   { id: "anthropic", labelKey: "settings.providerAnthropic", icon: "🟧", baseUrl: "https://api.anthropic.com/v1", keyField: "anthropic_api_key", placeholder: "claude-sonnet-4-5" },
@@ -890,7 +892,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">⚙️ {t("settings.title")}</h1>
+        <h1 className="page-title">{IS_MACOS ? <Settings2 size={19} strokeWidth={1.8} aria-hidden="true" /> : "⚙️"} {t("settings.title")}</h1>
         <div className="page-header-actions">
           <button type="button" className="btn-header btn-header-primary" onClick={handleSave} disabled={saving}>
             {saved ? t("settings.saved") : saving ? t("settings.saving") : t("settings.saveChanges")}

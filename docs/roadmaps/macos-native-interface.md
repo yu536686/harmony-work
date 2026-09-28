@@ -33,8 +33,11 @@ Give the macOS build a platform-native window and navigation experience without 
 
 - Implemented the native unified toolbar, version-adaptive sidebar material, width and appearance bridge, and Mac-only typography/control styles on `feat/macos-native-shell`.
 - `npm test`, `npm run test:native` (219 tests), and `npx tauri build --config src-tauri/tauri.macos.conf.json --bundles app` pass. The bundle is `target/release/bundle/macos/Harmony Work.app`.
-- Visual QA found a light native sidebar next to dark web content. The appearance bridge was added and rebuilt, but its follow-up light/dark and toolbar interaction checks remain pending because the Mac locked before the second inspection.
-- Do not merge into the Windows mainline until that visual QA and a Windows CI build pass.
+- Visual QA on the packaged Mac app found a light native sidebar next to dark web content. The native window background, glass tint, and Mac-only sidebar surface now follow the selected appearance. Both light and dark modes were inspected in the running app.
+- The native toolbar sidebar command collapsed and restored the React sidebar; the native new-conversation command opened a blank composer and focused it. The Settings page was inspected in light mode, including the Mac icon and control layout.
+- Harvis music and the Skill Market were inspected for navigation and basic layout. They still contain legacy React cards, form styling, and emoji headers/icons. This phase provides a native window/navigation foundation and a Mac-specific style layer, not a complete AppKit/SwiftUI rewrite of every content page. A full page-by-page Mac control and density pass remains outstanding.
+- Frontend tests (174), contract tests (28), native tests (219), and the macOS app bundle build pass after the appearance fix. The window-edge resize gesture did not resize the window during automated UI inspection, so narrow-window visual QA remains open. Reduced transparency, increased contrast, reduced motion, and keyboard-only navigation also need manual QA.
+- Do not merge into the Windows mainline until the remaining accessibility/resizing checks and a Windows CI build pass.
 
 ## References
 

@@ -63,6 +63,9 @@
   border-right: 1px solid var(--border);
   box-shadow: none;
 }
+:root[data-platform="macos"][data-color-mode="dark"] .sidebar {
+  background: rgba(20, 21, 26, 0.70);
+}
 
 :root[data-platform="macos"] .sidebar-header {
   min-height: 44px;
@@ -185,6 +188,7 @@
   box-shadow: none;
 }
 :root[data-platform="macos"] .feature-topbar-title { font-size: 15px; font-weight: 600; }
+:root[data-platform="macos"] .page-title { display: inline-flex; align-items: center; gap: 7px; }
 :root[data-platform="macos"] .chat-layout { background: var(--bg-primary); }
 :root[data-platform="macos"] .input-area {
   width: min(calc(100% - 36px), 820px);
