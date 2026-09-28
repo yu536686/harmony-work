@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
+import { CircleAlert, Monitor, Package, RotateCw, Sparkles, WandSparkles } from "lucide-react";
 import { RootState, skillsActions, sessionsActions } from "../../store";
 import {
   skillsApi,
@@ -44,6 +45,7 @@ const SOURCE_BADGE: Record<string, { label: string; color: string }> = {
   workspace: { label: "workspace", color: "#ffc107" },
   registry:  { label: "registry",  color: "var(--accent)" },
 };
+const IS_MACOS = navigator.userAgent.includes("Macintosh");
 
 export default function Skills({ onNavigateTab, embedded = false }: SkillsProps = {}) {
   const { t } = useTranslation();
@@ -637,7 +639,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
     <div className={`page skills-page ${embedded ? "skills-page--embedded" : ""}`}>
       {!embedded && (
         <div className="page-header">
-          <h1 className="page-title">⚡ {t("skills.title")}</h1>
+          <h1 className="page-title">{IS_MACOS ? <Sparkles size={19} strokeWidth={1.8} aria-hidden="true" /> : "⚡"} {t("skills.title")}</h1>
           <div className="page-header-actions">
             <span className="badge badge-info">
               {t("skills.enabledCount", { enabled: visibleSkills.filter((s) => s.enabled).length, total: visibleSkills.length })}
@@ -649,7 +651,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
               disabled={syncing}
               title={t("skills.syncBtn")}
             >
-              {syncing ? t("skills.syncing") : `↻ ${t("skills.syncBtn")}`}
+              {syncing ? t("skills.syncing") : IS_MACOS ? <><RotateCw size={14} strokeWidth={1.8} aria-hidden="true" /> {t("skills.syncBtn")}</> : `↻ ${t("skills.syncBtn")}`}
             </button>
           </div>
         </div>
@@ -832,7 +834,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 20 }}>{skill.icon}</span>
+                          <span style={{ fontSize: 20 }}>{IS_MACOS ? <Package size={18} strokeWidth={1.8} aria-hidden="true" /> : skill.icon}</span>
                           <span style={{ fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{skill.name}</span>
                           <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "var(--bg-tertiary)", color: badge.color, flexShrink: 0, border: `1px solid ${badge.color}` }}>
                             {badge.label}
@@ -851,17 +853,17 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
                         )}
                         {catalogEntry && catalogEntry.permissions.length > 0 && (
                           <p style={{ fontSize: 11, color: "#ffc107", margin: "2px 0 0" }}>
-                            ⚠ {t("skills.permissionsBadge", { perms: catalogEntry.permissions.join(", ") })}
+                            {IS_MACOS ? <CircleAlert size={12} strokeWidth={1.8} aria-hidden="true" /> : "⚠"} {t("skills.permissionsBadge", { perms: catalogEntry.permissions.join(", ") })}
                           </p>
                         )}
                         {catalogEntry && catalogEntry.platform.length > 0 && (
                           <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "2px 0 0" }}>
-                            🖥 {t("skills.platformBadge", { platform: catalogEntry.platform.join(", ") })}
+                            {IS_MACOS ? <Monitor size={12} strokeWidth={1.8} aria-hidden="true" /> : "🖥"} {t("skills.platformBadge", { platform: catalogEntry.platform.join(", ") })}
                           </p>
                         )}
                         {catalogEntry && catalogEntry.dependencies.length > 0 && (
                           <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "2px 0 0" }}>
-                            📦 {t("skills.depsBadge", { deps: catalogEntry.dependencies.join(", ") })}
+                            {IS_MACOS ? <Package size={12} strokeWidth={1.8} aria-hidden="true" /> : "📦"} {t("skills.depsBadge", { deps: catalogEntry.dependencies.join(", ") })}
                           </p>
                         )}
                       </div>
@@ -907,7 +909,7 @@ export default function Skills({ onNavigateTab, embedded = false }: SkillsProps 
         {workbenchView === "installed" && (
           <div>
             <div style={{ marginBottom: 20, padding: 14, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>🧹 {t("skills.curator")}</div>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>{IS_MACOS ? <WandSparkles size={15} strokeWidth={1.8} aria-hidden="true" /> : "🧹"} {t("skills.curator")}</div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 10 }}>
                 {curatorStatus?.last_run_at
                   ? t("skills.curatorLastRun", { time: new Date(curatorStatus.last_run_at).toLocaleString() })

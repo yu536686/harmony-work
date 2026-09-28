@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { Settings2 } from "lucide-react";
+import { KeyRound, Settings2 } from "lucide-react";
 import { RootState, settingsActions } from "../../store";
 import {
   settingsApi,
@@ -662,7 +662,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   };
 
   const providerOptions = () => LLM_PROVIDER_OPTIONS.map((p) => (
-    <option key={p.id} value={p.id}>{p.icon} {t(p.labelKey)}</option>
+    <option key={p.id} value={p.id}>{IS_MACOS ? t(p.labelKey) : `${p.icon} ${t(p.labelKey)}`}</option>
   ));
 
   const globalProviderMeta = providerMeta(form.provider);
@@ -1279,7 +1279,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
           {/* Named LLM Providers — lives inside AI Provider section */}
           <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
             <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text-primary)", marginBottom: 6 }}>
-              🔑 {t("settings.namedLlmTitle")}
+              {IS_MACOS ? <KeyRound size={14} strokeWidth={1.8} aria-hidden="true" /> : "🔑"} {t("settings.namedLlmTitle")}
             </div>
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
               {t("settings.namedLlmDesc")}
@@ -1289,7 +1289,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
                 {llmProviders.map((p, idx) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
-                    <span style={{ fontSize: 16 }}>🔑</span>
+                    <span style={{ fontSize: 16 }}>{IS_MACOS ? <KeyRound size={16} strokeWidth={1.8} aria-hidden="true" /> : "🔑"}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
                         {p.label || p.id}

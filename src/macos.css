@@ -15,6 +15,8 @@
   --topbar-bg: rgba(255, 255, 255, 0.74);
   --accent: #3974d9;
   --accent-dim: rgba(57, 116, 217, 0.12);
+  --mac-glass-fill: rgba(255, 255, 255, 0.68);
+  --mac-glass-border: rgba(255, 255, 255, 0.76);
   --chrome-header-height: 48px;
   --control-height: 30px;
   --control-font-size: 13px;
@@ -40,6 +42,8 @@
   --topbar-bg: rgba(37, 38, 43, 0.78);
   --accent: #77a7ff;
   --accent-dim: rgba(119, 167, 255, 0.16);
+  --mac-glass-fill: rgba(43, 44, 51, 0.72);
+  --mac-glass-border: rgba(255, 255, 255, 0.16);
   color-scheme: dark;
 }
 
@@ -59,12 +63,12 @@
 
 :root[data-platform="macos"] .sidebar {
   padding: 12px 10px 10px;
-  background: transparent;
+  background: rgba(245, 247, 252, 0.26);
   border-right: 1px solid var(--border);
   box-shadow: none;
 }
 :root[data-platform="macos"][data-color-mode="dark"] .sidebar {
-  background: rgba(20, 21, 26, 0.70);
+  background: rgba(20, 21, 26, 0.56);
 }
 
 :root[data-platform="macos"] .sidebar-header {
@@ -159,7 +163,10 @@
 :root[data-platform="macos"] .user-avatar { width: 29px; height: 29px; }
 :root[data-platform="macos"] .user-menu {
   border-radius: 10px;
-  background: var(--bg-secondary);
+  background: var(--mac-glass-fill);
+  border: 1px solid var(--mac-glass-border);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 }
 
@@ -193,11 +200,39 @@
 :root[data-platform="macos"] .input-area {
   width: min(calc(100% - 36px), 820px);
   bottom: 14px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--mac-glass-border);
   border-radius: 13px;
-  background: var(--bg-secondary);
-  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.09);
-  backdrop-filter: none;
+  background: var(--mac-glass-fill);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.13);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+}
+
+:root[data-platform="macos"] .app-dropdown-panel {
+  background: var(--mac-glass-fill);
+  border: 1px solid var(--mac-glass-border);
+  border-radius: 11px;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(32px) saturate(170%);
+  -webkit-backdrop-filter: blur(32px) saturate(170%);
+}
+:root[data-platform="macos"] .app-dropdown-item {
+  min-height: 30px;
+  border-radius: 6px;
+}
+:root[data-platform="macos"] .app-dropdown-item.selected {
+  background: var(--accent-dim);
+}
+:root[data-platform="macos"] .select-control,
+:root[data-platform="macos"] .btn-icon {
+  background-color: var(--mac-glass-fill);
+  border: 1px solid var(--mac-glass-border);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+:root[data-platform="macos"] .app-dropdown-trigger:hover,
+:root[data-platform="macos"] .btn-icon:hover {
+  background-color: var(--bg-hover);
 }
 
 :root[data-platform="macos"] :is(.btn, .btn-primary, .btn-secondary, .btn-header, .settings-navigation-item) {
@@ -226,6 +261,16 @@
   border-radius: 7px;
   border-color: var(--border);
   box-shadow: none;
+}
+:root[data-platform="macos"] .settings-section-anchor :is(select.input, input.input) {
+  min-height: 34px;
+  background-color: var(--bg-secondary);
+}
+:root[data-platform="macos"] .settings-section-anchor :is(.btn, .btn-header) {
+  border: 1px solid var(--mac-glass-border);
+  background: var(--mac-glass-fill);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
 }
 :root[data-platform="macos"] :is(button, a, input, textarea, select):focus-visible {
   outline: 2px solid var(--accent);
@@ -268,6 +313,25 @@
 }
 :root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"]:checked::before {
   transform: translateX(14px);
+}
+:root[data-platform="macos"] .settings-page-body .form-group > input[type="checkbox"]::after {
+  content: none;
+}
+:root[data-platform="macos"] .settings-section-anchor input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+}
+:root[data-platform="macos"] .settings-section-anchor input[type="radio"]:checked {
+  border: 5px solid var(--accent);
 }
 
 :root[data-platform="macos"] .creative-tabs {
@@ -327,6 +391,12 @@
   :root[data-platform="macos"] .sidebar { background: var(--bg-primary); }
   :root[data-platform="macos"] :is(.feature-topbar, .chat-topbar, .page-header, .workbench-header, .workbench-tabs) {
     background: var(--bg-secondary);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  :root[data-platform="macos"] :is(.input-area, .app-dropdown-panel, .user-menu, .select-control, .btn-icon, .settings-section-anchor .btn) {
+    background-color: var(--bg-secondary);
+    border-color: var(--border);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }

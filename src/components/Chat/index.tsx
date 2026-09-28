@@ -15,6 +15,8 @@ import {
   UserRound,
   FileOutput,
   FileText,
+  Plus,
+  RotateCcw,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -70,6 +72,8 @@ import {
   seedInputHistory,
 } from "../../utils/inputHistory";
 import "./Chat.css";
+
+const IS_MACOS = navigator.userAgent.includes("Macintosh");
 
 // ─── Mermaid diagram block ────────────────────────────────────────────────────
 let mermaidPromise: Promise<{
@@ -1996,11 +2000,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         selected: normalizeWorkspacePath(project.path!) === normalizeWorkspacePath(displayedWorkspace),
       }));
     rows.push(
-      { id: "__create__", label: t("chat.createProject"), icon: "+", action: true },
+      { id: "__create__", label: t("chat.createProject"), icon: IS_MACOS ? <Plus size={14} strokeWidth={1.8} /> : "+", action: true },
       { id: "__browse__", label: t("chat.workspaceBrowse"), icon: <FolderOpen size={14} strokeWidth={1.8} />, action: true },
     );
     if (hasSessionWorkspace) {
-      rows.push({ id: "__reset__", label: t("chat.workspaceReset"), icon: "↩", action: true });
+      rows.push({ id: "__reset__", label: t("chat.workspaceReset"), icon: IS_MACOS ? <RotateCcw size={14} strokeWidth={1.8} /> : "↩", action: true });
     }
     return rows;
   }, [chatProjects, displayedWorkspace, hasSessionWorkspace, t]);
