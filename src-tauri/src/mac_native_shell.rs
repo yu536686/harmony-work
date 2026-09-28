@@ -74,13 +74,13 @@ pub fn show_macos_info(
             outcome.store(hw_show_info(webview.ns_window(), webview.inner(), json.as_ptr()), Ordering::Relaxed);
         }).map_err(|error| error.to_string())?;
         if !shown.load(Ordering::Relaxed) { return Err("Native info is unavailable".into()); }
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, info_id, title, empty_label, items, x, y, width, height);
-        return Err("Native info is only available on macOS".into());
+        Err("Native info is only available on macOS".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -132,13 +132,13 @@ pub fn show_macos_dialog(
             outcome.store(hw_show_dialog(webview.ns_window(), webview.inner(), json.as_ptr()), Ordering::Relaxed);
         }).map_err(|error| error.to_string())?;
         if !shown.load(Ordering::Relaxed) { return Err("Native dialog is unavailable".into()); }
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, dialog_id, title, message, confirm_label, cancel_label, danger, alert, prompt, value, placeholder, extra_label, detail);
-        return Err("Native dialog is only available on macOS".into());
+        Err("Native dialog is only available on macOS".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -175,13 +175,13 @@ pub fn show_macos_menu(
             outcome.store(hw_show_menu(webview.ns_window(), webview.inner(), json.as_ptr()), Ordering::Relaxed);
         }).map_err(|error| error.to_string())?;
         if !shown.load(Ordering::Relaxed) { return Err("Native menu is unavailable".into()); }
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, menu_id, items, x, y);
-        return Err("Native menu is only available on macOS".into());
+        Err("Native menu is only available on macOS".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -209,13 +209,13 @@ pub fn show_macos_annotation(
             outcome.store(hw_show_annotation(webview.ns_window(), webview.inner(), json.as_ptr()), Ordering::Relaxed);
         }).map_err(|error| error.to_string())?;
         if !shown.load(Ordering::Relaxed) { return Err("Native annotation is unavailable".into()); }
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, annotation_id, title, comment, stage_label, cancel_label, x, y);
-        return Err("Native annotation is only available on macOS".into());
+        Err("Native annotation is only available on macOS".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -276,13 +276,13 @@ pub fn show_macos_dropdown(
         if !shown.load(Ordering::Relaxed) {
             return Err("Native dropdown is unavailable".into());
         }
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, menu_id, items, x, y, width, height, placement, search_placeholder, empty_label, close_on_select, show_search);
-        return Err("Native dropdown is only available on macOS".into());
+        Err("Native dropdown is only available on macOS".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
