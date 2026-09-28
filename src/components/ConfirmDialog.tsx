@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { useMacNativeDialog } from "./ui/useMacNativeDialog";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -31,6 +32,12 @@ export default function ConfirmDialog({
   const { t } = useTranslation();
   const resolvedConfirm = confirmLabel ?? t("common.confirm");
   const resolvedCancel = cancelLabel ?? t("common.cancel");
+  const nativeDialog = useMacNativeDialog({
+    open, loading, title, message,
+    confirmLabel: resolvedConfirm, cancelLabel: resolvedCancel,
+    danger: variant === "danger", alert,
+    onConfirm: () => onConfirm(), onCancel,
+  });
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape" && !loading) onCancel();
@@ -39,12 +46,12 @@ export default function ConfirmDialog({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || nativeDialog) return;
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, handleKeyDown]);
+  }, [open, nativeDialog, handleKeyDown]);
 
-  if (!open) return null;
+  if (!open || nativeDialog) return null;
 
   const isDanger = variant === "danger";
 

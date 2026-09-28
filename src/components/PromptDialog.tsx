@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useMacNativeDialog } from "./ui/useMacNativeDialog";
 
 interface PromptDialogProps {
   open: boolean;
@@ -13,7 +14,7 @@ interface PromptDialogProps {
   cancelLabel?: string;
   loading?: boolean;
   error?: string | null;
-  onConfirm: () => void;
+  onConfirm: (value?: string) => void;
   onCancel: () => void;
 }
 
@@ -36,6 +37,12 @@ export default function PromptDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const resolvedConfirm = confirmLabel ?? t("common.confirm");
   const resolvedCancel = cancelLabel ?? t("common.cancel");
+  const nativeDialog = useMacNativeDialog({
+    open, loading, title, message: message ?? "", value, placeholder,
+    confirmLabel: resolvedConfirm, cancelLabel: resolvedCancel,
+    prompt: true, error,
+    onConfirm: (nextValue) => onConfirm(nextValue), onCancel,
+  });
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -47,16 +54,16 @@ export default function PromptDialog({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || nativeDialog) return;
     document.addEventListener("keydown", handleKeyDown);
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       window.clearTimeout(timer);
     };
-  }, [open, handleKeyDown]);
+  }, [open, nativeDialog, handleKeyDown]);
 
-  if (!open) return null;
+  if (!open || nativeDialog) return null;
 
   return (
     <div
@@ -137,7 +144,7 @@ export default function PromptDialog({
           </button>
           <button
             type="button"
-            onClick={onConfirm}
+            onClick={() => onConfirm()}
             disabled={loading || !value.trim()}
             style={{
               padding: "6px 16px",

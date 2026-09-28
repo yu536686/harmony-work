@@ -48,6 +48,7 @@ import GlobalSessionRail from "./GlobalSessionRail";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
 import ConfirmDialog from "../ConfirmDialog";
+import { useMacNativeDialog } from "../ui/useMacNativeDialog";
 import {
   classifyMainChatSession,
   isInternalSession,
@@ -2454,6 +2455,40 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
   }, [permissionRequest]);
 
+  const nativePermissionDialog = useMacNativeDialog({
+    open: permissionRequest !== null, loading: false,
+    title: t("chat.permissionTitle"),
+    message: permissionRequest?.description ?? "",
+    detail: permissionRequest ? `${permissionRequest.toolName}\n${JSON.stringify(permissionRequest.toolInput, null, 2)}` : "",
+    confirmLabel: t("chat.permissionAllow"),
+    cancelLabel: t("chat.permissionDeny"),
+    extraLabel: permissionRequest?.allowForSession ? t("chat.permissionAllowSession") : undefined,
+    onConfirm: () => void handlePermissionResponse(true),
+    onCancel: () => void handlePermissionResponse(false),
+    onExtra: () => void handlePermissionResponse(true, true),
+  });
+
+  const sendPendingPlanMessage = (clearPlan: boolean) => {
+    if (!planResumeDialog) return;
+    const { pendingContent, pendingAttachments, pendingSkills, pendingKoi } = planResumeDialog;
+    setPlanResumeDialog(null);
+    void doSend(pendingContent, pendingAttachments, pendingSkills, pendingKoi, clearPlan);
+  };
+  const nativePlanResumeDialog = useMacNativeDialog({
+    open: planResumeDialog !== null,
+    loading: false,
+    title: t("chat.planResumeTitle"),
+    message: t("chat.planResumeMessage", {
+      count: activePlan.filter(i => i.status === "pending" || i.status === "in_progress").length,
+    }),
+    confirmLabel: t("chat.planResumeContinue"),
+    cancelLabel: t("chat.planResumeCancelSend"),
+    extraLabel: t("chat.planResumeClear"),
+    onConfirm: () => sendPendingPlanMessage(false),
+    onExtra: () => sendPendingPlanMessage(true),
+    onCancel: () => setPlanResumeDialog(null),
+  });
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -3111,7 +3146,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         </div>
       )}
 
-      {permissionRequest && (
+      {permissionRequest && !nativePermissionDialog && (
         <div className="permission-overlay">
           <div className="permission-dialog">
           <h3>{t("chat.permissionTitle")}</h3>
@@ -3350,7 +3385,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       />
 
       {/* Plan resume dialog — shown when user sends a message while unfinished todos exist */}
-      {planResumeDialog && (
+      {planResumeDialog && !nativePlanResumeDialog && (
         <div
           style={{
             position: "fixed", inset: 0, zIndex: 9999,

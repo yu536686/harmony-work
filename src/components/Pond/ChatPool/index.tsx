@@ -10,6 +10,7 @@ import { RootState, poolActions, koiActions, POOL_DEFAULT_CAPACITY } from "../..
 import { useScrollPrependedHistory } from "../../../hooks/useScrollPrependedHistory";
 import ConfirmDialog from "../../ConfirmDialog";
 import PoolMemberPicker from "../PoolMemberPicker";
+import { useMacNativeMenu } from "../../ui/useMacNativeMenu";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import "./ChatPool.css";
 
@@ -176,6 +177,8 @@ export default function ChatPool() {
   const [orgSpecSaving, setOrgSpecSaving] = useState(false);
   // Session action menu (⋯)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const sessionMenuRef = useRef<HTMLDivElement>(null);
+  const nativeSessionMenu = useMacNativeMenu(sessionMenuRef, menuOpenId !== null, () => setMenuOpenId(null), menuOpenId ?? "");
   const [menuPlacement, setMenuPlacement] = useState<"down" | "up">("down");
   const [actionTarget, setActionTarget] = useState<{ id: string; name: string; action: "pause" | "resume" | "archive" } | null>(null);
   const [actioning, setActioning] = useState(false);
@@ -548,7 +551,7 @@ export default function ChatPool() {
                     ⋯
                   </button>
                   {isMenuOpen && (
-                    <div className={`chatpool-session-menu ${menuPlacement === "up" ? "chatpool-session-menu--up" : ""}`}>
+                    <div ref={sessionMenuRef} data-native-menu-source={nativeSessionMenu} className={`chatpool-session-menu ${menuPlacement === "up" ? "chatpool-session-menu--up" : ""}`}>
                       {s.status === "active" && (
                         <button className="chatpool-menu-item chatpool-menu-item--warn"
                           onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "pause" }); }}>

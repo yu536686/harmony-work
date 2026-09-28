@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useId } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { boardApi, koiApi, KoiWithStats, KoiPalette, LlmProviderConfig, Memory, KoiTodo } from "../../../services/tauri";
 import { RootState, koiActions } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
+import { isMacNativeUI } from "../../ui/useMacNativeMenu";
 import "./KoiManager.css";
 
 // ---------------------------------------------------------------------------
@@ -36,25 +38,33 @@ function sortTodos(todos: KoiTodo[]): KoiTodo[] {
 interface StatTooltipProps extends TooltipState {
   onMouseEnter: () => void;
   onMouseLeave: () => void;
+  onDismiss: () => void;
 }
 
-function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: StatTooltipProps) {
+function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave, onDismiss }: StatTooltipProps) {
   const { t } = useTranslation();
+  const infoId = useId();
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [todos, setTodos] = useState<KoiTodo[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const nativeInfo = isMacNativeUI() && !nativeFailed;
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     if (kind === "memory") {
       koiApi.listMemories(koiId)
-        .then((r) => { setMemories(r.memories); setLoading(false); })
-        .catch(() => { setMemories([]); setLoading(false); });
+        .then((r) => { if (!cancelled) { setMemories(r.memories); setLoading(false); } })
+        .catch(() => { if (!cancelled) { setMemories([]); setLoading(false); } });
     } else {
       koiApi.listTodos(koiId)
-        .then((r) => { setTodos(sortTodos(r)); setLoading(false); })
-        .catch(() => { setTodos([]); setLoading(false); });
+        .then((r) => { if (!cancelled) { setTodos(sortTodos(r)); setLoading(false); } })
+        .catch(() => { if (!cancelled) { setTodos([]); setLoading(false); } });
     }
+    return () => { cancelled = true; };
   }, [koiId, kind]);
 
   // Position: place outer wrapper at anchor bottom (gap bridged by CSS margin-top on inner)
@@ -78,6 +88,38 @@ function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: St
     cancelled: t("koi.todoStatusCancelled"),
     blocked: t("koi.todoStatusBlocked"),
   };
+
+  useEffect(() => {
+    if (!nativeInfo || loading) return;
+    let cancelled = false;
+    const items = kind === "memory"
+      ? (memories ?? []).map((memory) => ({ label: memory.category, value: memory.content }))
+      : (todos ?? []).map((todo) => ({ label: statusLabel[todo.status] ?? todo.status, value: todo.title }));
+    const close = () => dismissRef.current();
+    window.addEventListener("harmony:native-info-close", onClose);
+    function onClose(event: Event) {
+      if ((event as CustomEvent<{ infoId: string }>).detail?.infoId === infoId) close();
+    }
+    void invoke("show_macos_info", {
+      infoId,
+      title: kind === "memory" ? t("koi.statMemoryTitle") : t("koi.statTodoTitle"),
+      emptyLabel: t(kind === "memory" ? "koi.statNoMemory" : "koi.statNoTodos"),
+      items,
+      x: anchorRect.left, y: anchorRect.top,
+      width: anchorRect.width, height: anchorRect.height,
+    }).then(() => {
+      if (cancelled) void invoke("close_macos_info", { infoId }).catch(() => {});
+    }).catch(() => {
+      if (!cancelled) setNativeFailed(true);
+    });
+    return () => {
+      cancelled = true;
+      window.removeEventListener("harmony:native-info-close", onClose);
+      void invoke("close_macos_info", { infoId }).catch(() => {});
+    };
+  }, [nativeInfo, loading, kind, memories, todos, anchorRect, infoId, t]);
+
+  if (nativeInfo) return null;
 
   return createPortal(
     <div
@@ -210,6 +252,7 @@ function KoiCard({
   };
 
   const handleStatEnter = (e: React.MouseEvent, kind: TooltipKind) => {
+    if (isMacNativeUI()) return;
     cancelClose();
     if (openTimerRef.current) clearTimeout(openTimerRef.current);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -219,8 +262,14 @@ function KoiCard({
   };
 
   const handleStatLeave = () => {
+    if (isMacNativeUI()) return;
     if (openTimerRef.current) clearTimeout(openTimerRef.current);
     scheduleClose();
+  };
+
+  const toggleNativeStat = (kind: TooltipKind, target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    setTooltip((current) => current?.kind === kind ? null : { koiId: koi.id, kind, anchorRect: rect });
   };
 
   return (
@@ -247,6 +296,12 @@ function KoiCard({
           className="koi-stat koi-stat--hoverable"
           onMouseEnter={(e) => handleStatEnter(e, "memory")}
           onMouseLeave={handleStatLeave}
+          role={isMacNativeUI() ? "button" : undefined}
+          tabIndex={isMacNativeUI() ? 0 : undefined}
+          onClick={isMacNativeUI() ? (e) => toggleNativeStat("memory", e.currentTarget) : undefined}
+          onKeyDown={isMacNativeUI() ? (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleNativeStat("memory", e.currentTarget); }
+          } : undefined}
         >
           <span className="koi-stat-icon koi-stat-icon--memory" />
           {t("koi.memoryCount")} {koi.memory_count}
@@ -255,6 +310,12 @@ function KoiCard({
           className="koi-stat koi-stat--hoverable"
           onMouseEnter={(e) => handleStatEnter(e, "todo")}
           onMouseLeave={handleStatLeave}
+          role={isMacNativeUI() ? "button" : undefined}
+          tabIndex={isMacNativeUI() ? 0 : undefined}
+          onClick={isMacNativeUI() ? (e) => toggleNativeStat("todo", e.currentTarget) : undefined}
+          onKeyDown={isMacNativeUI() ? (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleNativeStat("todo", e.currentTarget); }
+          } : undefined}
         >
           <span className="koi-stat-icon koi-stat-icon--todo" />
           {t("koi.todoCount")} {koi.active_todo_count}
@@ -289,6 +350,7 @@ function KoiCard({
           {...tooltip}
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
+          onDismiss={() => setTooltip(null)}
         />
       )}
     </div>

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
+import ConfirmDialog from "../ConfirmDialog";
+import { isMacNativeUI } from "../ui/useMacNativeMenu";
 import { settingsActions } from "../../store";
 import {
   accountSettingsSyncApi,
@@ -321,7 +323,19 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
           </article>
         )}
       </div>
-      {confirmUseKey && (
+      {confirmUseKey && isMacNativeUI() && (
+        <ConfirmDialog
+          open
+          title="将 Harmony 用于本机？"
+          message="会把 Harmony 设为默认提供商，并将当前账号的 Key 保存到本机加密设置。现有其他提供商配置仍会保留。"
+          confirmLabel="确认使用"
+          variant="primary"
+          loading={savingKey}
+          onConfirm={() => void useHarmonyKey()}
+          onCancel={() => setConfirmUseKey(false)}
+        />
+      )}
+      {confirmUseKey && !isMacNativeUI() && (
         <div className="account-confirm-backdrop" role="presentation">
           <section className="account-confirm" role="dialog" aria-modal="true" aria-labelledby="account-confirm-title">
             <h2 id="account-confirm-title">将 Harmony 用于本机？</h2>

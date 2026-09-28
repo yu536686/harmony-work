@@ -19,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PRODUCT_BRAND } from "../../branding";
 import { windowApi } from "../../services/tauri";
+import { useMacNativeMenu } from "../ui/useMacNativeMenu";
 import "./Overlay.css";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ interface ContextMenuProps {
 function ContextMenu({ onClose, onRestore, onQuit }: ContextMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLUListElement>(null);
+  const nativeMenu = useMacNativeMenu(ref, true, onClose);
 
   // Close on outside click
   useEffect(() => {
@@ -84,11 +86,11 @@ function ContextMenu({ onClose, onRestore, onQuit }: ContextMenuProps) {
   }, [onClose]);
 
   return (
-    <ul className="hud-menu" ref={ref}>
-      <li onMouseDown={(e) => { e.stopPropagation(); onRestore(); }}>
+    <ul className="hud-menu" ref={ref} data-native-menu-source={nativeMenu}>
+      <li data-native-menu-action onMouseDown={(e) => { e.stopPropagation(); onRestore(); }}>
         🪟 {t("overlay.restoreMain")}
       </li>
-      <li onMouseDown={(e) => { e.stopPropagation(); onQuit(); }}>
+      <li data-native-menu-action onMouseDown={(e) => { e.stopPropagation(); onQuit(); }}>
         ✕ {t("overlay.quit")}
       </li>
     </ul>

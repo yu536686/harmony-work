@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./AppDropdown.css";
 
 export type AppMenuItem = {
@@ -48,16 +49,83 @@ export default function AppDropdown({
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const nativeWasOpen = useRef(false);
+  const nativeMode = navigator.userAgent.includes("Macintosh") && isTauri() && !nativeFailed;
+  const nativeItems = useMemo(() => items.map(({ id, label, selected, action, disabled }) => ({
+    id, label, selected: Boolean(selected), action: Boolean(action), disabled: Boolean(disabled),
+  })), [items]);
+  const nativeItemsRef = useRef(nativeItems);
+  nativeItemsRef.current = nativeItems;
+  const nativeItemsKey = JSON.stringify(nativeItems);
+  const lastNativeItemsKey = useRef("");
+
+  useEffect(() => {
+    if (!nativeMode) return;
+    const onSelectEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ menuId: string; id: string }>).detail;
+      if (detail?.menuId !== menuId) return;
+      onSelect(detail.id);
+      if (closeOnSelect) onOpenChange(false);
+    };
+    const onCloseEvent = (event: Event) => {
+      if ((event as CustomEvent<{ menuId: string }>).detail?.menuId === menuId) onOpenChange(false);
+    };
+    window.addEventListener("harmony:native-dropdown-select", onSelectEvent);
+    window.addEventListener("harmony:native-dropdown-close", onCloseEvent);
+    return () => {
+      window.removeEventListener("harmony:native-dropdown-select", onSelectEvent);
+      window.removeEventListener("harmony:native-dropdown-close", onCloseEvent);
+    };
+  }, [nativeMode, menuId, onSelect, onOpenChange, closeOnSelect]);
+
+  useEffect(() => {
+    if (!nativeMode) return;
+    if (!open) {
+      if (nativeWasOpen.current) void invoke("close_macos_dropdown", { menuId });
+      nativeWasOpen.current = false;
+      lastNativeItemsKey.current = "";
+      return;
+    }
+    nativeWasOpen.current = true;
+    lastNativeItemsKey.current = JSON.stringify(nativeItemsRef.current);
+    const rect = rootRef.current?.querySelector("button")?.getBoundingClientRect();
+    if (!rect) return;
+    let cancelled = false;
+    void invoke("show_macos_dropdown", {
+      menuId,
+      items: nativeItemsRef.current,
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      placement,
+      searchPlaceholder,
+      emptyLabel,
+      closeOnSelect,
+    }).then(() => {
+      if (cancelled) void invoke("close_macos_dropdown", { menuId });
+    }).catch(() => {
+      if (!cancelled) setNativeFailed(true);
+    });
+    return () => { cancelled = true; };
+  }, [nativeMode, open, menuId, placement, searchPlaceholder, emptyLabel, closeOnSelect]);
+
+  useEffect(() => {
+    if (!nativeMode || !open || !lastNativeItemsKey.current || nativeItemsKey === lastNativeItemsKey.current) return;
+    lastNativeItemsKey.current = nativeItemsKey;
+    void invoke("update_macos_dropdown", { menuId, items: nativeItems });
+  }, [nativeMode, open, menuId, nativeItemsKey]);
 
   useEffect(() => {
     if (!open) {
       setQuery("");
       return;
     }
-    if (searchPlaceholder || items.length >= 6) {
+    if (!nativeMode && (searchPlaceholder || items.length >= 6)) {
       searchRef.current?.focus();
     }
-  }, [open, searchPlaceholder, items.length]);
+  }, [open, searchPlaceholder, items.length, nativeMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +178,7 @@ export default function AppDropdown({
           {triggerLabel}
         </span>
       </button>
-      {open && (
+      {open && !nativeMode && (
         <div className={`app-dropdown-panel ${panelPlacementClass}`} role="listbox">
           {showSearch && (
             <div className="app-dropdown-header">

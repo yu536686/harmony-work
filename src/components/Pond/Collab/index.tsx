@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import FileTree from "../IDE/FileTree";
@@ -29,6 +30,7 @@ import {
   seedInputHistory,
 } from "../../../utils/inputHistory";
 import ConfirmDialog from "../../ConfirmDialog";
+import { isMacNativeUI, useMacNativeMenu } from "../../ui/useMacNativeMenu";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import type { FileNode, OpenTab, GitFileStatus } from "../IDE/types";
 import GitSourceControlIcon from "../IDE/GitSourceControlIcon";
@@ -292,6 +294,8 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   const [sessionTaskTimeoutSecs, setSessionTaskTimeoutSecs] = useState(0);
   const [orgSpecSaving, setOrgSpecSaving] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const sessionMenuRef = useRef<HTMLDivElement>(null);
+  const nativeSessionMenu = useMacNativeMenu(sessionMenuRef, menuOpenId !== null, () => setMenuOpenId(null), menuOpenId ?? "");
   const [menuPlacement, setMenuPlacement] = useState<"down" | "up">("down");
   const [actionTarget, setActionTarget] = useState<{ id: string; name: string; action: "pause" | "resume" | "archive" } | null>(null);
   const [actioning, setActioning] = useState(false);
@@ -317,6 +321,8 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   // File tree multi-select + context menu
   const [collabFileTreeSelection, setCollabFileTreeSelection] = useState<Set<string>>(new Set());
   const [collabFileTreeContextMenu, setCollabFileTreeContextMenu] = useState<FileTreeContextMenu | null>(null);
+  const fileContextRef = useRef<HTMLDivElement>(null);
+  const nativeFileContext = useMacNativeMenu(fileContextRef, collabFileTreeContextMenu !== null, () => setCollabFileTreeContextMenu(null), collabFileTreeContextMenu?.targetPath ?? "");
   const collabFileTreeRef = useRef<HTMLDivElement | null>(null);
   // VS Code-style: clicking an already-active IDE view button collapses
   // the side panel; clicking again expands it. Only applies to
@@ -324,6 +330,50 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   const [sideCollapsed, setSideCollapsed] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(200);
   const activeTab = tabs.find((t) => t.path === activeTabPath) || null;
+
+  const [nativeMentionFailed, setNativeMentionFailed] = useState(false);
+  const nativeMentions = isMacNativeUI() && !nativeMentionFailed;
+  const nativeMentionOpen = nativeMentions && contentView === "chat" && mentionFilter !== null && filteredMentions.length > 0;
+  const mentionItems = filteredMentions.map((member) => ({
+    id: member.name, label: `@!${member.name}  ${member.desc}`,
+    selected: false, action: false, disabled: false,
+  }));
+  const mentionItemsKey = JSON.stringify(mentionItems);
+  const lastMentionItemsKey = useRef("");
+  const insertMentionRef = useRef(insertMention);
+  insertMentionRef.current = insertMention;
+
+  useEffect(() => {
+    if (!nativeMentionOpen || !inputRef.current) return;
+    const menuId = "collab-mentions";
+    const rect = inputRef.current.getBoundingClientRect();
+    lastMentionItemsKey.current = mentionItemsKey;
+    const selected = (event: Event) => {
+      const detail = (event as CustomEvent<{ menuId: string; id: string }>).detail;
+      if (detail?.menuId === menuId) insertMentionRef.current(detail.id);
+    };
+    const closed = (event: Event) => {
+      if ((event as CustomEvent<{ menuId: string }>).detail?.menuId === menuId) setMentionFilter(null);
+    };
+    window.addEventListener("harmony:native-dropdown-select", selected);
+    window.addEventListener("harmony:native-dropdown-close", closed);
+    void invoke("show_macos_dropdown", {
+      menuId, items: mentionItems, x: rect.x, y: rect.y,
+      width: rect.width, height: 1, placement: "above",
+      closeOnSelect: true, showSearch: false,
+    }).catch(() => setNativeMentionFailed(true));
+    return () => {
+      void invoke("close_macos_dropdown", { menuId }).catch(() => {});
+      window.removeEventListener("harmony:native-dropdown-select", selected);
+      window.removeEventListener("harmony:native-dropdown-close", closed);
+    };
+  }, [nativeMentionOpen]);
+
+  useEffect(() => {
+    if (!nativeMentionOpen || mentionItemsKey === lastMentionItemsKey.current) return;
+    lastMentionItemsKey.current = mentionItemsKey;
+    void invoke("update_macos_dropdown", { menuId: "collab-mentions", items: mentionItems }).catch(() => setNativeMentionFailed(true));
+  }, [nativeMentionOpen, mentionItemsKey]);
 
   const ideRef = useRef<HTMLDivElement>(null);
 
@@ -998,7 +1048,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
                             setMenuOpenId(s.id);
                           }}>⋯</button>
                         {isMenuOpen && (
-                          <div className={`chatpool-session-menu ${menuPlacement === "up" ? "chatpool-session-menu--up" : ""}`}>
+                          <div ref={sessionMenuRef} data-native-menu-source={nativeSessionMenu} className={`chatpool-session-menu ${menuPlacement === "up" ? "chatpool-session-menu--up" : ""}`}>
                             {s.status === "active" && <button className="chatpool-menu-item chatpool-menu-item--warn" onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "pause" }); }}>⏸ {t("pool.pauseSession") || "Pause"}</button>}
                             {(s.status === "paused" || s.status === "archived") && <button className="chatpool-menu-item chatpool-menu-item--ok" onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "resume" }); }}>▶ {t("pool.resumeSession") || "Resume"}</button>}
                             {s.status !== "archived" && <button className="chatpool-menu-item" onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "archive" }); }}>🗄 {t("pool.archiveSession") || "Archive"}</button>}
@@ -1123,7 +1173,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
                 </div>
                 <div className="collab-input-area">
                   {mentionError && <div className="collab-mention-error">{mentionError}</div>}
-                  {mentionFilter !== null && filteredMentions.length > 0 && (
+                  {!nativeMentions && mentionFilter !== null && filteredMentions.length > 0 && (
                     <div className="collab-mention-dropdown">
                       {filteredMentions.map((m, i) => (
                         <div key={m.name} className={`collab-mention-item${i === mentionIndex ? " active" : ""}`}
@@ -1300,6 +1350,8 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
 
       {collabFileTreeContextMenu && (
         <div
+          ref={fileContextRef}
+          data-native-menu-source={nativeFileContext}
           className="ide-tab-context-menu"
           style={{
             position: "fixed",

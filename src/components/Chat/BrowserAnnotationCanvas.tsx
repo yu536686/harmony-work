@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { MessageSquarePlus, X } from "lucide-react";
 import { pointerSelection } from "./annotation/selection";
 import type { AnnotationSelection, BrowserAnnotationTarget, WorkbenchAnnotation } from "./annotation/types";
+import { useMacNativeAnnotation } from "./annotation/useMacNativeAnnotation";
 
 interface BrowserAnnotationCanvasProps {
   enabled: boolean;
@@ -100,14 +101,14 @@ export default function BrowserAnnotationCanvas({
     setComment("");
   };
 
-  const stage = () => {
-    if (!draft || !comment.trim()) return;
+  const stageComment = (nextComment: string) => {
+    if (!draft || !nextComment.trim()) return;
     onStage({
       id: draft.annotationId ?? annotationId(),
       sessionId,
       target,
       selection: draft.selection,
-      comment: comment.trim(),
+      comment: nextComment.trim(),
       status: "staged",
     });
     setDraft(null);
@@ -121,6 +122,15 @@ export default function BrowserAnnotationCanvas({
     setComment("");
     onCancelDraft?.();
   };
+
+  const nativeAnnotation = useMacNativeAnnotation({
+    draft: enabled ? draft : null, rootRef, initialComment: comment,
+    title: t("chat.annotationRequirement"),
+    stageLabel: t("chat.annotationStage"),
+    cancelLabel: t("chat.annotationCancel"),
+    onStage: stageComment,
+    onClose: closeDraft,
+  });
 
   const markerItems = [
     ...visibleAnnotations,
@@ -160,14 +170,14 @@ export default function BrowserAnnotationCanvas({
           </button>
         )
       ))}
-      {draft && (
+      {draft && !nativeAnnotation && (
         <div className="annotation-popover" style={{ left: draft.left, top: draft.top }}>
           <div className="annotation-popover-head">
             <span><MessageSquarePlus size={14} /> {t("chat.annotationRequirement")}</span>
             <button type="button" aria-label={t("chat.annotationCancel")} onClick={closeDraft}><X size={14} /></button>
           </div>
           <textarea autoFocus value={comment} onChange={(event) => setComment(event.target.value)} placeholder={t("chat.annotationPlaceholder")} maxLength={2000} disabled={!enabled} />
-          <button type="button" className="annotation-stage-button" disabled={!enabled || !comment.trim()} onClick={stage}>{t("chat.annotationStage")}</button>
+          <button type="button" className="annotation-stage-button" disabled={!enabled || !comment.trim()} onClick={() => stageComment(comment)}>{t("chat.annotationStage")}</button>
         </div>
       )}
     </div>

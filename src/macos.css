@@ -418,3 +418,7 @@
     scroll-behavior: auto !important;
   }
 }
+html[data-platform="macos"] [data-native-menu-source="true"] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}

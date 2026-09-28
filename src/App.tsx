@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useEffect, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -34,6 +34,8 @@ import {
 import Chat from "./components/Chat";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
+import ConfirmDialog from "./components/ConfirmDialog";
+import { useMacNativeMenu } from "./components/ui/useMacNativeMenu";
 import "./theme.css";
 import "./App.css";
 import "./macos.css";
@@ -134,6 +136,8 @@ function AppContent() {
   const [harmonyCutProjectId, setHarmonyCutProjectId] = useState<string | null>(null);
   const [harmonyCutSessionId, setHarmonyCutSessionId] = useState<string | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const nativeUserMenu = useMacNativeMenu(userMenuRef, userMenuOpen, () => setUserMenuOpen(false));
   const [schoolSubTab, setSchoolSubTab] = useState<SchoolSubTab>("fish");
   const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>();
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
@@ -568,7 +572,7 @@ function AppContent() {
         </div>
         <div className="sidebar-footer user-footer">
           {userMenuOpen && (
-            <div className="user-menu">
+            <div ref={userMenuRef} className="user-menu" data-native-menu-source={nativeUserMenu}>
               <div className="user-menu-email">◎ {marketingUser?.email ?? "未登录"}</div>
               <button onClick={() => { setActiveTab("account"); setUserMenuOpen(false); }}>个人账户</button>
               <button onClick={() => { navigateTab("settings"); setUserMenuOpen(false); }}>{t("nav.settings")}</button>
@@ -704,7 +708,22 @@ function AppContent() {
         </Suspense>
       </main>
       <Toaster />
-      {accountSyncPrompt && (
+      {accountSyncPrompt && IS_MACOS && isTauri() && (
+        <ConfirmDialog
+          open
+          title={accountSyncPrompt.suggestedAction === "restore" ? "是否同步个人设置" : "是否备份当前个人设置"}
+          message={`${accountSyncPrompt.suggestedAction === "restore"
+            ? "检测到该账号已有加密设置备份。恢复后会更新模型、提供商和通用偏好；工作区、会话和本机 IM/SSH 凭据保持不变。"
+            : "该账号还没有云端设置备份。可将当前模型、提供商、API Key 与通用偏好加密备份到账号。"}\n云端仅保存端到端加密数据，服务器无法读取 API Key 或设置内容。${accountSyncError ? `\n${accountSyncError}` : ""}`}
+          confirmLabel={accountSyncPrompt.suggestedAction === "restore" ? "从云端恢复" : "加密备份"}
+          cancelLabel="暂不处理"
+          variant="primary"
+          loading={accountSyncBusy}
+          onCancel={() => setAccountSyncPrompt(null)}
+          onConfirm={() => void handleAccountSettingsSync(accountSyncPrompt.suggestedAction)}
+        />
+      )}
+      {accountSyncPrompt && !(IS_MACOS && isTauri()) && (
         <div className="account-sync-backdrop" role="presentation">
           <section className="account-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="account-sync-title">
             <span className="eyebrow">Personal settings</span>

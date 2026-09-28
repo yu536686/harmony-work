@@ -4,6 +4,7 @@ import { MessageSquarePlus, X } from "lucide-react";
 import type { SessionArtifact } from "../../services/tauri";
 import { pointerSelection, textRangeSelection } from "./annotation/selection";
 import type { AnnotationSelection, WorkbenchAnnotation } from "./annotation/types";
+import { useMacNativeAnnotation } from "./annotation/useMacNativeAnnotation";
 
 interface AnnotationLayerProps {
   enabled: boolean;
@@ -134,8 +135,8 @@ export default function AnnotationLayer({
     setComment("");
   };
 
-  const stage = () => {
-    if (!draft || !comment.trim()) return;
+  const stageComment = (nextComment: string) => {
+    if (!draft || !nextComment.trim()) return;
     onStage({
       id: draft.annotationId ?? annotationId(),
       sessionId,
@@ -146,7 +147,7 @@ export default function AnnotationLayer({
         uri: artifact.uri,
       },
       selection: draft.selection,
-      comment: comment.trim(),
+      comment: nextComment.trim(),
       status: "staged",
     });
     setDraft(null);
@@ -154,6 +155,22 @@ export default function AnnotationLayer({
     setComment("");
     window.getSelection()?.removeAllRanges();
   };
+
+  const closeDraft = () => {
+    setDraft(null);
+    setDragSelection(null);
+    setComment("");
+    onCancelDraft?.();
+  };
+
+  const nativeAnnotation = useMacNativeAnnotation({
+    draft: enabled ? draft : null, rootRef, initialComment: comment,
+    title: t("chat.annotationRequirement"),
+    stageLabel: t("chat.annotationStage"),
+    cancelLabel: t("chat.annotationCancel"),
+    onStage: stageComment,
+    onClose: closeDraft,
+  });
 
   return (
     <div ref={rootRef} className={`annotation-root${enabled ? " is-enabled" : ""}`} onMouseUp={captureTextSelection}>
@@ -196,11 +213,11 @@ export default function AnnotationLayer({
         )
       ))}
 
-      {draft && (
+      {draft && !nativeAnnotation && (
         <div className="annotation-popover" style={{ left: draft.left, top: draft.top }}>
           <div className="annotation-popover-head">
             <span><MessageSquarePlus size={14} /> {t("chat.annotationRequirement")}</span>
-            <button type="button" aria-label={t("chat.annotationCancel")} onClick={() => { setDraft(null); setComment(""); onCancelDraft?.(); }}>
+            <button type="button" aria-label={t("chat.annotationCancel")} onClick={closeDraft}>
               <X size={14} />
             </button>
           </div>
@@ -212,7 +229,7 @@ export default function AnnotationLayer({
             maxLength={2000}
             disabled={!enabled}
           />
-          <button type="button" className="annotation-stage-button" disabled={!enabled || !comment.trim()} onClick={stage}>
+          <button type="button" className="annotation-stage-button" disabled={!enabled || !comment.trim()} onClick={() => stageComment(comment)}>
             {t("chat.annotationStage")}
           </button>
         </div>

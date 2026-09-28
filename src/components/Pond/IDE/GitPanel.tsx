@@ -210,8 +210,8 @@ export default function GitPanel({ projectDir, onDiffClick, onRefresh, gitPanelV
     setNewBranchOpen(true);
   }, []);
 
-  const confirmCreateBranch = useCallback(async () => {
-    const name = newBranchName.trim();
+  const confirmCreateBranch = useCallback(async (enteredName?: string) => {
+    const name = (enteredName ?? newBranchName).trim();
     if (!projectDir || !name) {
       setNewBranchError(t("ide.branchNameRequired"));
       return;
@@ -411,7 +411,7 @@ export default function GitPanel({ projectDir, onDiffClick, onRefresh, gitPanelV
         placeholder={t("ide.newBranchPlaceholder")}
         loading={newBranchLoading}
         error={newBranchError}
-        onConfirm={() => void confirmCreateBranch()}
+        onConfirm={(enteredName) => void confirmCreateBranch(enteredName)}
         onCancel={() => {
           if (!newBranchLoading) {
             setNewBranchOpen(false);

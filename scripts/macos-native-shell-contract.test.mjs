@@ -25,6 +25,20 @@ test("macOS native shell is compiled only for macOS", async () => {
   assert.match(native, /NSClassFromString\(@"NSGlassEffectView"\)/);
   assert.doesNotMatch(native, /@available/);
   assert.match(native, /window\.appearance = appearance/);
+  assert.match(native, /NSPopover/);
+  assert.match(native, /effectIsInteractive/);
+  assert.match(native, /accessibilityDisplayShouldReduceMotion/);
+  assert.match(native, /accessibilityDisplayShouldReduceTransparency/);
+  assert.match(bridge, /show_macos_dropdown/);
+  assert.match(bridge, /close_macos_dropdown/);
+  assert.match(bridge, /update_macos_dropdown/);
+  assert.match(bridge, /show_macos_menu/);
+  assert.match(bridge, /show_macos_annotation/);
+  assert.match(bridge, /show_macos_info/);
+  assert.match(bridge, /close_macos_info/);
+  assert.match(native, /NSMenu/);
+  assert.match(native, /NSTextView/);
+  assert.match(native, /HWInfoController/);
 });
 
 test("macOS sidebar and toolbar actions reuse React navigation", async () => {

@@ -11,6 +11,7 @@ import { ideApi, onFileChanged } from "../../../services/tauri/ide";
 import { sameProjectPath } from "../../../utils/projectPath";
 import { openPath } from "../../../services/tauri";
 import { PRODUCT_BRAND } from "../../../branding";
+import { useMacNativeMenu } from "../../ui/useMacNativeMenu";
 import type { FileNode, OpenTab, GitFileStatus } from "./types";
 import "./IDE.css";
 
@@ -67,6 +68,8 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
   // File tree: selected paths (Ctrl/Cmd multi-select) + right-click menu.
   const [fileTreeSelection, setFileTreeSelection] = useState<Set<string>>(new Set());
   const [fileTreeContextMenu, setFileTreeContextMenu] = useState<FileTreeContextMenu | null>(null);
+  const fileContextRef = useRef<HTMLDivElement>(null);
+  const nativeFileContext = useMacNativeMenu(fileContextRef, fileTreeContextMenu !== null, () => setFileTreeContextMenu(null), fileTreeContextMenu?.targetPath ?? "");
   const fileTreeRef = useRef<(HTMLDivElement & FileTreeHandle) | null>(null);
 
   // Stable refs so keyboard shortcuts / beforeunload always read the latest
@@ -677,6 +680,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
           onCloseUnsaved={closeUnsavedTabs}
           onCloseOther={closeOtherTabs}
           contextMenu={tabContextMenu}
+          onContextMenuClose={() => setTabContextMenu(null)}
         />
         <div className="ide-editor">
           {activeTab ? (
@@ -723,6 +727,8 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
       {/* File tree right-click context menu */}
       {fileTreeContextMenu && (
         <div
+          ref={fileContextRef}
+          data-native-menu-source={nativeFileContext}
           className="ide-tab-context-menu"
           style={{ position: "fixed", left: fileTreeContextMenu.x, top: fileTreeContextMenu.y, zIndex: 1000 }}
         >

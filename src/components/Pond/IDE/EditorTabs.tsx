@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useMacNativeMenu } from "../../ui/useMacNativeMenu";
 import type { OpenTab } from "./types";
 
 interface TabContextMenu {
@@ -18,6 +20,7 @@ interface EditorTabsProps {
   onCloseUnsaved?: () => void;
   onCloseOther?: (path: string) => void;
   contextMenu: TabContextMenu | null;
+  onContextMenuClose?: () => void;
 }
 
 export default function EditorTabs({
@@ -31,8 +34,11 @@ export default function EditorTabs({
   onCloseUnsaved,
   onCloseOther,
   contextMenu,
+  onContextMenuClose,
 }: EditorTabsProps) {
   const { t } = useTranslation();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const nativeMenu = useMacNativeMenu(menuRef, contextMenu !== null, () => onContextMenuClose?.(), contextMenu?.targetPath ?? "");
 
   if (tabs.length === 0) return null;
 
@@ -69,6 +75,8 @@ export default function EditorTabs({
 
       {contextMenu && (
         <div
+          ref={menuRef}
+          data-native-menu-source={nativeMenu}
           className="ide-tab-context-menu"
           style={{
             position: "fixed",

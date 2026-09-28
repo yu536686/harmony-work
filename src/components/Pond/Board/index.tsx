@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { boardApi, koiApi, poolApi, KoiTodo, KoiWithStats } from "../../../services/tauri";
 import { RootState, boardActions, koiActions, poolActions } from "../../../store";
 import AppDropdown, { type AppMenuItem } from "../../ui/AppDropdown";
+import { useMacNativeMenu } from "../../ui/useMacNativeMenu";
 import "./Board.css";
 
 const COLUMNS = [
@@ -64,6 +65,7 @@ function TaskCard({
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const nativeMenu = useMacNativeMenu(menuRef, menuOpen, () => setMenuOpen(false), todo.id);
   const owner = kois.find((k) => k.id === todo.owner_id);
   const claimer = todo.claimed_by ? kois.find((k) => k.id === todo.claimed_by) : null;
   const visibleStatus = getBoardStatus(todo);
@@ -125,6 +127,7 @@ function TaskCard({
             <div
               ref={menuRef}
               className="board-card-menu"
+              data-native-menu-source={nativeMenu}
               style={{ top: menuPos.top, left: menuPos.left }}
               onClick={(e) => e.stopPropagation()}
             >
