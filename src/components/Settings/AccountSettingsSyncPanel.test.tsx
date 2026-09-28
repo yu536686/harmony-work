@@ -19,6 +19,7 @@ const activeUser: MarketingUser = {
   name: "测试用户",
   email: "tester@example.com",
   userRole: "user",
+  accountType: "standard",
   approvalStatus: "active",
 };
 

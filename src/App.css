@@ -485,6 +485,12 @@ body {
 }
 
 .project-session-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.project-session-select .project-session-indicator { width: 12px; height: 12px; flex: 0 0 12px; display: grid; place-items: center; overflow: visible; }
+.project-session-spinner { color: #4479e2; animation: session-spin 900ms linear infinite; }
+.project-session-error { color: var(--error); }
+.project-session-unread { width: 7px; height: 7px; border-radius: 50%; background: #4479e2; }
+@keyframes session-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .project-session-spinner { animation: none; } }
 .project-session-delete {
   width: 27px;
   height: 27px;

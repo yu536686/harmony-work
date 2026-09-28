@@ -234,7 +234,10 @@ pub async fn chat_cancel(state: State<'_, AppState>, session_id: String) -> Resu
     let _ = state
         .app_handle
         .emit(&format!("agent_event_{session_id}"), payload.clone());
-    let _ = state.app_handle.emit("agent_broadcast", payload);
+    let _ = state.app_handle.emit(
+        "agent_broadcast",
+        serde_json::json!({"type": "cancelled", "sessionId": session_id}),
+    );
     Ok(())
 }
 

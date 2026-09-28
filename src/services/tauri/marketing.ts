@@ -5,6 +5,7 @@ export interface MarketingUser {
   name: string;
   email: string;
   userRole: "admin" | "user";
+  accountType: "standard" | "marketing";
   approvalStatus: "pending" | "active" | "disabled";
 }
 
@@ -261,6 +262,8 @@ export const marketingApi = {
   folders: () => invoke<{ folders: string[] }>("marketing_asset_folders"),
   formats: () => invoke<{ existing: Array<{ extension: string; count: number }>; common: string[] }>("marketing_asset_formats"),
   assets: async (query: MarketingAssetQuery) => normalizeAssetList(await invoke<MarketingAssetList>("marketing_assets", { query })),
+  uploadAssets: (filePaths: string[], folder?: string) =>
+    invoke<{ assets: MarketingAsset[] }>("marketing_upload_assets", { filePaths, folder: folder || null }),
   campaignSummary: (minutes = 1440, platform = "") =>
     invoke<MarketingCampaignSummary>("marketing_campaign_summary", { minutes, platform: platform || null }),
   douyinAccounts: () => invoke<{ accounts: Array<Record<string, string | number | boolean | null>> }>("marketing_douyin_accounts"),

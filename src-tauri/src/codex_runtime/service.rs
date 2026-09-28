@@ -1926,6 +1926,10 @@ pub async fn codex_chat_send(
     let mut events = execution.events;
     let codex_state = codex_state.inner().clone();
     let app_state = app_state.inner().clone();
+    let _ = app_state.app_handle.emit(
+        "agent_broadcast",
+        serde_json::json!({"type": "run_status", "sessionId": session_id}),
+    );
     tauri::async_runtime::spawn(async move {
         let mut transcript = CodexTurnTranscript::default();
         let mut execution_sequence = 1_i64;
@@ -2130,6 +2134,11 @@ pub async fn codex_chat_send(
                     let _ = db.update_session_status(&session_id, "idle");
                 }
                 codex_state.finish_session_turn(&session_id).await;
+                let mut broadcast = serde_json::to_value(&event).unwrap_or_default();
+                if let Some(payload) = broadcast.as_object_mut() {
+                    payload.insert("sessionId".to_string(), serde_json::json!(session_id));
+                }
+                let _ = app.emit("agent_broadcast", broadcast);
                 let _ = app.emit(&event_name, event);
                 break;
             }

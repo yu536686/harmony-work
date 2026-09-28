@@ -12,7 +12,7 @@ vi.mock("../../services/tauri", async (importOriginal) => {
   return { ...actual, creativeApi: { ...actual.creativeApi, ...mocks } };
 });
 
-const user = { id: "user-1", name: "测试用户", email: "test@example.com", userRole: "user" as const, approvalStatus: "active" as const };
+const user = { id: "user-1", name: "测试用户", email: "test@example.com", userRole: "user" as const, accountType: "standard" as const, approvalStatus: "active" as const };
 const completed = (kind: "music" | "image") => ({ taskId: `${kind}-1`, kind, status: "succeeded", prompt: `${kind} prompt`, progress: 100, resultUrl: `https://cdn.example/${kind}.png`, createdAt: Date.now() });
 
 describe("CreativePage personal-key results", () => {

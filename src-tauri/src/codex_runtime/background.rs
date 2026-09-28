@@ -245,7 +245,11 @@ fn emit_event(
     if let Some(event_channel) = event_channel {
         let _ = state.app_handle.emit(event_channel, payload.clone());
     }
-    let _ = state.app_handle.emit("agent_broadcast", payload);
+    let mut broadcast = payload;
+    if let Some(value) = broadcast.as_object_mut() {
+        value.insert("sessionId".to_string(), serde_json::json!(session_id));
+    }
+    let _ = state.app_handle.emit("agent_broadcast", broadcast);
 }
 
 fn map_exec_event(event: &Value, result: &CodexExecResult) -> Vec<WorkBuddyEvent> {

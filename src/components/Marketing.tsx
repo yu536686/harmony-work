@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useDispatch, useSelector } from "react-redux";
 import { RootState, chatActions, sessionsActions } from "../store";
 import {
@@ -61,7 +62,7 @@ const FORMAT_FILTERS = [
 ] as const;
 
 const DEFAULT_FORMAT_GROUPS = FORMAT_FILTERS.filter((item) => item.id !== "source").map((item) => item.id);
-import { MARKETING_BASE as MARKETING_ASSET_BASE, REGISTER_URL, migratePublicServiceUrl } from "../services/serviceUrls";
+import { REGISTER_URL } from "../services/serviceUrls";
 
 function selectedExtensions(groups: string[]) {
   return new Set<string>(
@@ -117,9 +118,14 @@ function canInlinePreview(asset: MarketingAsset) {
 function assetPreviewUrl(asset: MarketingAsset) {
   const raw = asset.previewUrl;
   if (!raw) return "";
-  return raw.startsWith("http://") || raw.startsWith("https://")
-    ? migratePublicServiceUrl(raw)
-    : `${MARKETING_ASSET_BASE}${raw.startsWith("/") ? raw : `/${raw}`}`;
+  try {
+    const url = new URL(raw);
+    return url.pathname.startsWith("/api/assets/direct/") && url.searchParams.has("ticket")
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 export default function Marketing({ view, user, onUserChange, onNavigateToChat }: {
@@ -156,8 +162,9 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   const [formatGroups, setFormatGroups] = useState<string[]>(DEFAULT_FORMAT_GROUPS);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [uploading, setUploading] = useState(false);
 
-  const active = user?.approvalStatus === "active";
+  const active = user?.approvalStatus === "active" && user.accountType === "marketing";
 
   const loadAll = async () => {
     if (!active) return;
@@ -191,6 +198,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
       setSummary(nextSummary);
       setFolders(nextFolders.folders ?? []);
       setAssets(nextAssets);
+      setThumbnailFailures({});
       setAssetTotal(total);
       setPageOffset(48);
       setHasMore(nextAssetGroups.some((group) => group.total > 48));
@@ -243,37 +251,11 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
   }, [active, folder, view, formatGroups, sort]);
 
   useEffect(() => {
-    if (!assets.length) return;
-    let cancelled = false;
-    const missingImages = assets
-      .filter((asset) => asset.assetType === "image" && !thumbnailDataUrls[asset.id] && !thumbnailFailures[asset.id])
-      .slice(0, 36);
-    if (!missingImages.length) return;
-    void (async () => {
-      const next: Record<string, string> = {};
-      const failed: Record<string, string> = {};
-      for (const asset of missingImages) {
-        try {
-          const data = await marketingApi.assetDataUrl(asset.id, asset.fileName, 12 * 1024 * 1024);
-          if (data.mediaType.startsWith("image/")) {
-            next[asset.id] = data.dataUrl;
-          } else {
-            failed[asset.id] = data.mediaType || "unsupported";
-          }
-        } catch (error) {
-          failed[asset.id] = String(error);
-        }
-        if (cancelled) return;
-      }
-      if (!cancelled && Object.keys(next).length) {
-        setThumbnailDataUrls((prev) => ({ ...prev, ...next }));
-      }
-      if (!cancelled && Object.keys(failed).length) {
-        setThumbnailFailures((prev) => ({ ...prev, ...failed }));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [assets, thumbnailDataUrls, thumbnailFailures]);
+    if (!active || view !== "assets") return;
+    const timer = window.setInterval(() => void loadAll(), 8 * 60 * 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, view, folder, formatGroups, sort]);
 
   const totals = summary?.totals ?? {};
   const platformTotals = useMemo(() => {
@@ -358,6 +340,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     setPreview(null);
     setPreviewDataUrl("");
     setPreviewError("");
+    if (asset.assetType === "video" && assetPreviewUrl(asset)) return;
     if (canInlinePreview(asset)) {
       try {
         await prepareInlinePreview(asset);
@@ -369,6 +352,23 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
           setMessage(String(error));
         }
       }
+    }
+  };
+
+  const uploadAssets = async () => {
+    const selected = await openFileDialog({ multiple: true, directory: false });
+    const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+    if (!paths.length) return;
+    setUploading(true);
+    setMessage(`正在上传 ${paths.length} 个素材…`);
+    try {
+      const result = await marketingApi.uploadAssets(paths, folder);
+      await loadAll();
+      setMessage(`已上传 ${result.assets.length} 个素材。`);
+    } catch (error) {
+      setMessage(`上传失败：${String(error)}`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -467,7 +467,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
         <div className="marketing-auth">
           <form className="marketing-login card" onSubmit={handleLogin}>
             <span className="eyebrow">Marketing Login</span>
-            <h2>登录后解锁素材库、数据看板、技能市场和团队协作</h2>
+            <h2>登录营销用户账号以访问素材库和数据看板</h2>
             <p>登录使用线上营销工作台原有用户数据库。接口已切换到公网服务。</p>
             <label>邮箱<input className="input" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
             <label>密码<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label>
@@ -490,8 +490,8 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
         <div className="marketing-auth">
           <div className="card marketing-login">
             <span className="eyebrow">Account Pending</span>
-            <h2>{user.name}，你的账号还不能访问高阶内容</h2>
-            <p>当前状态：{user.approvalStatus}。请等待管理员启用后再访问素材库、看板和团队能力。</p>
+            <h2>{user.name}，当前账号无法访问线上营销工作台</h2>
+            <p>{user.approvalStatus !== "active" ? "请等待管理员启用账号。" : "请联系管理员将账号设为营销用户。"}</p>
           </div>
         </div>
       </section>
@@ -500,7 +500,8 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
 
   const renderAssetPreview = () => {
     if (!selectedAsset) return <div className="empty-state">选择一个素材查看详情和预览。</div>;
-    const src = previewDataUrl || (preview?.localPath ? convertFileSrc(preview.localPath) : "");
+    const src = previewDataUrl || (preview?.localPath ? convertFileSrc(preview.localPath) : "")
+      || (selectedAsset.assetType === "video" ? assetPreviewUrl(selectedAsset) : "");
     const inline = canInlinePreview(selectedAsset);
     return (
       <aside className="card marketing-preview">
@@ -533,7 +534,7 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
         </div>
         <div className="marketing-preview-info">
           <h3>{selectedAsset.fileName}</h3>
-          {inline && !preview && !previewLoading && !previewError && <p className="marketing-preview-hint">选择素材后会先缓存到本地，再使用本地文件进行安全预览。</p>}
+          {inline && !preview && !previewLoading && !previewError && <p className="marketing-preview-hint">素材通过公司直连通道预览。</p>}
           {previewError && <div className="marketing-preview-warning">{previewError}</div>}
           <dl>
             <dt>类型</dt><dd>{selectedAsset.assetType} / {selectedAsset.mimeType}</dd>
@@ -579,7 +580,12 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
             <section className="card marketing-panel">
               <div className="marketing-panel-head">
                 <div><span className="eyebrow">Asset Library</span><h2>素材库</h2></div>
-                <span className="marketing-panel-foot">当前筛选 {assets.length} / {assetTotal} 条</span>
+                <div className="marketing-actions">
+                  <span className="marketing-panel-foot">当前筛选 {assets.length} / {assetTotal} 条</span>
+                  <button className="btn btn-secondary" onClick={() => void uploadAssets()} disabled={uploading}>
+                    {uploading ? "上传中…" : "上传素材"}
+                  </button>
+                </div>
               </div>
               <div className="marketing-filters">
                 <select className="input" value={folder} onChange={(event) => setFolder(event.target.value)}>

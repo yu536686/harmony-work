@@ -223,6 +223,7 @@ interface ChatState {
   toolStepsTurnDone: Record<string, boolean>;
   planBySession: Record<string, PlanTodoItem[]>;
   isRunning: Record<string, boolean>;
+  sessionOutcomes: Record<string, "unread" | "error">;
   /** Frozen streaming text from the last completed agent turn, keyed by sessionId.
    *  Used to replace the multi-bubble DB reload with a single merged bubble.
    *  Cleared when the next user message is sent. */
@@ -244,6 +245,20 @@ interface ChatState {
   executionBySession: Record<string, TurnExecutionModel>;
 }
 
+const SESSION_OUTCOME_STORAGE_KEY = "harmony-work.session-outcomes";
+
+function readSessionOutcomes(): Record<string, "unread" | "error"> {
+  try {
+    const raw = localStorage.getItem(SESSION_OUTCOME_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => value === "unread" || value === "error"),
+    ) as Record<string, "unread" | "error">;
+  } catch {
+    return {};
+  }
+}
+
 export const chatSlice = createSlice({
   name: "chat",
   initialState: {
@@ -253,6 +268,7 @@ export const chatSlice = createSlice({
     toolStepsTurnDone: {},
     planBySession: {},
     isRunning: {},
+    sessionOutcomes: readSessionOutcomes(),
     frozenBubble: {},
     pendingSummary: {},
     contextUsage: {},
@@ -599,6 +615,7 @@ export const chatSlice = createSlice({
     },
     setRunning: (state, action: PayloadAction<{ sessionId: string; running: boolean }>) => {
       state.isRunning[action.payload.sessionId] = action.payload.running;
+      if (action.payload.running) delete state.sessionOutcomes[action.payload.sessionId];
       if (!action.payload.running) {
         // Mark turn as done so next tool_start will clear these steps
         state.toolStepsTurnDone[action.payload.sessionId] = true;
@@ -606,6 +623,10 @@ export const chatSlice = createSlice({
         // done/cancel/error makes the activity panel look like it is still running.
         delete state.runStatusBySession[action.payload.sessionId];
       }
+    },
+    setSessionOutcome: (state, action: PayloadAction<{ sessionId: string; outcome: "unread" | "error" | null }>) => {
+      if (action.payload.outcome) state.sessionOutcomes[action.payload.sessionId] = action.payload.outcome;
+      else delete state.sessionOutcomes[action.payload.sessionId];
     },
   },
 });

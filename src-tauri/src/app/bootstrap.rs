@@ -1311,6 +1311,7 @@ fn run_impl() {
             commands::marketing::marketing_asset_folders,
             commands::marketing::marketing_asset_formats,
             commands::marketing::marketing_assets,
+            commands::marketing::marketing_upload_assets,
             commands::marketing::marketing_campaign_summary,
             commands::marketing::marketing_douyin_accounts,
             commands::marketing::marketing_asset_data_url,

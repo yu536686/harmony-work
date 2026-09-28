@@ -495,7 +495,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streaming, planBySession, isRunning, contextUsage, executionBySession } = useSelector(
+  const { messagesBySession, streaming, planBySession, isRunning, sessionOutcomes, contextUsage, executionBySession } = useSelector(
     (s: RootState) => s.chat
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
@@ -2567,6 +2567,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           projects={chatProjects}
           activeProjectId={activeProjectId}
           activeSessionId={displaySessionId}
+          runningBySession={isRunning}
+          outcomesBySession={sessionOutcomes}
           labels={{
             projects: t("chat.projects"),
             createProject: t("chat.createProject"),
@@ -2589,6 +2591,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             setSessionFilter(classifySession(selected));
             setIsDraft(false);
             dispatch(sessionsActions.setActiveSession(id));
+            dispatch(chatActions.setSessionOutcome({ sessionId: id, outcome: null }));
             onFocusChat?.();
           }}
           onDelete={requestDeleteSession}

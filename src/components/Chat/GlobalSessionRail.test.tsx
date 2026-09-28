@@ -97,4 +97,33 @@ describe("GlobalSessionRail", () => {
     expect(screen.queryByText("季度营销复盘")).not.toBeInTheDocument();
     expect(screen.queryByRole("tree", { name: "项目" })).not.toBeInTheDocument();
   });
+
+  it("shows running, unread, and error states without generic chat icons", () => {
+    const project = {
+      id: "workspace:c:/harmony", name: "Harmony", path: "C:\\Harmony", kind: "workspace" as const,
+      system: false,
+      sessions: [
+        ...sessions,
+        { ...sessions[0], id: "session-2", title: "已完成的报告" },
+        { ...sessions[0], id: "session-3", title: "失败的报告" },
+      ],
+    };
+    render(<GlobalSessionRail
+      collapsed={false}
+      projects={[project]}
+      activeProjectId={project.id}
+      activeSessionId="session-1"
+      runningBySession={{ "session-1": true }}
+      outcomesBySession={{ "session-2": "unread", "session-3": "error" }}
+      labels={{ projects: "项目", createProject: "新建项目", emptyProject: "暂无对话" }}
+      onProjectSelect={vi.fn()} onSelect={vi.fn()} onDelete={vi.fn()}
+      onRemoveProject={vi.fn()} onCreateProject={vi.fn()} t={t}
+    />);
+    expect(screen.getByRole("button", { name: "季度营销复盘，正在执行" })).toHaveClass("project-session-select");
+    expect(screen.getByRole("button", { name: "已完成的报告，有未读结果" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "失败的报告，执行出错" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".project-session-spinner")).toHaveLength(1);
+    expect(document.querySelectorAll(".project-session-unread")).toHaveLength(1);
+    expect(document.querySelectorAll(".project-session-error")).toHaveLength(1);
+  });
 });

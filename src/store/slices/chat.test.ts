@@ -20,6 +20,13 @@ describe("chat run status lifecycle", () => {
 
     expect(state.runStatusBySession["session-1"]).toBeUndefined();
   });
+
+  it("clears stale unread or error status when a new turn starts", () => {
+    let state = chatSlice.reducer(undefined, chatSlice.actions.setSessionOutcome({ sessionId: "session-1", outcome: "error" }));
+    expect(state.sessionOutcomes["session-1"]).toBe("error");
+    state = chatSlice.reducer(state, chatSlice.actions.setRunning({ sessionId: "session-1", running: true }));
+    expect(state.sessionOutcomes["session-1"]).toBeUndefined();
+  });
 });
 
 describe("chat execution model", () => {

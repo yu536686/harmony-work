@@ -107,6 +107,8 @@ function AppContent() {
   const { t } = useTranslation();
   const { showOnboarding, settings } = useSelector((s: RootState) => s.settings);
   const pendingMainChatNav = useSelector((s: RootState) => s.sessions.pendingMainChatNav);
+  const activeSessionId = useSelector((s: RootState) => s.sessions.activeSessionId);
+  const sessionOutcomes = useSelector((s: RootState) => s.chat.sessionOutcomes);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
@@ -115,6 +117,34 @@ function AppContent() {
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
+
+  useEffect(() => {
+    localStorage.setItem("harmony-work.session-outcomes", JSON.stringify(sessionOutcomes));
+  }, [sessionOutcomes]);
+
+  useEffect(() => {
+    if (activeSessionId) dispatch(chatActions.setSessionOutcome({ sessionId: activeSessionId, outcome: null }));
+  }, [activeSessionId, dispatch]);
+
+  useEffect(() => {
+    const unlisten = listen<{ type: string; sessionId?: string }>("agent_broadcast", (event) => {
+      const { type, sessionId } = event.payload;
+      if (!sessionId) return;
+      if (type === "run_status") {
+        dispatch(chatActions.setRunning({ sessionId, running: true }));
+      } else if (type === "done") {
+        dispatch(chatActions.setRunning({ sessionId, running: false }));
+        const isOpen = store.getState().sessions.activeSessionId === sessionId && activeTab === "chat" && document.visibilityState === "visible";
+        dispatch(chatActions.setSessionOutcome({ sessionId, outcome: isOpen ? null : "unread" }));
+      } else if (type === "error") {
+        dispatch(chatActions.setRunning({ sessionId, running: false }));
+        dispatch(chatActions.setSessionOutcome({ sessionId, outcome: "error" }));
+      } else if (type === "cancelled") {
+        dispatch(chatActions.setRunning({ sessionId, running: false }));
+      }
+    });
+    return () => { void unlisten.then((fn) => fn()); };
+  }, [activeTab, dispatch]);
 
   useEffect(() => {
     if (!IS_MACOS) return;
@@ -190,6 +220,13 @@ function AppContent() {
         }
       });
   }, []);
+
+  useEffect(() => {
+    if (!marketingUser || marketingUser.accountType === "marketing") return;
+    if (["marketing-assets", "marketing-dashboard", "harmony-cut"].includes(activeTab)) {
+      setActiveTab("account");
+    }
+  }, [activeTab, marketingUser?.accountType]);
 
   useEffect(() => {
     setMountedTabs((prev) => {
@@ -395,6 +432,11 @@ function AppContent() {
   }
 
   const navigateTab = (requestedRoute: string, opts?: { schoolSubTab?: SchoolSubTab }) => {
+    if (marketingUser && marketingUser.accountType !== "marketing" &&
+      ["marketing-assets", "marketing-dashboard", "harmony-cut"].includes(requestedRoute)) {
+      setActiveTab("account");
+      return;
+    }
     if (requestedRoute === "marketing-dashboard" || requestedRoute === "harmony-cut") {
       setSettingsSection(undefined);
       setActiveTab(requestedRoute);
@@ -445,6 +487,7 @@ function AppContent() {
     navigateTab(item.route);
   };
   const renderNavigationItem = (item: WorkspaceNavigationItem) => {
+    if (item.id === "marketing-assets" && marketingUser?.accountType !== "marketing") return null;
     const Icon = item.icon;
     const expanded = item.action === "toggle-marketing"
       ? marketingExpanded
@@ -619,7 +662,7 @@ function AppContent() {
               />
             </div>
           )}
-          {mountedTabs.has("marketing-assets") && (
+          {mountedTabs.has("marketing-assets") && (!marketingUser || marketingUser.accountType === "marketing") && (
             <div className="tab-panel" hidden={activeTab !== "marketing-assets"}>
               <Marketing
                 view="assets"
@@ -629,7 +672,7 @@ function AppContent() {
               />
             </div>
           )}
-          {mountedTabs.has("marketing-dashboard") && (
+          {mountedTabs.has("marketing-dashboard") && marketingUser?.accountType === "marketing" && (
             <div className="tab-panel" hidden={activeTab !== "marketing-dashboard"}>
               <Marketing
                 view="dashboard"
@@ -639,7 +682,7 @@ function AppContent() {
               />
             </div>
           )}
-          {mountedTabs.has("harmony-cut") && (
+          {mountedTabs.has("harmony-cut") && marketingUser?.accountType === "marketing" && (
             <div className="tab-panel" hidden={activeTab !== "harmony-cut"}>
               <HarmonyCut
                 projectId={harmonyCutProjectId}

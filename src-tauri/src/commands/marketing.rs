@@ -367,7 +367,23 @@ pub async fn marketing_assets(query: MarketingAssetQuery) -> Result<Value, Strin
         query.limit.unwrap_or(36).min(120).to_string(),
     ));
     params.push(("offset".to_string(), query.offset.unwrap_or(0).to_string()));
-    marketing_get_json("/api/assets", params).await
+    let mut result = marketing_get_json("/api/assets", params).await?;
+    let transfer = marketing_transfer_ticket().await.ok();
+    if let Some(assets) = result.get_mut("assets").and_then(Value::as_array_mut) {
+        for asset in assets {
+            let preview_url = transfer
+                .as_ref()
+                .and_then(|ticket| {
+                    asset.get("id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| direct_asset_url(ticket, id).ok())
+                })
+                .map(|url| url.to_string())
+                .unwrap_or_default();
+            asset["previewUrl"] = Value::String(preview_url);
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -692,22 +708,98 @@ pub async fn marketing_creative_upload_reference(
     json_or_error(resp, "Reference image upload").await
 }
 
+async fn marketing_transfer_ticket() -> Result<Value, String> {
+    let client = marketing_client()?;
+    let request = apply_cookie(client.get(format!(
+        "{}/api/assets/transfer",
+        marketing_base_url()
+    )))
+    .await;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Marketing transfer authorization failed: {e}"))?;
+    json_or_error(response, "Marketing transfer authorization").await
+}
+
+fn direct_transfer_url(ticket: &Value, path: &str, scope: &str) -> Result<reqwest::Url, String> {
+    let origin = ticket["origin"]
+        .as_str()
+        .ok_or("Marketing transfer origin is missing")?;
+    let credential = ticket[scope]
+        .as_str()
+        .ok_or_else(|| format!("Marketing {scope} is missing"))?;
+    let mut url = reqwest::Url::parse(origin)
+        .map_err(|e| format!("Invalid Marketing transfer origin: {e}"))?;
+    if url.scheme() != "https"
+        && !(cfg!(debug_assertions) && url.host_str() == Some("127.0.0.1"))
+    {
+        return Err("Marketing transfer origin must use HTTPS".to_string());
+    }
+    url.set_path(path);
+    url.set_query(None);
+    url.query_pairs_mut().append_pair("ticket", credential);
+    Ok(url)
+}
+
+fn direct_asset_url(ticket: &Value, asset_id: &str) -> Result<reqwest::Url, String> {
+    direct_transfer_url(
+        ticket,
+        &format!("/api/assets/direct/{}/file", urlencoding::encode(asset_id)),
+        "readTicket",
+    )
+}
+
+#[tauri::command]
+pub async fn marketing_upload_assets(file_paths: Vec<String>, folder: Option<String>) -> Result<Value, String> {
+    if file_paths.is_empty() || file_paths.len() > 8 {
+        return Err("请选择 1 到 8 个文件上传".to_string());
+    }
+    let transfer = marketing_transfer_ticket().await?;
+    let url = direct_transfer_url(&transfer, "/api/assets/direct/upload", "uploadTicket")?;
+    let mut form = Form::new().text("folder", folder.unwrap_or_default());
+    for path in file_paths {
+        let file = Path::new(&path);
+        let metadata = tokio::fs::metadata(file)
+            .await
+            .map_err(|e| format!("无法读取文件 {}：{e}", file.display()))?;
+        if !metadata.is_file() || metadata.len() > 25 * 1024 * 1024 {
+            return Err(format!("文件必须小于 25 MB：{}", file.display()));
+        }
+        let name = file.file_name().and_then(|name| name.to_str())
+            .ok_or("上传文件名无效")?;
+        let bytes = tokio::fs::read(file)
+            .await
+            .map_err(|e| format!("无法读取文件 {}：{e}", file.display()))?;
+        form = form.part("files", Part::bytes(bytes).file_name(name.to_string()));
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client.post(url).multipart(form).send().await
+        .map_err(|e| format!("素材上传失败：{e}"))?;
+    json_or_error(response, "Marketing asset upload").await
+}
+
 async fn download_marketing_asset(
     asset_id: &str,
     requested_file_name: Option<&str>,
 ) -> Result<DownloadedMarketingAsset, String> {
-    let client = marketing_client()?;
-    let source_url = format!(
-        "{}/api/assets/{}/file",
-        marketing_base_url(),
-        urlencoding::encode(asset_id)
-    );
-    let req = apply_cookie(client.get(&source_url)).await;
+    let ticket = marketing_transfer_ticket().await?;
+    let source_url = direct_asset_url(&ticket, asset_id)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600))
+        .user_agent("Harmony-Work/1.0.7 Marketing")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let req = client.get(source_url.clone());
     let resp = req
         .send()
         .await
         .map_err(|e| format!("Marketing asset download failed: {e}"))?;
-    store_response_cookie(&resp).await;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -739,7 +831,7 @@ async fn download_marketing_asset(
     Ok(DownloadedMarketingAsset {
         file_name,
         media_type,
-        source_url,
+        source_url: source_url.to_string(),
         bytes,
     })
 }
@@ -894,10 +986,30 @@ pub async fn marketing_creative_save_to_workspace(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_account_overview, normalize_account_balance, normalize_account_gateway_key,
+        build_account_overview, direct_asset_url, direct_transfer_url, normalize_account_balance, normalize_account_gateway_key,
         normalize_account_usage, omit_null_object_fields, save_target_path,
     };
     use serde_json::{json, Value};
+
+    #[test]
+    fn direct_asset_url_keeps_the_scope_and_escapes_the_asset_id() {
+        let ticket = json!({
+            "origin": "https://media.harmonywatch.cn",
+            "readTicket": "read-only",
+            "uploadTicket": "upload-only"
+        });
+        let url = direct_asset_url(&ticket, "a/b").unwrap();
+        assert_eq!(url.path(), "/api/assets/direct/a%2Fb/file");
+        assert_eq!(url.query_pairs().find(|(key, _)| key == "ticket").unwrap().1, "read-only");
+        let upload = direct_transfer_url(&ticket, "/api/assets/direct/upload", "uploadTicket").unwrap();
+        assert_eq!(upload.query_pairs().find(|(key, _)| key == "ticket").unwrap().1, "upload-only");
+    }
+
+    #[test]
+    fn direct_transfer_rejects_plain_http() {
+        let ticket = json!({"origin": "http://media.harmonywatch.cn", "readTicket": "secret"});
+        assert!(direct_asset_url(&ticket, "asset").is_err());
+    }
 
     #[test]
     fn accepts_an_absolute_user_selected_save_target() {

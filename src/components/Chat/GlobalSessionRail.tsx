@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Folder, FolderPlus, MessageSquare, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, Folder, FolderPlus, LoaderCircle, Trash2 } from "lucide-react";
 import type { ChatProject } from "../../utils/chatProjects";
 
 interface GlobalSessionRailProps {
@@ -7,6 +7,8 @@ interface GlobalSessionRailProps {
   projects: ChatProject[];
   activeProjectId: string | null;
   activeSessionId: string | null;
+  runningBySession?: Record<string, boolean>;
+  outcomesBySession?: Record<string, "unread" | "error">;
   labels: { projects: string; createProject: string; emptyProject: string; removeProject?: string };
   onProjectSelect: (project: ChatProject) => void;
   onSelect: (id: string) => void;
@@ -22,6 +24,8 @@ export default function GlobalSessionRail({
   projects,
   activeProjectId,
   activeSessionId,
+  runningBySession = {},
+  outcomesBySession = {},
   labels,
   onProjectSelect,
   onSelect,
@@ -102,8 +106,22 @@ export default function GlobalSessionRail({
                 <div className="project-tree-children" role="group">
                   {project.sessions.map((session) => (
                     <div key={session.id} className={`project-session-row ${session.id === activeSessionId ? "active" : ""}`}>
-                      <button type="button" className="project-session-select" onClick={() => onSelect(session.id)} title={session.title}>
-                        <MessageSquare size={13} strokeWidth={1.8} />
+                      <button
+                        type="button"
+                        className="project-session-select"
+                        onClick={() => onSelect(session.id)}
+                        title={session.title}
+                        aria-label={`${session.title || t("chat.defaultTitle")}${runningBySession[session.id] || (session.status === "running" && !outcomesBySession[session.id]) ? "，正在执行" : outcomesBySession[session.id] === "error" ? "，执行出错" : outcomesBySession[session.id] === "unread" ? "，有未读结果" : ""}`}
+                      >
+                        <span className="project-session-indicator" aria-hidden="true">
+                          {runningBySession[session.id] || (session.status === "running" && !outcomesBySession[session.id]) ? (
+                            <LoaderCircle className="project-session-spinner" size={12} strokeWidth={2.2} />
+                          ) : outcomesBySession[session.id] === "error" ? (
+                            <CircleAlert className="project-session-error" size={12} strokeWidth={2.2} />
+                          ) : outcomesBySession[session.id] === "unread" ? (
+                            <span className="project-session-unread" />
+                          ) : null}
+                        </span>
                         <span>{session.title || t("chat.defaultTitle")}</span>
                       </button>
                       <button
