@@ -6,14 +6,15 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.6-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/version-1.0.7-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
+[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
-[下载 Windows 版](https://www.harmonywork.com.cn/downloads/workbuddy/windows) · [功能概览](#功能概览) · [安装与配置](#windows-安装) · [源码构建](#从源码构建) · [常见问题](#常见问题)
+[下载 Windows 版](https://www.harmonywork.com.cn/workbuddy#download) · [下载 macOS 预览版](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg) · [功能概览](#功能概览) · [Windows 安装](#windows-安装) · [macOS 预览版](#macos-预览版) · [源码构建](#从源码构建) · [常见问题](#常见问题)
 
 </div>
 
@@ -21,7 +22,7 @@
 
 ## 项目简介
 
-Harmony Work 是一款面向 Windows 的桌面 AI Agent 工作台。它将对话、项目、任务、文件、长期记忆、技能、创作工具、办公文档和即时通讯整合到同一套工作流中，让模型能够理解目标、调用工具、请求批准、持续执行并交付可下载的成果。
+Harmony Work 是一款桌面 AI Agent 工作台，提供 Windows 稳定版和 Apple Silicon Mac 预览版。它将对话、项目、任务、文件、长期记忆、技能、创作工具、办公文档和即时通讯整合到同一套工作流中，让模型能够理解目标、调用工具、请求批准、持续执行并交付可下载的成果。
 
 主会话由 **Codex app-server** 驱动，无人值守任务通过 **Codex exec** 执行；Harvis、Office、技能、记忆、IM、StaffDeck 等业务能力由独立的 **WorkBuddy MCP Host** 提供。界面继续负责项目与会话管理、Todo、活动记录、权限审批和成果展示。
 
@@ -81,11 +82,11 @@ flowchart LR
 
 ### 全量离线安装包
 
-当前 Windows x64 全量安装包为 `Harmony-Work-1.0.6-x64-setup.exe`。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+当前 Windows x64 全量安装包为 `Harmony-Work-1.0.7-x64-setup.exe`。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
 ### 1. 下载安装包
 
-从 [Harmony Work 官网](https://www.harmonywork.com.cn/) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN：
+从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN：
 
 ```text
 Harmony-Work-<version>-x64-setup.exe
@@ -97,7 +98,7 @@ Harmony-Work-<version>-x64-setup.exe
 Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
-1.0.6 安装包的 SHA-256 为 `89725fc46ba8f288925e1fc5082ac4c3079b3bb0d335f049bc914953998023ca`。其他版本应以官网发布信息中的摘要为准。
+1.0.7 安装包的 SHA-256 为 `c7fb40788a89e49acb09bbefdb5c74e3d931ab5d6fa1e9d3d6cd8910b54d8bd1`。其他版本应以官网发布信息中的摘要为准。
 
 ### 2. 运行安装程序
 
@@ -239,9 +240,19 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 脚本校验离线载荷、构建 Tauri NSIS 内层安装包，再生成 WPF 外层安装器。最终文件位于 `release\full\Harmony-Work-<version>-x64-setup.exe`。构建与安装细节见 [安装器说明](installer/README.md)。运行时载荷和打包产物不提交到 Git。
 
-## macOS 开发预览
+## macOS 预览版
 
-macOS 版本正在同一仓库的功能分支开发，暂未提供签名、Apple 公证或官网正式下载。当前只验证了 Apple Silicon 构建；Intel Mac 和完整功能回归尚未完成。最低系统版本为 macOS 13。
+macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
+
+从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64.dmg`，SHA-256：
+
+```text
+c8aa36f70fe719e993a065a1f975108b25fcf7f05495077d6f20ce085d1e0a67
+```
+
+该预览包尚未进行 Apple Developer ID 签名和公证。首次打开时，macOS 可能提示无法验证开发者；请先确认文件来自 Harmony Work 官网并核对 SHA-256，再按组织的设备安全策略决定是否运行。不要为安装此预览版关闭 Gatekeeper。
+
+桌面操控首次使用时，需要用户在“系统设置 → 隐私与安全性”中授予辅助功能和屏幕录制权限；安装包不能代为授权。
 
 构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools，以及可用的网络来安装锁定的 npm/Cargo 依赖。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。
 
@@ -251,7 +262,7 @@ npm test
 ./scripts/build-mac.sh
 ```
 
-脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。桌面操控首次使用时仍需用户在“系统设置 → 隐私与安全性”中授予辅助功能和屏幕录制权限；安装包不能代为授权。
+脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。
 
 ## 项目结构
 
