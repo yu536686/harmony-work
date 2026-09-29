@@ -1012,6 +1012,18 @@ mod tests {
     }
 
     #[test]
+    fn direct_asset_url_preserves_nonstandard_https_port() {
+        let ticket = json!({
+            "origin": "https://media.harmonywatch.cn:8443",
+            "readTicket": "read-only"
+        });
+        let url = direct_asset_url(&ticket, "asset").unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("media.harmonywatch.cn"));
+        assert_eq!(url.port(), Some(8443));
+    }
+
+    #[test]
     fn accepts_an_absolute_user_selected_save_target() {
         #[cfg(target_os = "windows")]
         let expected = r"C:\Users\Admin\Desktop\Harvis 成品.mp3";
