@@ -7,6 +7,7 @@ import {
   Paperclip,
   Radio,
   Send,
+  Smartphone,
   SquareTerminal,
   UserRound,
   Webhook,
@@ -18,6 +19,7 @@ import type { Session } from "../../services/tauri";
 function SourceIcon({ source }: { source: string }) {
   const props = { size: 14, strokeWidth: 1.8, "aria-hidden": true } as const;
   if (source === "chat" || !source) return <UserRound {...props} />;
+  if (source === "mobile") return <Smartphone {...props} />;
   if (source === "cli") return <SquareTerminal {...props} />;
   if (source.includes("telegram")) return <Send {...props} />;
   if (source.includes("feishu") || source.includes("lark")) return <Building2 {...props} />;
@@ -140,6 +142,7 @@ export default function SessionPicker({
           <SourceIcon source={s.source} />
         </span>
         <span className="session-picker-item-title">{title}</span>
+        {s.source === "mobile" && <small className="mobile-source-badge">手机端</small>}
         <span className="session-picker-item-count">{s.message_count}</span>
         <button
           className="session-picker-item-delete"

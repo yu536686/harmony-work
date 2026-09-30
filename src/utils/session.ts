@@ -16,7 +16,7 @@ export function classifyMainChatSession(
 ): MainChatSessionKind {
   if (isInternalSession(session)) return "chat";
   if (isPondCliSession(session)) return "cli";
-  if (!session?.source || session.source === "chat") return "chat";
+  if (!session?.source || session.source === "chat" || session.source === "mobile") return "chat";
   return "im";
 }
 

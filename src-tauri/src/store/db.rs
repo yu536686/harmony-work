@@ -1701,6 +1701,34 @@ impl Database {
         self.append_message_full_with_context(session_id, role, content, None, None, None, None)
     }
 
+    /// Import a mobile message under its original ID so repeated syncs are idempotent.
+    pub fn import_mobile_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<bool> {
+        if role == "assistant" {
+            let latest = self.get_messages_latest(session_id, 1)?;
+            if latest.iter().any(|message| message.role == "assistant" && message.content == content) {
+                return Ok(false);
+            }
+        }
+        let now = Utc::now().to_rfc3339();
+        let inserted = self.conn.execute(
+            "INSERT OR IGNORE INTO messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![message_id, session_id, role, content, now],
+        )?;
+        if inserted > 0 {
+            self.conn.execute(
+                "UPDATE sessions SET message_count = message_count + 1, updated_at = ?1 WHERE id = ?2",
+                params![now, session_id],
+            )?;
+        }
+        Ok(inserted > 0)
+    }
+
     pub fn append_message_with_context(
         &self,
         session_id: &str,
@@ -5089,6 +5117,20 @@ mod tests {
     use super::{
         is_disallowed_koi_name_char, normalize_koi_name, Database, ImSessionBindingUpsert,
     };
+
+    #[test]
+    fn mobile_message_import_preserves_ids_and_is_idempotent() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = "3ecc3126-67a5-4e33-bfad-f1fe2308ef9e";
+        db.ensure_fixed_session(session, "From phone", "mobile").unwrap();
+        let message = "11111111-1111-4111-8111-111111111111";
+        assert!(db.import_mobile_message(session, message, "user", "hello").unwrap());
+        assert!(!db.import_mobile_message(session, message, "user", "hello").unwrap());
+        let imported = db.get_messages(session, 10, 0).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].id, message);
+        assert_eq!(db.get_session(session).unwrap().unwrap().message_count, 1);
+    }
 
     #[test]
     fn execution_events_and_message_context_roundtrip() {

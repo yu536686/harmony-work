@@ -14,6 +14,7 @@ import {
   Minus,
   Square as WindowSquare,
   X,
+  Smartphone,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
@@ -32,6 +33,8 @@ import {
   type WorkspaceNavigationTab,
 } from "./navigation/workspaceNavigation";
 import Chat from "./components/Chat";
+import MobileBridgeWizard, { mobileBridgeStorageKey } from "./components/MobileBridgeWizard";
+import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
@@ -116,7 +119,44 @@ function AppContent() {
   const [collaborationExpanded, setCollaborationExpanded] = useState(
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
+  const [mobileBridgeOpen, setMobileBridgeOpen] = useState(false);
+  const [mobilePeerState, setMobilePeerState] = useState<"connecting" | "direct" | "fallback">("fallback");
+  const mobilePeer = useRef<BridgePeer | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
+
+  useEffect(() => {
+    if (!IS_WINDOWS || !marketingUser) return;
+    const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
+    if (!desktopId) return;
+    void invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId }).catch(error => console.warn("Mobile bridge worker:", error));
+    const unlisten = listen("mobile_bridge_updated", () => {
+      void sessionsApi.list(200).then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions))).catch(() => undefined);
+    });
+    return () => { void unlisten.then(fn => fn()); void invoke("mobile_bridge_stop_worker"); };
+  }, [marketingUser?.id, mobileBridgeOpen, dispatch]);
+
+  useEffect(() => {
+    if (!IS_WINDOWS || !marketingUser) return;
+    const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
+    if (!desktopId || typeof RTCPeerConnection === "undefined") return;
+    let stopped = false;
+    void invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices")
+      .then(async ({ devices }) => {
+        const link = devices.find(item => item.desktopDeviceId === desktopId);
+        if (!link || stopped) return;
+        const peer = new BridgePeer({
+          desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId,
+          localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: true,
+          sendSignal: (kind, payload) => invoke("mobile_bridge_send_signal", { desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId, senderDeviceId: desktopId, recipientDeviceId: link.mobileDeviceId, kind, payload }),
+          pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
+          onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },
+          onState: setMobilePeerState,
+        });
+        mobilePeer.current = peer;
+        await peer.start();
+      }).catch(() => setMobilePeerState("fallback"));
+    return () => { stopped = true; mobilePeer.current?.stop(); mobilePeer.current = null; };
+  }, [marketingUser?.id, mobileBridgeOpen]);
 
   useEffect(() => {
     localStorage.setItem("harmony-work.session-outcomes", JSON.stringify(sessionOutcomes));
@@ -628,6 +668,7 @@ function AppContent() {
               )}
             </div>
           )}
+          {IS_WINDOWS && <button className="nav-item mobile-bridge-nav" title={`连接手机 · ${mobilePeerState === "direct" ? "P2P 直连" : "服务器保障"}`} onClick={() => setMobileBridgeOpen(true)}><span className="nav-icon"><Smartphone size={17} strokeWidth={1.8} /></span><span className="nav-label">连接手机</span></button>}
           <button
             className="nav-item minimal-mode-btn"
             title={t("nav.minimalMode")}
@@ -645,6 +686,7 @@ function AppContent() {
           </button>
         </div>
       </aside>
+      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} />}
       <main className="main-content">
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
           {mountedTabs.has("chat") && (

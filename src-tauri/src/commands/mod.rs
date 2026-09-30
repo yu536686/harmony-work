@@ -26,5 +26,6 @@ pub mod harmony_cut;
 pub mod ide;
 pub mod journal;
 pub mod marketing;
+pub mod mobile_bridge;
 pub mod platform;
 pub mod pool;
