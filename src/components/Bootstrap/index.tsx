@@ -14,6 +14,7 @@ import "./style.css";
 import { REGISTER_URL } from "../../services/serviceUrls";
 
 type BootstrapStep = "environment" | "login";
+const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -110,7 +111,9 @@ export default function Bootstrap({
           <h1>{step === "environment" ? "初始化运行环境" : `登录 ${PRODUCT_BRAND.displayName} 账号`}</h1>
           <p>
             {step === "environment"
-              ? "请逐项安装 Git、Node.js、Python 和 WeCom CLI。安装程序会优先使用安装目录旁边的本地安装包，找不到时才尝试在线安装。"
+              ? isMac
+                ? "Git、Node.js、Python 和 WeCom CLI 随应用离线提供。请确认四项检测通过，无需另行安装或连接 GitHub。"
+                : "请逐项安装 Git、Node.js、Python 和 WeCom CLI。安装程序会优先使用安装目录旁边的本地安装包，找不到时才尝试在线安装。"
               : "登录后可访问线上营销工作台、素材库、技能市场和团队等高阶内容；跳过后仍可进入基础对话。"}
           </p>
           <div className="bootstrap-steps" aria-label="setup progress">
@@ -142,21 +145,23 @@ export default function Bootstrap({
                     </div>
                     <button
                       className={`btn ${item.available ? "btn-secondary" : "btn-primary"} bootstrap-runtime-btn`}
-                      disabled={item.available || !!installingKey}
+                      disabled={item.available || !!installingKey || (isMac && item.source === "missing")}
                       onClick={() => void installItem(item)}
                     >
-                      {item.available ? "已安装" : installing ? "安装中..." : "安装"}
+                      {item.available
+                        ? item.source === "bundled" ? "已内置" : "已安装"
+                        : isMac && item.source === "missing" ? "需重新安装" : installing ? "安装中..." : "安装"}
                     </button>
                   </article>
                 );
               })}
             </div>
 
-            <div className="bootstrap-paths">
+            {!isMac && <div className="bootstrap-paths">
               <strong>离线安装包目录</strong>
               {(status?.offline_dirs ?? []).map((dir) => <code key={dir}>{dir}</code>)}
               <p>支持：Git/Node/Python 的 .exe/.msi 安装包，以及 @wecom/cli 的 .tgz 包。</p>
-            </div>
+            </div>}
 
             {(actionMessage || actionError) && (
               <div className={`bootstrap-message ${actionError ? "error" : ""}`}>

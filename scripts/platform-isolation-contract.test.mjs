@@ -27,6 +27,10 @@ test("Windows and macOS builds keep their native payloads separate", async () =>
   assert.ok(!base.bundle.resources.some((resource) => /mac-use-mcp|resources\/node/.test(resource)));
   assert.ok(mac.bundle.resources.includes("resources/mac-use-mcp"));
   assert.ok(mac.bundle.resources.includes("resources/node"));
+  for (const runtime of ["git", "python", "wecom"]) {
+    assert.ok(mac.bundle.resources.includes(`resources/${runtime}`));
+    assert.ok(!base.bundle.resources.includes(`resources/${runtime}`));
+  }
   assert.ok(!mac.bundle.resources.some((resource) => /flaui-mcp|offline-installers/.test(resource)));
 });
 

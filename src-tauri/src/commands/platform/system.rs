@@ -874,6 +874,17 @@ fn ensure_bootstrap_workspace(settings: &Settings, logs: &mut Vec<String>) {
 }
 
 fn install_bootstrap_target(target: BootstrapTarget, logs: &mut Vec<String>) {
+    #[cfg(target_os = "macos")]
+    if crate::process::is_packaged_macos_app()
+        && managed_runtime_executable(target.key).is_none()
+    {
+        logs.push(format!(
+            "{} 的应用内置组件缺失。请重新安装完整的 Harmony Work 安装包；不会尝试联网安装。",
+            target.name
+        ));
+        return;
+    }
+
     if target_available(target).is_some() {
         logs.push(format!("{} already available.", target.name));
         return;
@@ -917,10 +928,17 @@ fn collect_environment_bootstrap(
         .into_iter()
         .map(|target| {
             let managed = managed_runtime_executable(target.key).is_some();
-            let version = target_available(target);
+            #[cfg(target_os = "macos")]
+            let packaged_missing = crate::process::is_packaged_macos_app() && !managed;
+            #[cfg(not(target_os = "macos"))]
+            let packaged_missing = false;
+            let version = if packaged_missing { None } else { target_available(target) };
+            let available = version.is_some();
             let local = find_local_installer(target);
             let source = if managed {
                 "bundled".to_string()
+            } else if packaged_missing {
+                "missing".to_string()
             } else if version.is_some() {
                 "system".to_string()
             } else if local.is_some() {
@@ -931,8 +949,14 @@ fn collect_environment_bootstrap(
                 "missing".to_string()
             };
             let details = if managed {
-                "Installed by the WorkBuddy full offline installer and isolated from the system environment."
-                    .to_string()
+                if cfg!(target_os = "macos") {
+                    "随 Harmony Work 应用内置，无需联网或安装系统级依赖。".to_string()
+                } else {
+                    "Installed by the WorkBuddy full offline installer and isolated from the system environment."
+                        .to_string()
+                }
+            } else if packaged_missing {
+                "应用内置运行环境缺失，请重新安装完整的 Harmony Work 安装包。".to_string()
             } else if version.is_some() {
                 "Installed and ready.".to_string()
             } else if let Some(path) = &local {
@@ -949,11 +973,11 @@ fn collect_environment_bootstrap(
             EnvironmentBootstrapItem {
                 key: target.key.to_string(),
                 name: target.name.to_string(),
-                available: version.is_some(),
+                available,
                 version,
                 local_installer: local.map(|path| path.to_string_lossy().to_string()),
                 source,
-                status: if target_available(target).is_some() {
+                status: if available {
                     "ready".to_string()
                 } else {
                     "missing".to_string()
@@ -990,8 +1014,6 @@ fn target_available(target: BootstrapTarget) -> Option<String> {
             .or_else(|| probe_command(target.probe_command, target.probe_args))
             .or_else(|| probe_command("wecom-cli.cmd", target.probe_args))
             .or_else(probe_wecom_cli_from_npm_prefix)
-            .or_else(|| probe_command("npx", &["-y", "@wecom/cli", "--version"]))
-            .or_else(|| probe_command("npx.cmd", &["-y", "@wecom/cli", "--version"]))
             .or_else(|| probe_command("npm", &["list", "-g", "@wecom/cli", "--depth=0"]))
             .or_else(|| probe_command("npm.cmd", &["list", "-g", "@wecom/cli", "--depth=0"]));
     }
@@ -1267,25 +1289,9 @@ fn run_shell_command(command: &str) -> Result<String, String> {
     }
 }
 
-/// Finder-launched macOS applications do not inherit the user's interactive
-/// shell PATH. Include Homebrew's two standard locations so runtime detection
-/// and npm-based installation work from the packaged app as well as from a
-/// development terminal.
+/// Finder-launched macOS apps use the same managed-runtime PATH as Codex tools.
 fn bootstrap_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = std_command(program);
-        command.env(
-            "PATH",
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        );
-        return command;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        std_command(program)
-    }
+    std_command(program)
 }
 
 #[cfg(target_os = "linux")]

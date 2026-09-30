@@ -44,7 +44,7 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.5"
     },
     "resources": [
       "resources/codex",
@@ -52,6 +52,9 @@
       "resources/playwright-mcp",
       "resources/mac-use-mcp",
       "resources/node",
+      "resources/git",
+      "resources/python",
+      "resources/wecom",
       "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
     ]
   }

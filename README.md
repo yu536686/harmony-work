@@ -242,19 +242,21 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 ## macOS 预览版
 
-macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
+macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13.5。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
 
-从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64.dmg`，SHA-256：
+从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64-offline.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64-offline.dmg`，SHA-256：
 
 ```text
-c8aa36f70fe719e993a065a1f975108b25fcf7f05495077d6f20ce085d1e0a67
+3dbf1f3a3fdc6153793a50222e113b7bef9ddb8f63def94649ba728d0dcbe2a6
 ```
 
 该预览包尚未进行 Apple Developer ID 签名和公证。首次打开时，macOS 可能提示无法验证开发者；请先确认文件来自 Harmony Work 官网并核对 SHA-256，再按组织的设备安全策略决定是否运行。不要为安装此预览版关闭 Gatekeeper。
 
 桌面操控首次使用时，需要用户在“系统设置 → 隐私与安全性”中授予辅助功能和屏幕录制权限；安装包不能代为授权。
 
-构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools，以及可用的网络来安装锁定的 npm/Cargo 依赖。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。
+此 Mac 包将 Git 2.54.0、完整 Node.js/npm 24.18.0、Python/pip 3.12.12 和 WeCom CLI 0.1.9 放在应用自身的资源目录中；首次向导只检查这些程序，不要求用户访问 GitHub、npm 或 Python 下载站点。企业微信授权及实际线上服务仍需网络。
+
+构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools、`uv` 管理的 Python 3.12.12，以及首次获取锁定载荷和 npm/Cargo 依赖所需的网络。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。Mac 构建脚本校验离线包的 SHA-256，并把依赖仅放入 Mac 专属 Tauri 资源，不改 Windows 安装载荷。包内还附带与内置 Git 二进制对应的源码归档及许可证。
 
 ```sh
 npm ci
@@ -262,7 +264,7 @@ npm test
 ./scripts/build-mac.sh
 ```
 
-脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。
+脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。构建后可运行 `zsh scripts/verify-macos-offline-bundle.sh "<Harmony Work.app 的完整路径>"`，在不使用用户 PATH 中运行时的条件下验证包内版本和可执行路径。
 
 ## 项目结构
 

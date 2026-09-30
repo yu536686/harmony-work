@@ -37,21 +37,13 @@ export async function stageMacosRuntime() {
   await copyFile(resolve(packageRoot, "LICENSE"), resolve(automationRoot, "LICENSE"));
   await writeFile(resolve(automationRoot, "dist", "package.json"), JSON.stringify({ version: packageJson.version }), "utf8");
 
-  const nodeRoot = resolve(resources, "node");
-  const nodeBinary = resolve(nodeRoot, "bin", "node");
-  await mkdir(dirname(nodeBinary), { recursive: true });
-  await copyFile(process.execPath, nodeBinary);
-  await chmod(nodeBinary, 0o755);
-  const version = spawnSync(nodeBinary, ["--version"], { encoding: "utf8" });
-  if (version.status !== 0 || version.stdout.trim() !== process.version) {
-    throw new Error(`Bundled Node verification failed: ${version.stderr || version.stdout}`);
+  const staged = spawnSync("zsh", [resolve(root, "scripts", "stage-macos-offline-runtime.sh")], {
+    stdio: "inherit",
+  });
+  if (staged.status !== 0) {
+    throw new Error(`macOS offline runtime staging failed (exit ${staged.status})`);
   }
-  await copyFile(
-    resolve(root, "src-tauri", "licenses", "node-v24.18.0-LICENSE"),
-    resolve(nodeRoot, "LICENSE"),
-  );
-  await writeFile(resolve(nodeRoot, "VERSION"), `${process.version}\n`, "utf8");
-  console.log(`Staged Node ${process.version} and mac-use-mcp ${packageJson.version}`);
+  console.log(`Staged mac-use-mcp ${packageJson.version}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
