@@ -525,7 +525,7 @@ impl SkillLoader {
     fn ensure_harvis_creative_skill(&self) -> Result<()> {
         let skill_dir = self.skills_dir.join("harvis-creative");
         let skill_file = skill_dir.join("SKILL.md");
-        const HARVIS_SKILL_VERSION: &str = "2.2";
+        const HARVIS_SKILL_VERSION: &str = "2.3";
         if let Ok(existing) = std::fs::read_to_string(&skill_file) {
             if existing.contains(&format!("version: \"{}\"", HARVIS_SKILL_VERSION)) {
                 return Ok(());
@@ -537,7 +537,7 @@ impl SkillLoader {
             r#"---
 name: harvis-creative
 description: Use when the user asks to generate background music, instrumental music, images, posters, campaign visuals, or image variations through Harvis.
-version: "2.2"
+version: "2.3"
 tools:
   - harvis_image_generate
   - harvis_music_generate
@@ -565,7 +565,7 @@ triggers:
 {"prompt":"elegant luxury instrumental, piano and strings, 45-second brand BGM, no vocals","title":"品牌 BGM","duration":45}
 ```
 
-默认使用纯音乐。给出简洁英文 `prompt`（或 `tags`）、标题和时长；除非用户明确要求人声，否则加入 `instrumental only, no vocals`，不要写歌词或演唱要求。
+默认使用纯音乐。给出简洁英文 `prompt`、标题和时长；`tags` 是可选的精简风格词，控制在 900 字符以内。完整创作要求写入 `prompt`，不要将长篇方案直接写进 `tags`。除非用户明确要求人声，否则加入 `instrumental only, no vocals`，不要写歌词或演唱要求。
 
 ## 图片
 

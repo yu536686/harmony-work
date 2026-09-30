@@ -129,7 +129,7 @@ fn assistant_schema() -> Value {
                 }
             },
             "durationSeconds": { "type": "integer", "minimum": 10, "maximum": 360 },
-            "sunoPromptEn": { "type": "string", "minLength": 30, "maxLength": 1400 },
+            "sunoPromptEn": { "type": "string", "minLength": 30, "maxLength": 900 },
             "sunoPromptZh": { "type": "string", "minLength": 12, "maxLength": 900 },
             "negativeTags": { "type": "array", "items": { "type": "string" }, "maxItems": 12 },
             "evidenceCaseIds": { "type": "array", "items": { "type": "string" }, "maxItems": 6 },
@@ -161,7 +161,7 @@ fn request_body(model: &str, input: &HarvisPromptInput, repair: Option<&str>) ->
         .map(|value| format!("\n上一次输出未能通过结构校验。仅修复 JSON 结构和无效字段：{value}"))
         .unwrap_or_default();
     let system = format!(
-        "You are Xiaoheng, Harmony Work's Harvis music prompt assistant. Create a premium, instrumental-only Suno V5.5 BGM plan for a watch or brand campaign. Do not imitate named artists. Do not use lyrics, brand names as sung phrases, vocals, humming, speech, chanting, or markdown. Produce only JSON that matches the supplied schema. Evidence case IDs may only come from allowedEvidenceCaseIds. The English prompt must include genre, mood, BPM, 2-5 instruments, a compact arrangement arc, premium advertising mix, and instrumental-only wording. The Chinese prompt is an accurate business explanation, not a literal translation. Match durationSeconds to the requested value.{repair_note}"
+        "You are Xiaoheng, Harmony Work's Harvis music prompt assistant. Create a premium, instrumental-only Suno V5.5 BGM plan for a watch or brand campaign. Do not imitate named artists. Do not use lyrics, brand names as sung phrases, vocals, humming, speech, chanting, or markdown. Produce only JSON that matches the supplied schema. Evidence case IDs may only come from allowedEvidenceCaseIds. The English prompt must stay under 900 characters and include genre, mood, BPM, 2-5 instruments, a compact arrangement arc, premium advertising mix, and instrumental-only wording. The Chinese prompt is an accurate business explanation, not a literal translation. Match durationSeconds to the requested value.{repair_note}"
     );
     json!({
         "model": model,
