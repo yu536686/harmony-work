@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.7-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/version-1.0.8-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -82,7 +82,7 @@ flowchart LR
 
 ### 全量离线安装包
 
-当前 Windows x64 全量安装包为 `Harmony-Work-1.0.7-x64-setup.exe`。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+本分支已在 `release/full/` 构建 Windows x64 1.0.8 全量测试包 `Harmony-Work-1.0.8-x64-setup.exe`，尚未发布到官网。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
 ### 1. 下载安装包
 
@@ -98,7 +98,7 @@ Harmony-Work-<version>-x64-setup.exe
 Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
-1.0.7 安装包的 SHA-256 为 `c7fb40788a89e49acb09bbefdb5c74e3d931ab5d6fa1e9d3d6cd8910b54d8bd1`。其他版本应以官网发布信息中的摘要为准。
+本分支本地构建的 1.0.8 全量测试包 SHA-256 为 `7921aecf0efd9cffa4d324196065dcd62dcb1678f29ac710fe4011612bd85c35`；官网公开版本应以官网发布信息中的摘要为准。
 
 ### 2. 运行安装程序
 
