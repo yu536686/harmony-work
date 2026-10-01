@@ -33,7 +33,7 @@ import {
   type WorkspaceNavigationTab,
 } from "./navigation/workspaceNavigation";
 import Chat from "./components/Chat";
-import MobileBridgeWizard, { mobileBridgeStorageKey } from "./components/MobileBridgeWizard";
+import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from "./components/MobileBridgeWizard";
 import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
@@ -127,8 +127,11 @@ function AppContent() {
   useEffect(() => {
     if (!IS_WINDOWS || !marketingUser) return;
     const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
-    if (!desktopId) return;
-    void invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId }).catch(error => console.warn("Mobile bridge worker:", error));
+    const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
+    if (!desktopId || !deviceToken) return;
+    void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
+      .then(() => invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId }))
+      .catch(error => console.warn("Mobile bridge worker:", error));
     const unlisten = listen("mobile_bridge_updated", () => {
       void sessionsApi.list(200).then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions))).catch(() => undefined);
     });
@@ -138,15 +141,17 @@ function AppContent() {
   useEffect(() => {
     if (!IS_WINDOWS || !marketingUser) return;
     const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
-    if (!desktopId || typeof RTCPeerConnection === "undefined") return;
+    const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
+    if (!desktopId || !deviceToken || typeof RTCPeerConnection === "undefined") return;
     let stopped = false;
-    void invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices")
+    void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
+      .then(() => invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices"))
       .then(async ({ devices }) => {
         const link = devices.find(item => item.desktopDeviceId === desktopId);
         if (!link || stopped) return;
         const peer = new BridgePeer({
           desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId,
-          localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: true,
+          localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: false,
           sendSignal: (kind, payload) => invoke("mobile_bridge_send_signal", { desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId, senderDeviceId: desktopId, recipientDeviceId: link.mobileDeviceId, kind, payload }),
           pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
           onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },

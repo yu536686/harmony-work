@@ -4,12 +4,25 @@ use crate::commands::marketing::{apply_cookie, marketing_client};
 use crate::store::AppState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const BASE: &str = "https://remote.harmonywatch.cn/api/mobile";
 static WORKER: OnceLock<Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>> = OnceLock::new();
-static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+static TASK_PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+static DEVICE_AUTH: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
+
+#[tauri::command]
+pub fn mobile_bridge_set_device(device_id: String, device_token: String) -> Result<(), String> {
+    uuid(&device_id)?;
+    if device_token.len() != 43 || !device_token.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
+        return Err("Invalid device token".into());
+    }
+    *DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Device auth unavailable")? = Some((device_id, device_token));
+    Ok(())
+}
 
 fn worker() -> &'static Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>> {
     WORKER.get_or_init(|| Mutex::new(None))
@@ -24,6 +37,12 @@ async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Re
     let client = marketing_client()?;
     let url = format!("{BASE}{path}");
     let mut builder = apply_cookie(client.request(method, url)).await;
+    if let Some((device_id, token)) = DEVICE_AUTH.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Device auth unavailable".to_string())?.clone() {
+        builder = builder.header("X-Harmony-Device-Id", device_id)
+            .header("X-Harmony-Device-Kind", "desktop")
+            .header("X-Harmony-Device-Token", token);
+    }
     if let Some(body) = body { builder = builder.json(&body); }
     let response = builder.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
@@ -75,13 +94,17 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
     let after = SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
         .lock().map_err(|_| "Session cursor unavailable".to_string())?
         .get(desktop_id).cloned();
-    let session_path = match after { Some(after) => format!("/sessions?desktopDeviceId={desktop_id}&after={after}"), None => format!("/sessions?desktopDeviceId={desktop_id}") };
-    let sessions = request(reqwest::Method::GET, &session_path, None).await?;
-    let tasks = request(reqwest::Method::GET, &format!("/tasks?desktopDeviceId={desktop_id}&actionable=1"), None).await?;
     let state: State<'_, AppState> = app.state();
     let mut imported = 0;
-    let mut latest: Option<String> = None;
-    if let Some(items) = sessions["sessions"].as_array() {
+    let mut latest: Option<(String, String)> = after.clone();
+    let mut before: Option<(String, String)> = None;
+    loop {
+        let mut session_path = format!("/sessions?desktopDeviceId={desktop_id}");
+        if let Some((timestamp, id)) = &after { session_path.push_str(&format!("&after={timestamp}&afterId={id}")); }
+        if let Some((timestamp, id)) = &before { session_path.push_str(&format!("&before={timestamp}&beforeId={id}")); }
+        let sessions = request(reqwest::Method::GET, &session_path, None).await?;
+        let items = sessions["sessions"].as_array().ok_or("Invalid session page")?;
+        let page_size = items.len();
         let db = state.db.lock().await;
         for item in items {
             let Some(id) = item["id"].as_str().and_then(|id| uuid(id).ok()) else { continue };
@@ -94,20 +117,26 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                     if db.import_mobile_message(id, mid, role, content).map_err(|error| error.to_string())? { imported += 1; }
                 }
             }
-            if let Some(timestamp) = item["cursor"].as_str() {
-                if latest.as_deref().is_none_or(|current| timestamp > current) { latest = Some(timestamp.to_string()); }
+            if let (Some(timestamp), Some(id)) = (item["cursor"].as_str(), item["id"].as_str()) {
+                let key = (timestamp.to_string(), id.to_string());
+                if latest.as_ref().is_none_or(|current| key > *current) { latest = Some(key); }
             }
         }
+        before = items.last().and_then(|item| Some((item["cursor"].as_str()?.to_string(), item["id"].as_str()?.to_string())));
+        if page_size < 100 || before.is_none() { break; }
     }
     if let Some(latest) = latest {
         SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
             .lock().map_err(|_| "Session cursor unavailable".to_string())?
             .insert(desktop_device_id.clone(), latest);
     }
+    let tasks = request(reqwest::Method::GET, &format!("/tasks?desktopDeviceId={desktop_id}&actionable=1"), None).await?;
     let mut claimed = 0;
     if let Some(items) = tasks["tasks"].as_array() {
         for task in items {
             if task["status"] != "queued" && task["status"] != "claimed" { continue; }
+            let permit = match TASK_PERMITS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+                .clone().try_acquire_owned() { Ok(permit) => permit, Err(_) => break };
             let Some(task_id) = task["id"].as_str().and_then(|id| uuid(id).ok()) else { continue };
             let claim = request(reqwest::Method::POST, &format!("/tasks/{task_id}/claim"), Some(json!({"desktopDeviceId": desktop_id}))).await;
             let Ok(claim) = claim else { continue; };
@@ -116,6 +145,7 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             let (task_id, session_id, prompt, lease) = (task_id.to_owned(), session_id.to_owned(), prompt.to_owned(), lease.to_owned());
             let worker_app = app.clone();
             tauri::async_runtime::spawn(async move {
+                let _permit = permit;
                 let state: State<'_, AppState> = worker_app.state();
                 let options = CodexBackgroundOptions { session_title: Some(prompt.chars().take(40).collect()), session_source: Some("mobile".into()), ..Default::default() };
                 let work = run_codex_background(&state, &session_id, &prompt, None, "mobile", options);
@@ -127,12 +157,16 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                         result = &mut work => break result,
                         _ = interval.tick() => {
                             let heartbeat = request(reqwest::Method::POST, &format!("/tasks/{task_id}/heartbeat"), Some(json!({"leaseToken": lease}))).await;
-                            if heartbeat.is_err() { break Err("任务租约已失效".into()); }
+                            if let Err(error) = heartbeat { eprintln!("Mobile bridge heartbeat will retry: {error}"); }
                         }
                     }
                 };
                 let (status, text) = match result { Ok(output) => ("succeeded", output.final_message), Err(error) => ("failed", error) };
-                let _ = request(reqwest::Method::POST, &format!("/tasks/{task_id}/complete"), Some(json!({"leaseToken": lease, "status": status, "result": text.chars().take(20000).collect::<String>()}))).await;
+                let completion = json!({"leaseToken": lease, "status": status, "result": text.chars().take(10000).collect::<String>()});
+                for attempt in 0..6 {
+                    if request(reqwest::Method::POST, &format!("/tasks/{task_id}/complete"), Some(completion.clone())).await.is_ok() { break; }
+                    tokio::time::sleep(std::time::Duration::from_secs(2_u64.pow(attempt.min(4)))).await;
+                }
             });
             claimed += 1;
         }

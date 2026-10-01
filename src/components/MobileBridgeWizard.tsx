@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { QRCodeSVG } from "qrcode.react";
 
-type Pairing = { pairingId: string; desktopDeviceId: string; secret: string; expiresAt: string };
+type Pairing = { pairingId: string; desktopDeviceId: string; deviceToken: string; secret: string; expiresAt: string };
 type Status = { status: "pending" | "claimed" | "expired"; mobileDeviceId: string | null };
 
 export function mobileBridgeStorageKey(accountId: string) { return `workbuddy.mobileBridge.desktop.${accountId}`; }
+export function mobileBridgeTokenKey(accountId: string) { return `workbuddy.mobileBridge.token.${accountId}`; }
 
 export default function MobileBridgeWizard({ accountId, onClose, onBound }: {
   accountId: string; onClose: () => void; onBound: (desktopId: string) => void;
@@ -14,7 +15,7 @@ export default function MobileBridgeWizard({ accountId, onClose, onBound }: {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const currentId = localStorage.getItem(mobileBridgeStorageKey(accountId));
+  const currentId = localStorage.getItem(mobileBridgeTokenKey(accountId)) && localStorage.getItem(mobileBridgeStorageKey(accountId));
   async function start() {
     setBusy(true); setError(""); setPairing(null);
     try {
@@ -30,6 +31,8 @@ export default function MobileBridgeWizard({ accountId, onClose, onBound }: {
         const result = await invoke<Status>("mobile_bridge_pairing_status", { pairingId: pairing.pairingId });
         if (result.status === "claimed") {
           localStorage.setItem(mobileBridgeStorageKey(accountId), pairing.desktopDeviceId);
+          localStorage.setItem(mobileBridgeTokenKey(accountId), pairing.deviceToken);
+          await invoke("mobile_bridge_set_device", { deviceId: pairing.desktopDeviceId, deviceToken: pairing.deviceToken });
           setStatus("绑定成功，会话与任务已开始同步");
           setPairing(null);
           onBound(pairing.desktopDeviceId);

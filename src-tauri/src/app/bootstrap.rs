@@ -1304,6 +1304,7 @@ fn run_impl() {
             commands::account_settings_sync::account_settings_sync_restore_selected,
             commands::account_settings_sync::account_settings_sync_delete,
             commands::mobile_bridge::mobile_bridge_start_pairing,
+            commands::mobile_bridge::mobile_bridge_set_device,
             commands::mobile_bridge::mobile_bridge_pairing_status,
             commands::mobile_bridge::mobile_bridge_sync,
             commands::mobile_bridge::mobile_bridge_devices,

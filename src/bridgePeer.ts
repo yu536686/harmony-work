@@ -28,13 +28,14 @@ export class BridgePeer {
     };
     this.peer.onconnectionstatechange = () => {
       options.onState(this.peer.connectionState === 'connected' ? 'direct' : this.peer.connectionState === 'failed' || this.peer.connectionState === 'disconnected' ? 'fallback' : 'connecting');
+      if (!options.initiator && (this.peer.connectionState === 'failed' || this.peer.connectionState === 'disconnected')) this.resumePolling();
     };
     this.peer.ondatachannel = event => this.attachChannel(event.channel);
   }
 
   async start() {
     this.options.onState('connecting');
-    this.timer = window.setInterval(() => void this.poll(), 2000);
+    this.resumePolling();
     void this.poll();
     if (this.options.initiator) {
       this.attachChannel(this.peer.createDataChannel('harmonywork-events', { ordered: true }));
@@ -55,10 +56,21 @@ export class BridgePeer {
     this.peer.close();
   }
 
+  private pausePolling() {
+    if (this.timer !== null) window.clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  private resumePolling() {
+    if (this.timer === null && !this.stopped) {
+      this.timer = window.setInterval(() => void this.poll(), this.options.initiator ? 2000 : 15000);
+    }
+  }
+
   private attachChannel(channel: RTCDataChannel) {
     this.channel = channel;
-    channel.onopen = () => this.options.onState('direct');
-    channel.onclose = () => this.options.onState('fallback');
+    channel.onopen = () => { this.pausePolling(); this.options.onState('direct'); };
+    channel.onclose = () => { this.options.onState('fallback'); if (!this.options.initiator) this.resumePolling(); };
     channel.onmessage = event => {
       try { if (JSON.parse(String(event.data))?.type === 'task-updated') this.options.onHint(); }
       catch { /* Ignore unrecognized peer messages. */ }
