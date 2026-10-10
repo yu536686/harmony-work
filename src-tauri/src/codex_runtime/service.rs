@@ -560,6 +560,13 @@ impl CodexRuntimeState {
             existing_config
                 .push_str(&crate::codex_runtime::config::render_harmony_provider_section());
         }
+        let catalog_config = crate::codex_runtime::config::ensure_managed_auto_review_catalog(
+            &codex_home,
+            &existing_config,
+        )
+        .map_err(CodexRuntimeStateError::PrepareConfig)?;
+        let catalog_added = catalog_config != existing_config;
+        existing_config = catalog_config;
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
         let installed_skill_root = app_data_dir.join("installed-skills");
@@ -573,7 +580,11 @@ impl CodexRuntimeState {
         let automation = automation_mcp_profile(app_data_dir);
         let managed_mcp = format!("{}{}", mcp_profile.render_toml(), automation.render_toml());
         let merged_config = merge_managed_mcp_config(&existing_config, &managed_mcp);
-        if public_url_changed || harmony_missing || merged_config != existing_config {
+        if public_url_changed
+            || harmony_missing
+            || catalog_added
+            || merged_config != existing_config
+        {
             std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
         }
