@@ -1128,6 +1128,35 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   }, [running]);
   const activeSessionKind = classifySession(displaySession);
   const isImSession = activeSessionKind === "im";
+  const [sharedTurnBusy, setSharedTurnBusy] = useState(false);
+  const [sharedTurnLabel, setSharedTurnLabel] = useState("");
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) {
+      setSharedTurnBusy(false);
+      setSharedTurnLabel("");
+      return;
+    }
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    setSharedTurnBusy(true);
+    setSharedTurnLabel("正在确认双端会话状态…");
+    const refresh = async () => {
+      try {
+        const result = await invoke<{ turn: { id: string } | null }>("mobile_bridge_active_turn", { sessionId });
+        if (cancelled) return;
+        setSharedTurnBusy(!!result.turn);
+        setSharedTurnLabel(result.turn ? "另一端正在处理这段会话，完成后可继续发送" : "");
+      } catch {
+        if (cancelled) return;
+        setSharedTurnBusy(true);
+        setSharedTurnLabel("双端连接暂不可用，恢复后可继续发送");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    const listener = listen("mobile_bridge_updated", () => void refresh());
+    return () => { cancelled = true; window.clearInterval(timer); void listener.then(unlisten => unlisten()); };
+  }, [displaySession?.source, displaySessionId]);
   isImSessionRef.current = isImSession;
 
   useEffect(() => {
@@ -1198,6 +1227,18 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displaySessionId, dispatch]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) return;
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    const listener = listen("mobile_bridge_updated", () => {
+      void sessionsApi.getMessages(sessionId, CHAT_INITIAL_SIZE, 0).then(messages => {
+        if (!cancelled) dispatch(chatActions.setMessagesWithFrozen({ sessionId, messages }));
+      }).catch(() => undefined);
+    });
+    return () => { cancelled = true; void listener.then(unlisten => unlisten()); };
+  }, [displaySession?.source, displaySessionId, dispatch]);
 
   useEffect(() => {
     if (artifactsUnlistenRef.current) {
@@ -2291,7 +2332,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   );
 
   const handleSend = useCallback(async () => {
-    if (!canSend || running) return;
+    if (!canSend || running || sharedTurnBusy) return;
 
     const content = input.trim() || (activeAnnotationDraft.items.length > 0 ? t("chat.annotationDefaultPrompt") : "");
     setInput("");
@@ -2349,7 +2390,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
 
     await doSend(content, pending, skills, koi, true, targetSessionId);
-  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t, activeAnnotationDraft.items.length]);
+  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, sharedTurnBusy, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t, activeAnnotationDraft.items.length]);
 
   // The event listener for a newly created session is registered by an earlier
   // effect in this component. Sending from this later effect prevents losing
@@ -3042,14 +3083,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                     <span>{t("common.stop")}</span>
                   </button>
                 ) : (
+                  <>{sharedTurnLabel && <span role="status" style={{ fontSize: 12, color: "var(--text-muted)" }}>{sharedTurnLabel}</span>}
                   <button
                     className="btn btn-primary"
                     onClick={handleSend}
-                    disabled={!canSend}
+                    disabled={!canSend || sharedTurnBusy}
                   >
                     <span>{t("common.send")}</span>
                     <SendHorizontal size={15} strokeWidth={2} />
-                  </button>
+                  </button></>
                 )}
               </div>
             </div>}

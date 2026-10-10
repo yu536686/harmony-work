@@ -1307,6 +1307,7 @@ fn run_impl() {
             commands::mobile_bridge::mobile_bridge_set_device,
             commands::mobile_bridge::mobile_bridge_pairing_status,
             commands::mobile_bridge::mobile_bridge_sync,
+            commands::mobile_bridge::mobile_bridge_active_turn,
             commands::mobile_bridge::mobile_bridge_devices,
             commands::mobile_bridge::mobile_bridge_signals,
             commands::mobile_bridge::mobile_bridge_send_signal,

@@ -1834,11 +1834,11 @@ pub async fn codex_chat_send(
 ) -> Result<CodexTurnStarted, String> {
     let settings = app_state.settings.lock().await.clone();
     codex_state.configure_credentials(&settings).await;
-    let session_workspace = {
+    let (session_workspace, is_mobile_shared) = {
         let db = app_state.db.lock().await;
-        db.get_session(&session_id)
-            .map_err(|error| error.to_string())?
-            .and_then(|session| session.workspace_root)
+        let session = db.get_session(&session_id).map_err(|error| error.to_string())?;
+        let is_mobile_shared = session.as_ref().is_some_and(|session| session.source == "mobile");
+        (session.and_then(|session| session.workspace_root), is_mobile_shared)
     };
     let workspace_root = workspace_root
         .filter(|value| !value.trim().is_empty())
@@ -1897,23 +1897,32 @@ pub async fn codex_chat_send(
     };
     let workspace_artifacts_before = snapshot_workspace_artifacts(&options.workspace_root);
     let workspace_root_for_artifact_discovery = options.workspace_root.clone();
+    if is_mobile_shared {
+        crate::commands::mobile_bridge::prepare_desktop_send(&app_state, &session_id, &visible_content).await?;
+    }
     {
         let db = app_state.db.lock().await;
-        db.append_message_with_context(
-            &session_id,
-            "user",
-            &visible_content,
-            message_context_json.as_deref(),
-        )
-        .map_err(|error| error.to_string())?;
+        if !is_mobile_shared {
+            db.append_message_with_context(
+                &session_id,
+                "user",
+                &visible_content,
+                message_context_json.as_deref(),
+            ).map_err(|error| error.to_string())?;
+        }
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
     }
     let execution = match codex_state.start_turn(&session_id, options).await {
         Ok(execution) => execution,
         Err(error) => {
-            let db = app_state.db.lock().await;
-            let _ = db.update_session_status(&session_id, "idle");
+            {
+                let db = app_state.db.lock().await;
+                let _ = db.update_session_status(&session_id, "idle");
+            }
+            if is_mobile_shared {
+                crate::commands::mobile_bridge::abort_desktop_send(&app_state, &session_id).await;
+            }
             return Err(error.to_string());
         }
     };

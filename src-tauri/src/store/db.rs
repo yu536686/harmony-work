@@ -695,6 +695,14 @@ impl Database {
         let _ = self
             .conn
             .execute("ALTER TABLE messages ADD COLUMN context_json TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN server_seq INTEGER", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN origin_device_id TEXT", []);
+        self.conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_shared_seq ON messages(session_id, server_seq);")?;
+        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS mobile_desktop_turns (
+            turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, initiating_message_id TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );")?;
 
         // Agent checkpoints for crash recovery
         self.conn.execute_batch("
@@ -1492,7 +1500,7 @@ impl Database {
                     COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0), last_compacted_at, \
                     workspace_root, pinned_at, archived_at, pool_session_id, policy_mode, \
                     allow_outside_workspace \
-             FROM sessions WHERE archived_at IS NULL ORDER BY \
+             FROM sessions WHERE archived_at IS NULL AND COALESCE(source, 'chat') != 'mobile_executor' ORDER BY \
                     CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END, \
                     COALESCE(pinned_at, updated_at) DESC, updated_at DESC LIMIT ?1 OFFSET ?2"
         )?;
@@ -1709,12 +1717,6 @@ impl Database {
         role: &str,
         content: &str,
     ) -> Result<bool> {
-        if role == "assistant" {
-            let latest = self.get_messages_latest(session_id, 1)?;
-            if latest.iter().any(|message| message.role == "assistant" && message.content == content) {
-                return Ok(false);
-            }
-        }
         let now = Utc::now().to_rfc3339();
         let inserted = self.conn.execute(
             "INSERT OR IGNORE INTO messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1727,6 +1729,66 @@ impl Database {
             )?;
         }
         Ok(inserted > 0)
+    }
+
+    /// Store the server sequence for a shared message. A local message with the
+    /// same ID is acknowledged in place; content conflicts are never ignored.
+    pub fn import_shared_message(
+        &self, session_id: &str, message_id: &str, role: &str, content: &str,
+        seq: u64, origin_device_id: &str,
+    ) -> Result<bool> {
+        let seq = i64::try_from(seq).map_err(|_| anyhow::anyhow!("shared sequence out of range"))?;
+        let inserted = self.import_mobile_message(session_id, message_id, role, content)?;
+        let changed = self.conn.execute(
+            "UPDATE messages SET server_seq = ?1, origin_device_id = ?2
+             WHERE id = ?3 AND session_id = ?4 AND role = ?5 AND content = ?6
+               AND (server_seq IS NULL OR server_seq = ?1)",
+            params![seq, origin_device_id, message_id, session_id, role, content],
+        )?;
+        if changed == 0 { return Err(anyhow::anyhow!("shared message ID conflicts with local content")); }
+        Ok(inserted)
+    }
+
+    pub fn get_unshared_mobile_messages(&self, session_id: &str, limit: i64) -> Result<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,session_id,role,content,created_at,tool_calls_json,tool_results_json,turn_index,context_json
+             FROM messages WHERE session_id = ?1 AND server_seq IS NULL
+               AND role IN ('user','assistant') ORDER BY rowid ASC LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], map_chat_message_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn record_shared_desktop_turn(&self, session_id: &str, turn_id: &str, initiating_message_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO mobile_desktop_turns (turn_id,session_id,initiating_message_id,created_at)
+             VALUES (?1,?2,?3,?4)",
+            params![turn_id, session_id, initiating_message_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn pending_shared_desktop_turns(&self) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id,turn_id,initiating_message_id FROM mobile_desktop_turns WHERE completed = 0 ORDER BY created_at ASC"
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn has_shared_assistant_after(&self, session_id: &str, initiating_message_id: &str) -> Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages answer JOIN messages prompt ON prompt.id = ?2
+             WHERE answer.session_id = ?1 AND answer.role = 'assistant'
+               AND answer.server_seq IS NOT NULL AND answer.rowid > prompt.rowid)",
+            params![session_id, initiating_message_id], |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    pub fn complete_shared_desktop_turn(&self, turn_id: &str) -> Result<()> {
+        self.conn.execute("UPDATE mobile_desktop_turns SET completed = 1 WHERE turn_id = ?1", params![turn_id])?;
+        Ok(())
     }
 
     pub fn append_message_with_context(
@@ -1850,7 +1912,7 @@ impl Database {
         // system clock drift. See `get_messages_latest` for full rationale.
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
-             FROM messages WHERE session_id = ?1 ORDER BY rowid ASC LIMIT ?2 OFFSET ?3"
+             FROM messages WHERE session_id = ?1 ORDER BY COALESCE(server_seq, 9223372036854775807), rowid ASC LIMIT ?2 OFFSET ?3"
         )?;
         let rows = stmt.query_map(params![session_id, limit, offset], map_chat_message_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1869,10 +1931,10 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
              FROM ( \
-               SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json, rowid \
+               SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json, server_seq, rowid \
                FROM messages WHERE session_id = ?1 \
-               ORDER BY rowid DESC LIMIT ?2 OFFSET ?3 \
-             ) ORDER BY rowid ASC",
+               ORDER BY COALESCE(server_seq, 9223372036854775807) DESC, rowid DESC LIMIT ?2 OFFSET ?3 \
+             ) ORDER BY COALESCE(server_seq, 9223372036854775807), rowid ASC",
         )?;
         let rows = stmt.query_map(params![session_id, limit, offset], map_chat_message_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1892,7 +1954,7 @@ impl Database {
     pub fn get_messages_latest(&self, session_id: &str, limit: i64) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index, context_json \
-             FROM messages WHERE session_id = ?1 ORDER BY rowid DESC LIMIT ?2"
+             FROM messages WHERE session_id = ?1 ORDER BY COALESCE(server_seq, 9223372036854775807) DESC, rowid DESC LIMIT ?2"
         )?;
         let rows = stmt.query_map(params![session_id, limit], map_chat_message_row)?;
         let mut msgs: Vec<ChatMessage> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -5130,6 +5192,49 @@ mod tests {
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].id, message);
         assert_eq!(db.get_session(session).unwrap().unwrap().message_count, 1);
+    }
+
+    #[test]
+    fn shared_messages_preserve_distinct_ids_and_server_sequence() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = "3ecc3126-67a5-4e33-bfad-f1fe2308ef9e";
+        db.ensure_fixed_session(session, "From phone", "mobile").unwrap();
+        let a = "11111111-1111-4111-8111-111111111111";
+        let b = "22222222-2222-4222-8222-222222222222";
+        assert!(db.import_shared_message(session, b, "assistant", "same", 22, "desktop").unwrap());
+        assert!(db.import_shared_message(session, a, "assistant", "same", 21, "mobile").unwrap());
+        assert!(!db.import_shared_message(session, a, "assistant", "same", 21, "mobile").unwrap());
+        let messages = db.get_messages(session, 10, 0).unwrap();
+        assert_eq!(messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(), vec![a, b]);
+    }
+
+    #[test]
+    fn mobile_executor_session_is_hidden_from_regular_session_list() {
+        let db = Database::open_in_memory().unwrap();
+        db.ensure_fixed_session("visible", "Phone chat", "mobile").unwrap();
+        db.ensure_fixed_session("internal", "Desktop job", "mobile_executor").unwrap();
+        let sessions = db.list_sessions(20, 0).unwrap();
+        assert!(sessions.iter().any(|session| session.id == "visible"));
+        assert!(!sessions.iter().any(|session| session.id == "internal"));
+    }
+
+    #[test]
+    fn desktop_shared_turn_finishes_only_after_assistant_is_uploaded() {
+        let db = Database::open_in_memory().unwrap();
+        let session = "3ecc3126-67a5-4e33-bfad-f1fe2308ef9e";
+        let user = "11111111-1111-4111-8111-111111111111";
+        let turn = "22222222-2222-4222-8222-222222222222";
+        db.ensure_fixed_session(session, "Phone chat", "mobile").unwrap();
+        db.import_shared_message(session, user, "user", "do work", 41, "desktop").unwrap();
+        db.record_shared_desktop_turn(session, turn, user).unwrap();
+        assert_eq!(db.pending_shared_desktop_turns().unwrap().len(), 1);
+        assert!(!db.has_shared_assistant_after(session, user).unwrap());
+        let answer = db.append_message(session, "assistant", "done").unwrap();
+        assert!(!db.has_shared_assistant_after(session, user).unwrap());
+        db.import_shared_message(session, &answer.id, "assistant", "done", 42, "desktop").unwrap();
+        assert!(db.has_shared_assistant_after(session, user).unwrap());
+        db.complete_shared_desktop_turn(turn).unwrap();
+        assert!(db.pending_shared_desktop_turns().unwrap().is_empty());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const BASE: &str = "https://remote.harmonywatch.cn/api/mobile";
 static WORKER: OnceLock<Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>> = OnceLock::new();
-static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 static TASK_PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 static DEVICE_AUTH: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
 
@@ -31,6 +31,49 @@ fn worker() -> &'static Mutex<Option<(String, tauri::async_runtime::JoinHandle<(
 fn uuid(raw: &str) -> Result<&str, String> {
     uuid::Uuid::parse_str(raw).map_err(|_| "Invalid bridge identifier".to_string())?;
     Ok(raw)
+}
+
+pub(crate) async fn prepare_desktop_send(
+    state: &State<'_, AppState>, session_id: &str, content: &str,
+) -> Result<(), String> {
+    uuid(session_id)?;
+    if content.trim().is_empty() || content.chars().count() > 8_000 {
+        return Err("Shared conversation messages must contain 1–8000 characters".into());
+    }
+    let desktop_id = DEVICE_AUTH.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Device auth unavailable".to_string())?
+        .as_ref().map(|(id, _)| id.clone()).ok_or("Please reconnect this desktop")?;
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let started = request(reqwest::Method::POST, &format!("/sessions/{session_id}/turns/start"),
+        Some(json!({"turnId":turn_id,"message":{"id":message_id,"content":content}}))).await?;
+    let seq = started["message"]["seq"].as_u64().ok_or("Invalid shared message acknowledgement")?;
+    let db = state.db.lock().await;
+    db.import_shared_message(session_id, &message_id, "user", content, seq, &desktop_id)
+        .map_err(|error| error.to_string())?;
+    db.record_shared_desktop_turn(session_id, &turn_id, &message_id)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) async fn abort_desktop_send(state: &State<'_, AppState>, session_id: &str) {
+    let pending = {
+        let db = state.db.lock().await;
+        db.pending_shared_desktop_turns().unwrap_or_default()
+    };
+    for (current_session, turn_id, _) in pending.into_iter().filter(|(id, _, _)| id == session_id) {
+        let _ = request(reqwest::Method::POST,
+            &format!("/sessions/{current_session}/turns/{turn_id}/complete"),
+            Some(json!({"status":"failed"}))).await;
+        let db = state.db.lock().await;
+        let _ = db.complete_shared_desktop_turn(&turn_id);
+    }
+}
+
+#[tauri::command]
+pub async fn mobile_bridge_active_turn(session_id: String) -> Result<Value, String> {
+    let id = uuid(&session_id)?;
+    request(reqwest::Method::GET, &format!("/sessions/{id}/turns/active"), None).await
 }
 
 async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
@@ -91,44 +134,93 @@ pub async fn mobile_bridge_send_signal(
 #[tauri::command]
 pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Result<Value, String> {
     let desktop_id = uuid(&desktop_device_id)?;
-    let after = SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
-        .lock().map_err(|_| "Session cursor unavailable".to_string())?
-        .get(desktop_id).cloned();
     let state: State<'_, AppState> = app.state();
     let mut imported = 0;
-    let mut latest: Option<(String, String)> = after.clone();
+    let mut uploaded = 0;
     let mut before: Option<(String, String)> = None;
     loop {
         let mut session_path = format!("/sessions?desktopDeviceId={desktop_id}");
-        if let Some((timestamp, id)) = &after { session_path.push_str(&format!("&after={timestamp}&afterId={id}")); }
-        if let Some((timestamp, id)) = &before { session_path.push_str(&format!("&before={timestamp}&beforeId={id}")); }
+        if let Some((timestamp, id)) = &before {
+            session_path.push_str(&format!("&before={timestamp}&beforeId={id}"));
+        }
         let sessions = request(reqwest::Method::GET, &session_path, None).await?;
         let items = sessions["sessions"].as_array().ok_or("Invalid session page")?;
         let page_size = items.len();
-        let db = state.db.lock().await;
         for item in items {
             let Some(id) = item["id"].as_str().and_then(|id| uuid(id).ok()) else { continue };
             let Some(title) = item["title"].as_str() else { continue };
-            db.ensure_fixed_session(id, title, "mobile").map_err(|error| error.to_string())?;
-            if let Some(messages) = item["messages"].as_array() {
-                for message in messages {
-                    let (Some(mid), Some(role), Some(content)) = (message["id"].as_str(), message["role"].as_str(), message["content"].as_str()) else { continue };
-                    if uuid(mid).is_err() || !matches!(role, "user" | "assistant") || content.len() > 20000 { continue; }
-                    if db.import_mobile_message(id, mid, role, content).map_err(|error| error.to_string())? { imported += 1; }
+            {
+                let db = state.db.lock().await;
+                let local = db.ensure_fixed_session(id, title, "mobile").map_err(|error| error.to_string())?;
+                if local.title.as_deref() != Some(title) {
+                    db.rename_session(id, title).map_err(|error| error.to_string())?;
                 }
             }
-            if let (Some(timestamp), Some(id)) = (item["cursor"].as_str(), item["id"].as_str()) {
-                let key = (timestamp.to_string(), id.to_string());
-                if latest.as_ref().is_none_or(|current| key > *current) { latest = Some(key); }
+            let mut after_seq = SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
+                .lock().map_err(|_| "Session cursor unavailable".to_string())?
+                .get(id).copied().unwrap_or(0);
+            loop {
+                let page = request(reqwest::Method::GET,
+                    &format!("/sessions/{id}/messages?afterSeq={after_seq}"), None).await?;
+                let messages = page["messages"].as_array().ok_or("Invalid message page")?;
+                if messages.is_empty() { break; }
+                let previous_seq = after_seq;
+                for message in messages {
+                    let (Some(mid), Some(role), Some(content), Some(seq)) = (
+                        message["id"].as_str(), message["role"].as_str(),
+                        message["content"].as_str(), message["seq"].as_u64()) else { continue };
+                    if uuid(mid).is_err() || !matches!(role, "user" | "assistant") { continue; }
+                    let origin = message["originDeviceId"].as_str().unwrap_or("");
+                    let db = state.db.lock().await;
+                    if db.import_shared_message(id, mid, role, content, seq, origin)
+                        .map_err(|error| error.to_string())? { imported += 1; }
+                    after_seq = seq;
+                }
+                SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock().map_err(|_| "Session cursor unavailable".to_string())?
+                    .insert(id.to_string(), after_seq);
+                if messages.len() < 100 || after_seq == previous_seq { break; }
+            }
+            let unshared = {
+                let db = state.db.lock().await;
+                db.get_unshared_mobile_messages(id, 100).map_err(|error| error.to_string())?
+            };
+            for message in unshared {
+                if !matches!(message.role.as_str(), "user" | "assistant") || message.content.chars().count() > 8_000 { continue; }
+                let ack = request(reqwest::Method::POST, &format!("/sessions/{id}/messages"),
+                    Some(json!({"id":message.id,"role":message.role,"content":message.content}))).await;
+                let Ok(ack) = ack else { continue; };
+                let Some(seq) = ack["message"]["seq"].as_u64() else { continue; };
+                let db = state.db.lock().await;
+                db.import_shared_message(id, &message.id, &message.role, &message.content, seq, desktop_id)
+                    .map_err(|error| error.to_string())?;
+                uploaded += 1;
             }
         }
         before = items.last().and_then(|item| Some((item["cursor"].as_str()?.to_string(), item["id"].as_str()?.to_string())));
         if page_size < 100 || before.is_none() { break; }
     }
-    if let Some(latest) = latest {
-        SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new()))
-            .lock().map_err(|_| "Session cursor unavailable".to_string())?
-            .insert(desktop_device_id.clone(), latest);
+    let pending_turns = {
+        let db = state.db.lock().await;
+        db.pending_shared_desktop_turns().map_err(|error| error.to_string())?
+    };
+    for (session_id, turn_id, initiating_message_id) in pending_turns {
+        let active = request(reqwest::Method::GET,
+            &format!("/sessions/{session_id}/turns/active"), None).await;
+        let Ok(active) = active else { continue; };
+        if active["turn"]["id"].as_str() != Some(turn_id.as_str()) { continue; }
+        let completed = {
+            let db = state.db.lock().await;
+            db.has_shared_assistant_after(&session_id, &initiating_message_id)
+                .map_err(|error| error.to_string())?
+        };
+        let path = if completed { "complete" } else { "heartbeat" };
+        let body = if completed { json!({"status":"completed"}) } else { json!({}) };
+        if request(reqwest::Method::POST,
+            &format!("/sessions/{session_id}/turns/{turn_id}/{path}"), Some(body)).await.is_ok() && completed {
+            let db = state.db.lock().await;
+            db.complete_shared_desktop_turn(&turn_id).map_err(|error| error.to_string())?;
+        }
     }
     let tasks = request(reqwest::Method::GET, &format!("/tasks?desktopDeviceId={desktop_id}&actionable=1"), None).await?;
     let mut claimed = 0;
@@ -142,13 +234,13 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             let Ok(claim) = claim else { continue; };
             let (Some(lease), Some(session_id), Some(prompt)) = (claim["leaseToken"].as_str(), claim["task"]["sessionId"].as_str(), claim["task"]["prompt"].as_str()) else { continue; };
             if uuid(session_id).is_err() { continue; }
-            let (task_id, session_id, prompt, lease) = (task_id.to_owned(), session_id.to_owned(), prompt.to_owned(), lease.to_owned());
+            let (task_id, prompt, lease) = (task_id.to_owned(), prompt.to_owned(), lease.to_owned());
             let worker_app = app.clone();
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
                 let state: State<'_, AppState> = worker_app.state();
-                let options = CodexBackgroundOptions { session_title: Some(prompt.chars().take(40).collect()), session_source: Some("mobile".into()), ..Default::default() };
-                let work = run_codex_background(&state, &session_id, &prompt, None, "mobile", options);
+                let options = CodexBackgroundOptions { session_title: Some(prompt.chars().take(40).collect()), session_source: Some("mobile_executor".into()), ..Default::default() };
+                let work = run_codex_background(&state, &task_id, &prompt, None, "mobile", options);
                 tokio::pin!(work);
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.tick().await;
@@ -161,7 +253,12 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                         }
                     }
                 };
-                let (status, text) = match result { Ok(output) => ("succeeded", output.final_message), Err(error) => ("failed", error) };
+                let (status, text) = match result {
+                    Ok(output) if approval_service_unavailable(&output.final_message, &output.events) =>
+                        ("failed", output.final_message),
+                    Ok(output) => ("succeeded", output.final_message),
+                    Err(error) => ("failed", error),
+                };
                 let completion = json!({"leaseToken": lease, "status": status, "result": text.chars().take(10000).collect::<String>()});
                 for attempt in 0..6 {
                     if request(reqwest::Method::POST, &format!("/tasks/{task_id}/complete"), Some(completion.clone())).await.is_ok() { break; }
@@ -171,8 +268,8 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             claimed += 1;
         }
     }
-    let _ = app.emit("mobile_bridge_updated", ());
-    Ok(json!({"importedMessages": imported, "claimedTasks": claimed}))
+    if imported > 0 || uploaded > 0 || claimed > 0 { let _ = app.emit("mobile_bridge_updated", ()); }
+    Ok(json!({"importedMessages": imported, "uploadedMessages": uploaded, "claimedTasks": claimed}))
 }
 
 #[tauri::command]
@@ -199,6 +296,15 @@ pub fn mobile_bridge_stop_worker() {
     }
 }
 
+fn approval_service_unavailable(final_message: &str, events: &[Value]) -> bool {
+    let mentions_outage = |text: &str| {
+        (text.contains("codex-auto-review") &&
+            (text.contains("503") || text.contains("No available channel"))) ||
+        text.contains("No available channel for model codex-auto-review")
+    };
+    mentions_outage(final_message) || events.iter().any(|event| mentions_outage(&event.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +312,18 @@ mod tests {
     fn bridge_uses_direct_host_and_rejects_non_uuid_ids() {
         assert_eq!(BASE, "https://remote.harmonywatch.cn/api/mobile");
         assert!(uuid("../admin").is_err());
+    }
+
+    #[test]
+    fn approval_outage_does_not_report_a_completed_desktop_task() {
+        assert!(approval_service_unavailable(
+            "工具调用失败：codex-auto-review 返回 503 Service Unavailable",
+            &[]
+        ));
+        assert!(approval_service_unavailable(
+            "我无法读取电脑信息。",
+            &[json!({"type":"item.completed","item":{"error":"No available channel for model codex-auto-review under group harmony"}})]
+        ));
+        assert!(!approval_service_unavailable("已读取电脑上的版本号。", &[]));
     }
 }
