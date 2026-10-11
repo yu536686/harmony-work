@@ -40,6 +40,7 @@ import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation 
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
 import { primaryChannelStatusLabel } from "./channelLifecycle";
+import { availableEmbeddingModels, selectedEmbeddingModel } from "./embeddingModels";
 import "./Settings.css";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
@@ -148,6 +149,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   kimi_api_key: "",
   siliconflow_api_key: "",
   harmony_api_key: "",
+  memory_embedding_model: "",
   harvis_image_model: "",
   harvis_video_model: "",
   harvis_music_model: "",
@@ -192,6 +194,8 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const { settings } = useSelector((s: RootState) => s.settings);
   const [form, setForm] = useState<SettingsData>({ ...DEFAULT_SETTINGS });
   const [harvisModelOptions, setHarvisModelOptions] = useState<ProviderModelInfo[]>([]);
+  const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
+  const [embeddingModelsError, setEmbeddingModelsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
@@ -326,6 +330,37 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
       setLlmProviders(settings.llm_providers ?? []);
     }
   }, [settings, defaultWorkspace]);
+
+  useEffect(() => {
+    const key = (form.harmony_api_key ?? "").trim();
+    if (form.provider !== "harmony" || !key) {
+      setEmbeddingModelsLoading(false);
+      setEmbeddingModelsError(null);
+      setHarvisModelOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setEmbeddingModelsLoading(true);
+    setEmbeddingModelsError(null);
+    const timer = window.setTimeout(() => {
+      settingsApi.fetchModels("harmony", key, HARMONY_API_BASE)
+        .then((models) => {
+          if (cancelled) return;
+          setHarvisModelOptions(models);
+          setForm((prev) => ({
+            ...prev,
+            memory_embedding_model: selectedEmbeddingModel(prev.memory_embedding_model ?? "", models),
+          }));
+        })
+        .catch((error) => {
+          if (!cancelled) setEmbeddingModelsError(String(error));
+        })
+        .finally(() => {
+          if (!cancelled) setEmbeddingModelsLoading(false);
+        });
+    }, 400);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [form.provider, form.harmony_api_key]);
 
   // Refresh gateway status on mount and whenever settings change (catches post-restart state)
   useEffect(() => {
@@ -689,6 +724,12 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
         model: prev.model || ids[0] || "",
       }));
       setHarvisModelOptions(models);
+      if (form.provider === "harmony") {
+        setForm((prev) => ({
+          ...prev,
+          memory_embedding_model: selectedEmbeddingModel(prev.memory_embedding_model ?? "", models),
+        }));
+      }
     } catch (e) {
       setGlobalModelError(String(e));
     } finally {
@@ -1207,6 +1248,20 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
                 Base URL: <code>{HARMONY_API_BASE}</code>
                 {" · "}<a href="https://portal.harmonywatch.cn/workspace?tab=console" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.harmonyKeyHelp")}</a>
+              </p>
+              <label className="label" htmlFor="memory-embedding-model">记忆向量模型（可选）</label>
+              <select id="memory-embedding-model" className="input" value={form.memory_embedding_model ?? ""}
+                onChange={(e) => update("memory_embedding_model", e.target.value)}>
+                <option value="">不使用向量模型</option>
+                {form.memory_embedding_model && !availableEmbeddingModels(harvisModelOptions).some((m) => m.id === form.memory_embedding_model) && (
+                  <option value={form.memory_embedding_model}>{form.memory_embedding_model}（已保存）</option>
+                )}
+                {availableEmbeddingModels(harvisModelOptions).map((m) => (
+                  <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                ))}
+              </select>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                {embeddingModelsLoading ? "正在获取可用向量模型…" : embeddingModelsError ? "模型列表暂不可用，请检查 Harmony Key 后重试。" : "自动选择可用模型；留空时使用本地关键词检索。"}
               </p>
             </div>
           )}

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -206,6 +206,13 @@ pub struct Memory {
     pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryCloudChange {
+    pub id: String,
+    pub updated_at: DateTime<Utc>,
+    pub memory: Option<Memory>,
 }
 
 fn default_memory_kind() -> String {
@@ -521,6 +528,15 @@ impl Database {
                 source_session_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_tombstones (
+                id TEXT PRIMARY KEY,
+                deleted_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS memory_sync_identity (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                user_id TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -1081,14 +1097,6 @@ impl Database {
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_id);
              CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope_type, scope_id);",
-        );
-        let _ = self.conn.execute(
-            "UPDATE memories SET owner_id='xiaoheng' WHERE owner_id='piscis'",
-            [],
-        );
-        let _ = self.conn.execute(
-            "UPDATE memories SET scope_id='xiaoheng' WHERE scope_id='piscis'",
-            [],
         );
 
         // Memory project tagging: allows private memories to be tagged with the project they were
@@ -2300,7 +2308,7 @@ impl Database {
             // the canonical content actually changes.
             if content_changed {
                 self.conn.execute(
-                    "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3, last_seen_at = ?3 WHERE id = ?4",
+                    "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3, last_seen_at = ?3, embedding = NULL WHERE id = ?4",
                     params![content, new_confidence, now_str, existing.id],
                 )?;
             } else {
@@ -2417,13 +2425,125 @@ impl Database {
     }
 
     pub fn delete_memory(&self, id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        let owner = self.conn.query_row("SELECT owner_id FROM memories WHERE id = ?1", params![id], |row| row.get::<_, String>(0)).optional()?;
+        let tx = self.conn.unchecked_transaction()?;
+        if owner.as_deref() == Some("xiaoheng") {
+            tx.execute(
+                "INSERT OR REPLACE INTO memory_tombstones (id, deleted_at) VALUES (?1, ?2)",
+                params![id, Utc::now().to_rfc3339()],
+            )?;
+        }
+        tx.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn clear_memories(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM memories", [])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO memory_tombstones (id, deleted_at) SELECT id, ?1 FROM memories WHERE owner_id = 'xiaoheng'",
+            params![Utc::now().to_rfc3339()],
+        )?;
+        tx.execute("DELETE FROM memories", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn export_memory_changes(&self) -> Result<Vec<MemoryCloudChange>> {
+        let mut changes = self.list_memories_for_owner("xiaoheng")?
+            .into_iter()
+            .map(|memory| MemoryCloudChange {
+                id: memory.id.clone(),
+                updated_at: memory.last_seen_at.unwrap_or(memory.updated_at).max(memory.updated_at),
+                memory: Some(memory),
+            })
+            .collect::<Vec<_>>();
+        let mut statement = self.conn.prepare("SELECT id, deleted_at FROM memory_tombstones")?;
+        let tombstones = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for tombstone in tombstones {
+            let (id, deleted_at) = tombstone?;
+            if let Ok(updated_at) = deleted_at.parse() {
+                changes.push(MemoryCloudChange { id, updated_at, memory: None });
+            }
+        }
+        Ok(changes)
+    }
+
+    pub fn ensure_memory_sync_account(&self, user_id: &str) -> Result<()> {
+        if user_id.trim().is_empty() {
+            return Err(anyhow::anyhow!("missing cloud account id"));
+        }
+        let bound = self.conn.query_row(
+            "SELECT user_id FROM memory_sync_identity WHERE singleton = 1", [],
+            |row| row.get::<_, String>(0),
+        );
+        match bound {
+            Ok(existing) if existing == user_id => Ok(()),
+            Ok(_) => Err(anyhow::anyhow!("本机记忆已绑定其他账号；请使用独立的 Windows 用户资料或先完整清理本机数据")),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                self.conn.execute(
+                    "INSERT INTO memory_sync_identity (singleton, user_id) VALUES (1, ?1)",
+                    params![user_id],
+                )?;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn apply_memory_changes(&self, changes: &[MemoryCloudChange]) -> Result<()> {
+        let mut local = self.export_memory_changes()?.into_iter()
+            .map(|change| (change.id.clone(), change))
+            .collect::<std::collections::HashMap<_, _>>();
+        let tx = self.conn.unchecked_transaction()?;
+        for change in changes {
+            let existing_owner = tx.query_row(
+                "SELECT owner_id FROM memories WHERE id = ?1", params![change.id],
+                |row| row.get::<_, String>(0),
+            ).optional()?;
+            if existing_owner.as_deref().is_some_and(|owner| owner != "xiaoheng") {
+                return Err(anyhow::anyhow!("memory cloud id belongs to another owner"));
+            }
+            if let Some(memory) = &change.memory {
+                let latest_observation = memory.last_seen_at.unwrap_or(memory.updated_at).max(memory.updated_at);
+                if memory.owner_id != "xiaoheng" || memory.id != change.id
+                    || (change.updated_at != memory.updated_at && change.updated_at != latest_observation) {
+                    return Err(anyhow::anyhow!("invalid memory cloud record"));
+                }
+            }
+            let current = local.get(&change.id);
+            if current.as_ref().is_some_and(|existing| {
+                existing.updated_at > change.updated_at
+                    || (existing.updated_at == change.updated_at && existing.memory.is_none())
+            }) {
+                continue;
+            }
+            match &change.memory {
+                None => {
+                    tx.execute("DELETE FROM memories WHERE id = ?1 AND owner_id = 'xiaoheng'", params![change.id])?;
+                    tx.execute(
+                        "INSERT OR REPLACE INTO memory_tombstones (id, deleted_at) VALUES (?1, ?2)",
+                        params![change.id, change.updated_at.to_rfc3339()],
+                    )?;
+                }
+                Some(memory) => {
+                    tx.execute("DELETE FROM memory_tombstones WHERE id = ?1", params![change.id])?;
+                    tx.execute(
+                        "INSERT INTO memories (id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, kind, evidence_session_id, evidence_tool_use_id, last_seen_at, created_at, updated_at) \
+                         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?11, ?12) \
+                         ON CONFLICT(id) DO UPDATE SET content=excluded.content, category=excluded.category, confidence=excluded.confidence, scope_type=excluded.scope_type, scope_id=excluded.scope_id, project_scope_id=excluded.project_scope_id, kind=excluded.kind, last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at, embedding=NULL",
+                        params![memory.id, memory.content, memory.category, memory.confidence,
+                            memory.owner_id, memory.scope_type, memory.scope_id, memory.project_scope_id, memory.kind,
+                            memory.last_seen_at.map(|time| time.to_rfc3339()),
+                            memory.created_at.to_rfc3339(), memory.updated_at.to_rfc3339()],
+                    )?;
+                }
+            }
+            local.insert(change.id.clone(), change.clone());
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -5179,6 +5299,71 @@ mod tests {
     use super::{
         is_disallowed_koi_name_char, normalize_koi_name, Database, ImSessionBindingUpsert,
     };
+
+    #[test]
+    fn deleted_memory_exports_a_tombstone_and_cannot_be_restored_from_older_cloud_data() {
+        let db = Database::open_in_memory().unwrap();
+        let memory = db.save_memory("用户喜欢简洁中文", "preference", 0.9, None, "xiaoheng", "private", "xiaoheng", None).unwrap();
+        let old = db.export_memory_changes().unwrap();
+        db.delete_memory(&memory.id).unwrap();
+        let deleted = db.export_memory_changes().unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert!(deleted[0].memory.is_none());
+        db.apply_memory_changes(&old).unwrap();
+        assert!(db.list_memories().unwrap().is_empty());
+
+        let other = Database::open_in_memory().unwrap();
+        other.apply_memory_changes(&old).unwrap();
+        assert_eq!(other.list_memories().unwrap().len(), 1);
+        other.apply_memory_changes(&deleted).unwrap();
+        assert!(other.list_memories().unwrap().is_empty());
+    }
+
+    #[test]
+    fn local_memory_sync_rejects_a_second_account() {
+        let db = Database::open_in_memory().unwrap();
+        db.ensure_memory_sync_account("alice").unwrap();
+        db.ensure_memory_sync_account("alice").unwrap();
+        assert!(db.ensure_memory_sync_account("bob").is_err());
+    }
+
+    #[test]
+    fn cloud_restore_preserves_project_scope_without_making_it_global() {
+        let source = Database::open_in_memory().unwrap();
+        let memory = source.save_memory("仅本项目使用的偏好", "preference", 0.9, None,
+            "xiaoheng", "private", "xiaoheng", Some("project-123")).unwrap();
+        let target = Database::open_in_memory().unwrap();
+        target.apply_memory_changes(&source.export_memory_changes().unwrap()).unwrap();
+        let restored = target.list_memories().unwrap().into_iter()
+            .find(|item| item.id == memory.id).unwrap();
+        assert_eq!(restored.project_scope_id.as_deref(), Some("project-123"));
+    }
+
+    #[test]
+    fn cloud_sync_carries_reobserved_memory_confidence() {
+        let source = Database::open_in_memory().unwrap();
+        let target = Database::open_in_memory().unwrap();
+        let first = source.save_memory("用户偏好简洁中文", "preference", 0.5, None,
+            "xiaoheng", "private", "xiaoheng", None).unwrap();
+        let original = source.export_memory_changes().unwrap();
+        target.apply_memory_changes(&original).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let observed = source.save_memory("用户偏好简洁中文", "preference", 0.5, None,
+            "xiaoheng", "private", "xiaoheng", None).unwrap();
+        assert_eq!(observed.id, first.id);
+        assert_eq!(observed.updated_at, first.updated_at);
+        assert!(observed.confidence > first.confidence);
+
+        let changes = source.export_memory_changes().unwrap();
+        assert!(changes[0].updated_at > original[0].updated_at);
+        target.apply_memory_changes(&changes).unwrap();
+        let restored = target.list_memories().unwrap().into_iter()
+            .find(|item| item.id == first.id).unwrap();
+        assert_eq!(restored.confidence, observed.confidence);
+        assert_eq!(restored.last_seen_at, observed.last_seen_at);
+        assert_eq!(restored.updated_at, first.updated_at);
+    }
 
     #[test]
     fn mobile_message_import_preserves_ids_and_is_idempotent() {

@@ -7,6 +7,7 @@
 use crate::commands::marketing::{apply_cookie, marketing_base_url, marketing_client};
 use crate::store::secrets::SecretStore;
 use crate::store::settings::CLOUD_EXCLUDED_SETTING_KEYS;
+use crate::store::db::MemoryCloudChange;
 use crate::store::AppState;
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -31,6 +32,7 @@ const CATEGORY_VISION: &str = "vision";
 const CATEGORY_AGENT: &str = "agent";
 const CATEGORY_TOOL_PREFERENCES: &str = "toolPreferences";
 const CATEGORY_INTERACTION_SAFETY: &str = "interactionSafety";
+const CATEGORY_MEMORY: &str = "memory";
 
 #[derive(Debug, Clone, Copy)]
 struct CategoryDefinition {
@@ -55,6 +57,7 @@ const CATEGORY_DEFINITIONS: &[CategoryDefinition] = &[
             "kimi_api_key",
             "siliconflow_api_key",
             "harmony_api_key",
+            "memory_embedding_model",
             "provider",
             "model",
             "custom_base_url",
@@ -125,6 +128,12 @@ const CATEGORY_DEFINITIONS: &[CategoryDefinition] = &[
             "tool_rate_limit_per_minute",
             "allow_multiple_instances",
         ],
+    },
+    CategoryDefinition {
+        id: CATEGORY_MEMORY,
+        label: "小亨记忆",
+        description: "长期偏好和经验记录，包含删除同步；向量索引只留在本机。",
+        keys: &[],
     },
 ];
 
@@ -216,6 +225,8 @@ struct CloudSettingsPayload {
     settings: Option<Value>,
     #[serde(default)]
     categories: BTreeMap<String, Value>,
+    #[serde(default)]
+    memory_changes: Vec<MemoryCloudChange>,
 }
 
 impl CloudSettingsPayload {
@@ -225,6 +236,7 @@ impl CloudSettingsPayload {
             version: 1,
             settings: Some(settings),
             categories: BTreeMap::new(),
+            memory_changes: Vec::new(),
         }
     }
 
@@ -236,6 +248,7 @@ impl CloudSettingsPayload {
             version: CLOUD_SCHEMA_VERSION,
             settings: None,
             categories,
+            memory_changes: Vec::new(),
         })
     }
 
@@ -244,6 +257,7 @@ impl CloudSettingsPayload {
             version: CLOUD_SCHEMA_VERSION,
             settings: None,
             categories: split_cloud_settings(settings),
+            memory_changes: Vec::new(),
         }
     }
 
@@ -396,6 +410,24 @@ fn merge_selected_categories(
     Ok(cloud)
 }
 
+fn merge_memory_changes(
+    cloud: Vec<MemoryCloudChange>,
+    local: Vec<MemoryCloudChange>,
+) -> Vec<MemoryCloudChange> {
+    let mut merged = BTreeMap::<String, MemoryCloudChange>::new();
+    for change in cloud.into_iter().chain(local) {
+        let replace = merged.get(&change.id).is_none_or(|previous| {
+            change.updated_at > previous.updated_at
+                || (change.updated_at == previous.updated_at
+                    && change.memory.is_none() && previous.memory.is_some())
+        });
+        if replace {
+            merged.insert(change.id.clone(), change);
+        }
+    }
+    merged.into_values().collect()
+}
+
 fn is_sensitive_key(key: &str) -> bool {
     key.ends_with("_api_key")
         || key.contains("secret")
@@ -471,7 +503,21 @@ fn all_category_previews(
 ) -> Result<Vec<AccountSettingsSyncCategoryPreview>, String> {
     CATEGORY_DEFINITIONS
         .iter()
-        .map(|definition| category_preview(definition.id, payload.category(definition.id)))
+        .map(|definition| {
+            if definition.id == CATEGORY_MEMORY {
+                let count = payload.memory_changes.iter().filter(|entry| entry.memory.is_some()).count();
+                return Ok(AccountSettingsSyncCategoryPreview {
+                    id: definition.id.to_string(),
+                    label: definition.label.to_string(),
+                    description: definition.description.to_string(),
+                    fields: vec![AccountSettingsSyncFieldSummary {
+                        label: format!("长期记忆 {count} 条"), configured: count > 0, sensitive: true,
+                    }],
+                    configured_fields: if count > 0 { vec![format!("长期记忆 {count} 条")] } else { vec![] },
+                });
+            }
+            category_preview(definition.id, payload.category(definition.id))
+        })
         .collect()
 }
 
@@ -715,7 +761,8 @@ pub async fn account_settings_sync_catalog(
     let snapshot =
         serde_json::from_value(value.get("snapshot").cloned().unwrap_or(Value::Null)).ok();
     let settings = state.settings.lock().await.cloud_snapshot();
-    let payload = CloudSettingsPayload::from_settings(&settings);
+    let mut payload = CloudSettingsPayload::from_settings(&settings);
+    payload.memory_changes = state.db.lock().await.export_memory_changes().map_err(|error| error.to_string())?;
     Ok(AccountSettingsSyncCatalog {
         categories: all_category_previews(&payload)?,
         local_only_items: vec![
@@ -803,33 +850,13 @@ pub async fn account_settings_sync_backup(
     request: AccountSettingsSyncUserRequest,
     state: State<'_, AppState>,
 ) -> Result<AccountSettingsSyncStatus, String> {
-    let pending = backup_material(&request.user_id).await?;
-    let settings = state.settings.lock().await.cloud_snapshot();
-    let payload = serde_json::to_vec(&CloudSettingsPayload::from_settings(&settings))
-        .map_err(|error| format!("无法序列化个人设置：{error}"))?;
-    let payload = encrypt(&pending.data_key, &payload)?;
-    let metadata = get_json("/api/workbuddy/settings/meta").await?;
-    let base_revision = metadata
-        .get("snapshot")
-        .and_then(|value| value.get("revision"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    put_json(
-        "/api/workbuddy/settings/snapshot",
-        json!({
-            "baseRevision": base_revision,
-            "schemaVersion": CLOUD_SCHEMA_VERSION,
-            "deviceName": pending.device_name,
-            "envelope": {
-                "version": CLOUD_SCHEMA_VERSION,
-                "kdf": pending.kdf,
-                "wrappedDataKey": pending.wrapped_data_key,
-                "payload": payload,
-            }
-        }),
-    )
-    .await?;
-    account_settings_sync_status(state).await
+    account_settings_sync_backup_selected(
+        AccountSettingsSyncSelectedRequest {
+            user_id: request.user_id,
+            category_ids: CATEGORY_DEFINITIONS.iter().map(|category| category.id.to_string()).collect(),
+        },
+        state,
+    ).await
 }
 
 #[tauri::command]
@@ -853,8 +880,15 @@ pub async fn account_settings_sync_backup_selected(
         }
         None => CloudSettingsPayload::from_settings(&json!({})),
     };
+    if request.category_ids.iter().any(|id| id == CATEGORY_MEMORY) {
+        state.db.lock().await.ensure_memory_sync_account(&request.user_id).map_err(|error| error.to_string())?;
+    }
     let local_settings = state.settings.lock().await.cloud_snapshot();
-    let merged = merge_selected_categories(cloud_payload, &local_settings, &request.category_ids)?;
+    let mut merged = merge_selected_categories(cloud_payload, &local_settings, &request.category_ids)?;
+    if request.category_ids.iter().any(|id| id == CATEGORY_MEMORY) {
+        let local = state.db.lock().await.export_memory_changes().map_err(|error| error.to_string())?;
+        merged.memory_changes = merge_memory_changes(merged.memory_changes, local);
+    }
     let payload = encrypt(
         &pending.data_key,
         &serde_json::to_vec(&merged).map_err(|error| format!("无法序列化个人设置：{error}"))?,
@@ -881,6 +915,9 @@ pub async fn account_settings_sync_backup_selected(
             error
         }
     })?;
+    if request.category_ids.iter().any(|id| id == CATEGORY_MEMORY) {
+        state.db.lock().await.apply_memory_changes(&merged.memory_changes).map_err(|error| error.to_string())?;
+    }
     account_settings_sync_status(state).await
 }
 
@@ -900,6 +937,7 @@ pub async fn account_settings_sync_restore(
     let payload: CloudSettingsPayload = serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
         .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?;
     let payload = payload.into_categories()?;
+    state.db.lock().await.ensure_memory_sync_account(&request.user_id).map_err(|error| error.to_string())?;
     let mut settings = state.settings.lock().await;
     settings
         .apply_cloud_snapshot(&payload.all_settings())
@@ -911,6 +949,7 @@ pub async fn account_settings_sync_restore(
         settings.confirm_file_writes,
     );
     drop(settings);
+    state.db.lock().await.apply_memory_changes(&payload.memory_changes).map_err(|error| error.to_string())?;
     account_settings_sync_status(state).await
 }
 
@@ -931,6 +970,9 @@ pub async fn account_settings_sync_restore_selected(
     let payload: CloudSettingsPayload = serde_json::from_slice::<CloudSettingsPayload>(&plaintext)
         .map_err(|_| "云端个人设置内容无效或已损坏".to_string())?
         .into_categories()?;
+    if request.category_ids.iter().any(|id| id == CATEGORY_MEMORY) {
+        state.db.lock().await.ensure_memory_sync_account(&request.user_id).map_err(|error| error.to_string())?;
+    }
     let selected = selected_settings(&payload, &request.category_ids)?;
     let mut settings = state.settings.lock().await;
     settings
@@ -943,6 +985,9 @@ pub async fn account_settings_sync_restore_selected(
         settings.confirm_file_writes,
     );
     drop(settings);
+    if request.category_ids.iter().any(|id| id == CATEGORY_MEMORY) {
+        state.db.lock().await.apply_memory_changes(&payload.memory_changes).map_err(|error| error.to_string())?;
+    }
     account_settings_sync_status(state).await
 }
 
@@ -1032,5 +1077,16 @@ mod tests {
 
         assert_eq!(preview.configured_fields, vec!["DeepSeek API Key"]);
         assert!(!format!("{preview:?}").contains("sk-secret"));
+    }
+
+    #[test]
+    fn memory_merge_prefers_a_later_deletion_over_an_older_record() {
+        let db = crate::store::Database::open_in_memory().unwrap();
+        let memory = db.save_memory("用户偏好中文", "preference", 0.8, None, "xiaoheng", "private", "xiaoheng", None).unwrap();
+        let old = db.export_memory_changes().unwrap();
+        db.delete_memory(&memory.id).unwrap();
+        let merged = merge_memory_changes(old, db.export_memory_changes().unwrap());
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].memory.is_none());
     }
 }

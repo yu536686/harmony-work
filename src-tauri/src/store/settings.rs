@@ -245,6 +245,9 @@ pub struct Settings {
     /// Harmony 内部网关 API key
     #[serde(default)]
     pub harmony_api_key: String,
+    /// Optional OpenAI-compatible embedding model exposed by the Harmony gateway.
+    #[serde(default)]
+    pub memory_embedding_model: String,
     /// Harvis 生图模型（Harmony 网关）
     #[serde(default)]
     pub harvis_image_model: String,
@@ -785,6 +788,7 @@ impl Default for Settings {
             kimi_api_key: String::new(),
             siliconflow_api_key: String::new(),
             harmony_api_key: String::new(),
+            memory_embedding_model: String::new(),
             harvis_image_model: String::new(),
             harvis_video_model: String::new(),
             harvis_music_model: String::new(),

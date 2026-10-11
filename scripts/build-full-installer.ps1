@@ -4,7 +4,7 @@ param(
   [switch]$SkipDownload,
   [switch]$SkipTauriBuild,
   [string]$InnerInstaller,
-  [string]$Version = "1.0.8"
+  [string]$Version = "1.0.9"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,3 +74,6 @@ if (-not (Test-Path -LiteralPath $PublishedInstaller)) {
 }
 Copy-Item -LiteralPath $PublishedInstaller -Destination $FinalInstaller -Force
 Write-Host "Full offline installer: $FinalInstaller" -ForegroundColor Green
+
+& (Join-Path $PSScriptRoot "build-uninstaller.ps1") -OutputDirectory $OutputDirectory
+if ($LASTEXITCODE -ne 0) { throw "Standalone uninstaller publish failed." }

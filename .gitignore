@@ -16,6 +16,10 @@ installer/.build/
 installer/payload-cache/
 installer/WorkBuddyBootstrapper/bin/
 installer/WorkBuddyBootstrapper/obj/
+installer/HarmonyWorkUninstaller/bin/
+installer/HarmonyWorkUninstaller/obj/
+installer/HarmonyWorkUninstaller.PolicyTests/bin/
+installer/HarmonyWorkUninstaller.PolicyTests/obj/
 src-tauri/resources/codex/
 src-tauri/resources/workbuddy-mcp-host/
 src-tauri/resources/playwright-mcp/

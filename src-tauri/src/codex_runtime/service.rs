@@ -626,6 +626,12 @@ impl CodexRuntimeState {
                 settings.harmony_api_key.clone(),
             );
         }
+        if !settings.memory_embedding_model.trim().is_empty() {
+            next_environment.insert(
+                "WORKBUDDY_MEMORY_EMBEDDING_MODEL".to_string(),
+                settings.memory_embedding_model.trim().to_string(),
+            );
+        }
         let changed = {
             let mut environment = self.environment.lock().await;
             if *environment == next_environment {
@@ -1883,6 +1889,16 @@ pub async fn codex_chat_send(
     let mut developer_instructions =
         "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
             .to_string();
+    let self_improvement_enabled = {
+        let db = app_state.db.lock().await;
+        db.get_skill("self-improvement-codex")
+            .ok().flatten().is_some_and(|skill| skill.enabled)
+    };
+    if self_improvement_enabled {
+        developer_instructions.push_str(
+            "\n已启用 self-improvement-codex：用户纠正了长期偏好，或非显而易见的问题已修复并验证时，先调用 WorkBuddy MCP memory_search 去重；仅在确有新且持久的教训时调用 memory_append。不要建立 .learnings 等第二记忆库，不要保存密钥或一次性任务进度。只有工具确认写入后才向用户报告已记住。",
+        );
+    }
     if let Some(persona) = persona_koi_id.filter(|value| !value.trim().is_empty()) {
         developer_instructions.push_str(&format!(
             "\n当前用户选择的人员/角色 ID 是 {persona}。在 WorkBuddy MCP 人员能力可用时读取其职责并按该角色执行。"

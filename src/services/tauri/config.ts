@@ -23,6 +23,7 @@ export interface Settings {
   kimi_api_key: string;
   siliconflow_api_key: string;
   harmony_api_key: string;
+  memory_embedding_model: string;
   harvis_image_model: string;
   harvis_video_model: string;
   harvis_music_model: string;
