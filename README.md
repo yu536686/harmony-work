@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.8-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/source-1.0.9-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -34,13 +34,14 @@ Harmony Work 是一款桌面 AI Agent 工作台，提供 Windows 稳定版和 Ap
 | --- | --- |
 | **Agent 对话工作台** | 支持流式回复、附件、模型切换、Todo、工具活动、权限审批、成果卡片和任务中断。 |
 | **项目与会话** | 按项目目录组织会话，保存上下文、工作区、文件引用和 Codex Thread 映射。 |
+| **手机与桌面协作** | 同一账号扫码配对手机与 Windows 客户端，桌面端同步显示手机会话，并承接远程任务。 |
 | **StaffDeck 多 Agent 协作** | 创建不同职责的人员，分派任务，在看板中跟踪执行状态和交付结果。 |
 | **Harvis AI 创作** | 提供图片与音乐创作页面，支持参考图、提示词助手、任务进度、结果预览与下载。 |
 | **Office 成果生成** | 通过 Artifact Runtime 创建并验证 Word、PowerPoint 和 Excel 文件，生成后直接进入成果区。 |
 | **技能与 MCP** | 浏览多个技能市场渠道，查看已安装版本、下载与安装进度，并可更新、打开目录或卸载技能。 |
-| **长期记忆** | 保存用户偏好、项目事实和执行经验，并通过关键词与向量检索按需注入上下文。 |
+| **长期记忆** | 记忆页面、定期整理和 Agent 工具共用本地记忆记录；支持关键词检索及可选的 Harmony 向量检索，向量服务不可用时回退到关键词检索。 |
 | **素材库与数据看板** | 登录后浏览、筛选和预览素材，将文件暂存到会话，或基于看板数据新建分析任务。 |
-| **个人设置云同步** | 登录后可按类别选择恢复或加密备份模型、提供商、API Key 与通用偏好；云端只保存端到端加密密文，本机路径和 IM 凭据不迁移。 |
+| **个人设置云同步** | 登录后可按类别选择加密备份或恢复设置与记忆记录；记忆按逻辑记录同步，不上传本地数据库和向量索引。本机路径和 IM 凭据不迁移。 |
 | **IM 渠道** | 支持企业微信智能机器人长连接和个人微信 iLink，将消息转为可持续执行的 Agent 会话。 |
 | **自动化与桌面工具** | 支持定时任务、文件操作、Shell、浏览器控制和 Windows UI 自动化。 |
 
@@ -82,7 +83,9 @@ flowchart LR
 
 ### 全量离线安装包
 
-本分支已在 `release/full/` 构建 Windows x64 1.0.8 全量测试包 `Harmony-Work-1.0.8-x64-setup.exe`，尚未发布到官网。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+
+源码版本已升至 `1.0.9`。目前 `1.0.9` 仅生成供验收的 Windows NSIS 测试安装包和独立卸载器；它不是全量离线包，也未发布到官网或 CDN。此测试包存放在构建机的 `release/test/`，不纳入 Git 仓库。正式下载入口展示的版本以官网为准。
 
 ### 1. 下载安装包
 
@@ -98,7 +101,7 @@ Harmony-Work-<version>-x64-setup.exe
 Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
-本分支本地构建的 1.0.8 全量测试包 SHA-256 为 `7921aecf0efd9cffa4d324196065dcd62dcb1678f29ac710fe4011612bd85c35`；官网公开版本应以官网发布信息中的摘要为准。
+文件摘要以官网对应版本的发布信息为准，不要用源码版本号推断官网安装包版本。
 
 ### 2. 运行安装程序
 
@@ -121,7 +124,7 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 - **注册**：打开线上注册页面。新账号需要管理员审批后才能登录高阶模块。
 - **跳过**：直接进入基础对话功能，之后可以从左下角账户菜单再次登录。
 
-首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。之后可在“设置 → 我的云端配置”中按类别选择 AI 提供商与模型、视觉模型、Agent 运行偏好、工具偏好或交互与安全策略进行上传与恢复。工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
+首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。之后可在“设置 → 我的云端配置”中按类别选择 AI 提供商与模型、视觉模型、Agent 运行偏好、工具偏好、交互与安全策略，以及长期记忆进行上传与恢复。记忆同步传输加密的逻辑记录，不上传整个本地数据库；工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
 
 ### 5. 配置模型
 
@@ -147,6 +150,8 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 4. 选择启动/默认模型。
 5. 勾选允许在会话底部切换的模型。
 6. 选择工作区目录和会话权限策略。
+
+在“设置 → 渠道与 API”配置 Harmony 时，可获取可用模型列表，并从下拉框选择向量模型；未指定或原选择已不可用时，界面会预选一个可用模型。向量服务故障不会阻止记忆写入，检索会回退到关键词匹配。
 
 API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。模型请求会发送到用户选择的模型服务，请根据业务的数据安全要求配置供应商和权限模式。
 
@@ -180,6 +185,12 @@ API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。�
 3. 点击“绑定微信”，使用手机微信扫描二维码并确认授权。
 
 绑定完成后，微信消息会关联到 WorkBuddy 的 IM 项目会话。
+
+### 长期记忆与卸载
+
+长期记忆以 Harmony Work 本地数据库为准。记忆页面、手动或定期整理、Agent 的记忆工具使用同一批记录；`self-improvement-codex` 技能也按这套记录读写，不另建记忆文件。该技能可从 Harmony 技能市场安装，但技能包不等同于自动触发机制；安装后仍需在客户端验证调用。
+
+普通卸载会保留用户数据。需要清除应用数据和已安装技能时，使用 `1.0.9` 测试包配套的独立卸载器，并选择深度清理；用户选定的工作区及共享运行环境会保留。已有数据库中无法可靠区分来源的旧记录不会在升级时被自动删除；如需验证全新安装，应先完成深度卸载，并在重装登录时不要恢复云端数据。
 
 ## 从源码构建
 
@@ -337,7 +348,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：`1.0.6`，从 [官网](https://www.harmonywork.com.cn/) 下载。
+- 当前源码版本：`1.0.9`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---
