@@ -120,6 +120,7 @@ function AppContent() {
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
   const [mobileBridgeOpen, setMobileBridgeOpen] = useState(false);
+  const [mobileBridgeRevision, setMobileBridgeRevision] = useState(0);
   const [mobilePeerState, setMobilePeerState] = useState<"connecting" | "direct" | "fallback">("fallback");
   const mobilePeer = useRef<BridgePeer | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
@@ -161,7 +162,7 @@ function AppContent() {
         await peer.start();
       }).catch(() => setMobilePeerState("fallback"));
     return () => { stopped = true; mobilePeer.current?.stop(); mobilePeer.current = null; };
-  }, [marketingUser?.id, mobileBridgeOpen]);
+  }, [marketingUser?.id, mobileBridgeOpen, mobileBridgeRevision]);
 
   useEffect(() => {
     localStorage.setItem("harmony-work.session-outcomes", JSON.stringify(sessionOutcomes));
@@ -691,7 +692,7 @@ function AppContent() {
           </button>
         </div>
       </aside>
-      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} />}
+      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} onLinksChanged={() => setMobileBridgeRevision(value => value + 1)} />}
       <main className="main-content">
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
           {mountedTabs.has("chat") && (

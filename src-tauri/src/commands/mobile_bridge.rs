@@ -156,9 +156,30 @@ async fn upload_task_progress(
     }
 }
 
+fn desktop_display_name(value: Option<String>) -> String {
+    value.and_then(|name| {
+        let clean: String = name.trim().chars().filter(|ch| !ch.is_control()).take(80).collect();
+        if clean.is_empty() { None } else { Some(clean) }
+    }).unwrap_or_else(|| "Harmony Work Windows".into())
+}
+
 #[tauri::command]
-pub async fn mobile_bridge_start_pairing(desktop_name: String) -> Result<Value, String> {
-    if desktop_name.trim().is_empty() || desktop_name.len() > 80 { return Err("Invalid desktop name".into()); }
+pub async fn mobile_bridge_start_pairing() -> Result<Value, String> {
+    let desktop_name = desktop_display_name(std::env::var("COMPUTERNAME").ok());
+    let existing = DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Device auth unavailable".to_string())?.clone();
+    if let Some((device_id, _)) = existing {
+        let reused = request(reqwest::Method::POST, "/pairings",
+            Some(json!({"desktopName": desktop_name, "desktopDeviceId": device_id}))).await;
+        match reused {
+            Ok(pairing) => return Ok(pairing),
+            Err(error) if error.contains("Bridge HTTP 403") => {
+                *DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+                    .map_err(|_| "Device auth unavailable".to_string())? = None;
+            }
+            Err(error) => return Err(error),
+        }
+    }
     request(reqwest::Method::POST, "/pairings", Some(json!({"desktopName": desktop_name}))).await
 }
 
@@ -170,6 +191,16 @@ pub async fn mobile_bridge_pairing_status(pairing_id: String) -> Result<Value, S
 #[tauri::command]
 pub async fn mobile_bridge_devices() -> Result<Value, String> {
     request(reqwest::Method::GET, "/devices", None).await
+}
+
+#[tauri::command]
+pub async fn mobile_bridge_unlink(app: AppHandle, desktop_device_id: String, mobile_device_id: String) -> Result<Value, String> {
+    let desktop_id = uuid(&desktop_device_id)?;
+    let mobile_id = uuid(&mobile_device_id)?;
+    let result = request(reqwest::Method::DELETE, &format!("/links/{desktop_id}/{mobile_id}"), None).await?;
+    let _ = app.emit("mobile_bridge_link_changed", ());
+    let _ = app.emit("mobile_bridge_updated", ());
+    Ok(result)
 }
 
 #[tauri::command]
@@ -397,6 +428,13 @@ mod tests {
     fn bridge_uses_direct_host_and_rejects_non_uuid_ids() {
         assert_eq!(BASE, "https://remote.harmonywatch.cn/api/mobile");
         assert!(uuid("../admin").is_err());
+    }
+
+    #[test]
+    fn windows_computer_name_is_bounded_with_fallback() {
+        assert_eq!(desktop_display_name(Some("  WORKSTATION-01  ".into())), "WORKSTATION-01");
+        assert_eq!(desktop_display_name(Some(" ".into())), "Harmony Work Windows");
+        assert_eq!(desktop_display_name(Some("A".repeat(100))).len(), 80);
     }
 
     #[test]

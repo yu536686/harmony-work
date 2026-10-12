@@ -1312,6 +1312,7 @@ fn run_impl() {
             commands::mobile_bridge::mobile_bridge_changes,
             commands::mobile_bridge::mobile_bridge_tasks,
             commands::mobile_bridge::mobile_bridge_devices,
+            commands::mobile_bridge::mobile_bridge_unlink,
             commands::mobile_bridge::mobile_bridge_signals,
             commands::mobile_bridge::mobile_bridge_send_signal,
             commands::mobile_bridge::mobile_bridge_start_worker,
