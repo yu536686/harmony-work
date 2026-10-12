@@ -5,7 +5,7 @@ use crate::codex_runtime::config::{
 };
 use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
 use crate::codex_runtime::headless::{
-    build_exec_command, run_codex_exec, CodexExecError, CodexExecOptions, CodexExecResult,
+    build_exec_command, run_codex_exec_observed, CodexExecError, CodexExecOptions, CodexExecResult,
 };
 use crate::codex_runtime::process::{
     resolve_codex_executable, AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
@@ -655,7 +655,16 @@ impl CodexRuntimeState {
     pub async fn execute_headless(
         &self,
         workbuddy_session_id: &str,
+        options: CodexExecOptions,
+    ) -> Result<CodexExecResult, CodexRuntimeStateError> {
+        self.execute_headless_observed(workbuddy_session_id, options, None).await
+    }
+
+    pub async fn execute_headless_observed(
+        &self,
+        workbuddy_session_id: &str,
         mut options: CodexExecOptions,
+        observer: Option<mpsc::Sender<Value>>,
     ) -> Result<CodexExecResult, CodexRuntimeStateError> {
         if options.thread_id.is_none() {
             options.thread_id = self
@@ -676,7 +685,7 @@ impl CodexRuntimeState {
             previous.store(true, Ordering::Relaxed);
         }
         let result =
-            run_codex_exec(command, &self.codex_home, &environment, Some(cancellation)).await;
+            run_codex_exec_observed(command, &self.codex_home, &environment, Some(cancellation), observer).await;
         self.active_execs.lock().await.remove(workbuddy_session_id);
         let result = result?;
         if let Some(thread_id) = result.thread_id.as_deref() {

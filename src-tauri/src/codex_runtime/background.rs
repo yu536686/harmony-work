@@ -18,6 +18,7 @@ pub struct CodexBackgroundOptions {
     pub extra_context: Option<String>,
     pub permission_mode: Option<CodexPermissionMode>,
     pub event_channel: Option<String>,
+    pub event_observer: Option<tokio::sync::mpsc::Sender<Value>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +91,7 @@ pub async fn run_codex_background(
     options: CodexBackgroundOptions,
 ) -> Result<CodexBackgroundOutput, String> {
     let event_channel = options.event_channel.clone();
+    let event_observer = options.event_observer.clone();
     let codex = state
         .app_handle
         .try_state::<CodexRuntimeState>()
@@ -165,7 +167,7 @@ pub async fn run_codex_background(
         )
     });
     let result = codex
-        .execute_headless(
+        .execute_headless_observed(
             session_id,
             CodexExecOptions {
                 workspace_root,
@@ -176,6 +178,7 @@ pub async fn run_codex_background(
                 attachments,
                 thread_id: existing_thread,
             },
+            event_observer,
         )
         .await;
     match result {

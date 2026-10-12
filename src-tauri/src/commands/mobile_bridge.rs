@@ -1,9 +1,11 @@
 //! Windows mobile bridge: account-authenticated pairing, session import, and leased tasks.
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
+use crate::codex_runtime::service::CodexRuntimeState;
+use crate::commands::mobile_task_events::map_codex_progress;
 use crate::commands::marketing::{apply_cookie, marketing_client};
 use crate::store::AppState;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -76,6 +78,25 @@ pub async fn mobile_bridge_active_turn(session_id: String) -> Result<Value, Stri
     request(reqwest::Method::GET, &format!("/sessions/{id}/turns/active"), None).await
 }
 
+#[tauri::command]
+pub async fn mobile_bridge_task_events(session_id: String, after_seq: u64) -> Result<Value, String> {
+    let id = uuid(&session_id)?;
+    request(reqwest::Method::GET, &format!("/sessions/{id}/task-events?afterSeq={after_seq}"), None).await
+}
+
+#[tauri::command]
+pub async fn mobile_bridge_changes(after_seq: u64) -> Result<Value, String> {
+    request(reqwest::Method::GET, &format!("/changes?afterSeq={after_seq}"), None).await
+}
+
+#[tauri::command]
+pub async fn mobile_bridge_tasks() -> Result<Value, String> {
+    let id = DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Device auth unavailable".to_string())?
+        .as_ref().map(|(id, _)| id.clone()).ok_or("Please reconnect this desktop")?;
+    request(reqwest::Method::GET, &format!("/tasks?desktopDeviceId={id}"), None).await
+}
+
 async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
     let client = marketing_client()?;
     let url = format!("{BASE}{path}");
@@ -92,6 +113,47 @@ async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Re
     let text = response.text().await.map_err(|error| error.to_string())?;
     if !status.is_success() { return Err(format!("Bridge HTTP {status}: {text}")); }
     serde_json::from_str(&text).map_err(|error| error.to_string())
+}
+
+async fn upload_task_progress(
+    app: AppHandle, task_id: String, lease: String,
+    mut receiver: tokio::sync::mpsc::Receiver<Value>,
+) {
+    let mut pending = VecDeque::<Value>::new();
+    let mut closed_at: Option<tokio::time::Instant> = None;
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            item = receiver.recv(), if closed_at.is_none() => {
+                if let Some(raw) = item {
+                    if let Some(progress) = map_codex_progress(&raw) {
+                        let payload = json!({
+                            "leaseToken": lease,
+                            "eventId": uuid::Uuid::new_v4().to_string(),
+                            "kind": progress.kind,
+                            "payload": progress.payload,
+                        });
+                        let _ = app.emit("mobile_task_changed", json!({
+                            "taskId": task_id, "kind": progress.kind, "payload": progress.payload,
+                        }));
+                        if pending.len() < 128 { pending.push_back(payload); }
+                    }
+                } else { closed_at = Some(tokio::time::Instant::now()); }
+            }
+            _ = tick.tick() => {
+                if let Some(event) = pending.front() {
+                    let sent = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        request(reqwest::Method::POST, &format!("/tasks/{task_id}/events"), Some(event.clone())),
+                    ).await.is_ok_and(|result| result.is_ok());
+                    if sent { pending.pop_front(); }
+                }
+            }
+        }
+        if closed_at.is_some_and(|at| at.elapsed() > std::time::Duration::from_secs(10)) ||
+            (closed_at.is_some() && pending.is_empty()) { break; }
+    }
 }
 
 #[tauri::command]
@@ -239,20 +301,39 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
                 let state: State<'_, AppState> = worker_app.state();
-                let options = CodexBackgroundOptions { session_title: Some(prompt.chars().take(40).collect()), session_source: Some("mobile_executor".into()), ..Default::default() };
+                let (observer, progress) = tokio::sync::mpsc::channel(64);
+                let uploader = tauri::async_runtime::spawn(upload_task_progress(
+                    worker_app.clone(), task_id.clone(), lease.clone(), progress,
+                ));
+                let options = CodexBackgroundOptions {
+                    session_title: Some(prompt.chars().take(40).collect()),
+                    session_source: Some("mobile_executor".into()),
+                    event_observer: Some(observer),
+                    ..Default::default()
+                };
                 let work = run_codex_background(&state, &task_id, &prompt, None, "mobile", options);
                 tokio::pin!(work);
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.tick().await;
+                let mut lease_lost = false;
                 let result = loop {
                     tokio::select! {
                         result = &mut work => break result,
                         _ = interval.tick() => {
                             let heartbeat = request(reqwest::Method::POST, &format!("/tasks/{task_id}/heartbeat"), Some(json!({"leaseToken": lease}))).await;
-                            if let Err(error) = heartbeat { eprintln!("Mobile bridge heartbeat will retry: {error}"); }
+                            if let Err(error) = heartbeat {
+                                if error.contains("409") || error.contains("403") {
+                                    lease_lost = true;
+                                    if let Some(runtime) = worker_app.try_state::<CodexRuntimeState>() {
+                                        runtime.interrupt_headless(&task_id).await;
+                                    }
+                                } else { eprintln!("Mobile bridge heartbeat will retry: {error}"); }
+                            }
                         }
                     }
                 };
+                if lease_lost { uploader.abort(); return; }
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(11), uploader).await;
                 let (status, text) = match result {
                     Ok(output) if approval_service_unavailable(&output.final_message, &output.events) =>
                         ("failed", output.final_message),
@@ -261,7 +342,11 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                 };
                 let completion = json!({"leaseToken": lease, "status": status, "result": text.chars().take(10000).collect::<String>()});
                 for attempt in 0..6 {
-                    if request(reqwest::Method::POST, &format!("/tasks/{task_id}/complete"), Some(completion.clone())).await.is_ok() { break; }
+                    if request(reqwest::Method::POST, &format!("/tasks/{task_id}/complete"), Some(completion.clone())).await.is_ok() {
+                        let _ = worker_app.emit("mobile_task_changed", json!({"taskId":task_id,"kind":status}));
+                        let _ = worker_app.emit("mobile_bridge_updated", ());
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(2_u64.pow(attempt.min(4)))).await;
                 }
             });
@@ -282,7 +367,7 @@ pub async fn mobile_bridge_start_worker(app: AppHandle, desktop_device_id: Strin
     let handle = tauri::async_runtime::spawn(async move {
         loop {
             let _ = mobile_bridge_sync(app.clone(), id.clone()).await;
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
     });
     *active = Some((desktop_device_id, handle));

@@ -9,6 +9,7 @@ use std::sync::{
     Arc,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct CodexExecOptions {
@@ -136,6 +137,16 @@ pub async fn run_codex_exec(
     environment: &HashMap<String, String>,
     cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<CodexExecResult, CodexExecError> {
+    run_codex_exec_observed(command, codex_home, environment, cancellation, None).await
+}
+
+pub async fn run_codex_exec_observed(
+    command: CodexExecCommand,
+    codex_home: &Path,
+    environment: &HashMap<String, String>,
+    cancellation: Option<Arc<AtomicBool>>,
+    observer: Option<mpsc::Sender<Value>>,
+) -> Result<CodexExecResult, CodexExecError> {
     let mut child = tokio_command(&command.executable)
         .args(&command.args)
         .env("CODEX_HOME", codex_home)
@@ -166,6 +177,11 @@ pub async fn run_codex_exec(
         let mut lines = BufReader::new(stdout).lines();
         while let Some(line) = lines.next_line().await? {
             parser.push_line(&line);
+            if let Some(ref sender) = observer {
+                if let Ok(event) = serde_json::from_str::<Value>(&line) {
+                    let _ = sender.try_send(event);
+                }
+            }
         }
         Ok::<CodexExecJsonlParser, std::io::Error>(parser)
     });

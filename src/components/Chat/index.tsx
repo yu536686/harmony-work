@@ -45,6 +45,8 @@ import {
 } from "./annotation/reducer";
 import type { AnnotationDraftState, WorkbenchAnnotation, WorkbenchCommentContext } from "./annotation/types";
 import GlobalSessionRail from "./GlobalSessionRail";
+import MobileTaskCard from "./MobileTaskCard";
+import { mergeMobileTaskEvents, projectMobileTaskCards, type MobileTaskEvent } from "./mobileTaskEvents";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
 import ConfirmDialog from "../ConfirmDialog";
@@ -499,6 +501,9 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     (s: RootState) => s.chat
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
+  const [mobileTaskEvents, setMobileTaskEvents] = useState<MobileTaskEvent[]>([]);
+  const [mobileTasks, setMobileTasks] = useState<Array<{ id: string; sessionId: string; status: string; result: string | null }>>([]);
+  const mobileTaskEventsSession = useRef<string | null>(null);
 
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
@@ -573,6 +578,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const displaySession = displaySessionId
     ? sessions.find((s) => s.id === displaySessionId)
     : undefined;
+  const mobileTaskCards = useMemo(() => displaySessionId === mobileTaskEventsSession.current
+    ? projectMobileTaskCards(mobileTaskEvents) : [], [displaySessionId, mobileTaskEvents]);
+  const mobileRunningBySession = useMemo(() => {
+    const next = { ...isRunning };
+    for (const task of mobileTasks) {
+      if (task.status === "queued" || task.status === "claimed") next[task.sessionId] = true;
+    }
+    return next;
+  }, [isRunning, mobileTasks]);
 
   const globalWorkspace = settings?.workspace_root || "";
 
@@ -1232,13 +1246,94 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (displaySession?.source !== "mobile" || !displaySessionId) return;
     let cancelled = false;
     const sessionId = displaySessionId;
-    const listener = listen("mobile_bridge_updated", () => {
-      void sessionsApi.getMessages(sessionId, CHAT_INITIAL_SIZE, 0).then(messages => {
-        if (!cancelled) dispatch(chatActions.setMessagesWithFrozen({ sessionId, messages }));
-      }).catch(() => undefined);
-    });
-    return () => { cancelled = true; void listener.then(unlisten => unlisten()); };
+    let generation = 0;
+    const refresh = async () => {
+      const current = ++generation;
+      try {
+        const messages = await sessionsApi.getMessages(sessionId, CHAT_INITIAL_SIZE, 0);
+        if (!cancelled && current === generation) dispatch(chatActions.setMessagesWithFrozen({ sessionId, messages }));
+      } catch { /* The last local snapshot remains readable while offline. */ }
+    };
+    const listener = listen("mobile_bridge_updated", () => void refresh());
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const onForeground = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+      void listener.then(unlisten => unlisten());
+    };
   }, [displaySession?.source, displaySessionId, dispatch]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) {
+      mobileTaskEventsSession.current = null;
+      setMobileTaskEvents([]);
+      return;
+    }
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    mobileTaskEventsSession.current = sessionId;
+    let events: MobileTaskEvent[] = [];
+    let cursor = 0;
+    let loading = false;
+    setMobileTaskEvents([]);
+    const refresh = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        for (;;) {
+          const page = await invoke<{ events: MobileTaskEvent[] }>("mobile_bridge_task_events", { sessionId, afterSeq: cursor });
+          if (cancelled || !page.events.length) break;
+          const merged = mergeMobileTaskEvents(events, page.events, cursor);
+          events = merged.events;
+          cursor = merged.afterSeq;
+          setMobileTaskEvents(events);
+          if (page.events.length < 100) break;
+        }
+      } catch { /* Retry from the same cursor when the coordinator returns. */ }
+      finally { loading = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const taskListener = listen("mobile_task_changed", () => void refresh());
+    const bridgeListener = listen("mobile_bridge_updated", () => void refresh());
+    const onForeground = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+      void taskListener.then(unlisten => unlisten());
+      void bridgeListener.then(unlisten => unlisten());
+    };
+  }, [displaySession?.source, displaySessionId]);
+
+  useEffect(() => {
+    if (!sessions.some(session => session.source === "mobile")) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = await invoke<{ tasks: Array<{ id: string; sessionId: string; status: string; result: string | null }> }>("mobile_bridge_tasks");
+        if (!cancelled) setMobileTasks(result.tasks);
+      } catch { /* The previous task status remains visible while offline. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const taskListener = listen("mobile_task_changed", () => void refresh());
+    const bridgeListener = listen("mobile_bridge_updated", () => void refresh());
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void taskListener.then(unlisten => unlisten());
+      void bridgeListener.then(unlisten => unlisten());
+    };
+  }, [sessions.some(session => session.source === "mobile")]);
 
   useEffect(() => {
     if (artifactsUnlistenRef.current) {
@@ -2608,7 +2703,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           projects={chatProjects}
           activeProjectId={activeProjectId}
           activeSessionId={displaySessionId}
-          runningBySession={isRunning}
+          runningBySession={mobileRunningBySession}
           outcomesBySession={sessionOutcomes}
           labels={{
             projects: t("chat.projects"),
@@ -2773,9 +2868,18 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                         )}
                       </div>
                     </div>
+                    {msg.role === "user" && mobileTaskCards
+                      .filter(card => card.initiatingMessageId === msg.id)
+                      .map(card => <MobileTaskCard key={card.taskId} card={card}
+                        result={mobileTasks.find(task => task.id === card.taskId)?.result} />)}
                   </Fragment>
                 );
               })}
+
+              {mobileTaskCards.filter(card => !card.initiatingMessageId ||
+                !activeMessages.some(message => message.id === card.initiatingMessageId))
+                .map(card => <MobileTaskCard key={card.taskId} card={card}
+                  result={mobileTasks.find(task => task.id === card.taskId)?.result} />)}
 
               {executionTimelineInsertIndex === activeMessages.length && executionTimelineNode}
 
