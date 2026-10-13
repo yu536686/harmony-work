@@ -235,9 +235,27 @@ pub(crate) fn create_request_context(app_data_dir: &Path) -> Result<(String, Pat
         getrandom::getrandom(&mut random).map_err(|_| "Cannot create mobile task capability".to_string())?;
         let capability = URL_SAFE_NO_PAD.encode(random);
         let directory = parent.join(&capability);
-        if std::fs::create_dir(&directory).is_ok() { return Ok((capability, directory)); }
+        if std::fs::create_dir(&directory).is_ok() {
+            let active = parent.join("active");
+            if let Err(error) = std::fs::write(&active, &capability) {
+                let _ = std::fs::remove_dir(&directory);
+                return Err(format!("Cannot activate mobile task file sharing: {error}"));
+            }
+            return Ok((capability, directory));
+        }
     }
     Err("Cannot allocate mobile task request store".into())
+}
+
+pub(crate) fn clear_request_context(directory: &Path) {
+    if let Some(parent) = directory.parent() {
+        let active = parent.join("active");
+        if std::fs::read_to_string(&active).ok().as_deref()
+            == directory.file_name().and_then(|name| name.to_str()) {
+            let _ = std::fs::remove_file(active);
+        }
+    }
+    let _ = std::fs::remove_dir_all(directory);
 }
 
 pub(crate) fn take_pending_request(directory: &Path) -> Result<Option<(PathBuf, ShareRequest)>, String> {
@@ -421,6 +439,7 @@ mod tests {
         let (capability, directory) = create_request_context(&root).unwrap();
         assert_eq!(capability.len(), 43);
         assert!(directory.is_dir());
+        assert_eq!(std::fs::read_to_string(root.join("mobile_share_requests/active")).unwrap(), capability);
         let request_id = uuid::Uuid::new_v4();
         std::fs::write(directory.join(format!("{request_id}.request.json")),
             r#"{"path":"C:\\Users\\owner\\report.txt","displayName":"report.txt"}"#).unwrap();
@@ -431,6 +450,9 @@ mod tests {
         let response = directory.join(format!("{request_id}.response.json"));
         assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(response).unwrap()).unwrap()["attachmentId"], request_id.to_string());
         assert!(take_pending_request(&directory).unwrap().is_none());
+        clear_request_context(&directory);
+        assert!(!directory.exists());
+        assert!(!root.join("mobile_share_requests/active").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

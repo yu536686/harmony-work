@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 pub(crate) fn tool_definition() -> Value {
     json!({
         "name": "share_file",
-        "description": "Send an existing local file as an attachment in the current mobile conversation. The desktop validates access and the phone downloads directly while the desktop is online. Submit only a file path and optional display name; the current task identity is supplied by the desktop.",
+        "description": "Send an existing local file as an attachment in the current mobile conversation. The desktop validates access and uploads a relay copy over HTTPS for the phone. Submit only a file path and optional display name; the current task identity is supplied by the desktop.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -38,9 +38,13 @@ pub(crate) async fn call(context: &HostContext, arguments: &Value) -> Result<Val
         display_name.chars().any(|ch| ch == '/' || ch == '\\' || ch == ':' || ch.is_control()) {
         return Err(anyhow!("displayName must be a file name without a path"));
     }
-    let capability = context.mobile_share_capability.as_deref()
-        .ok_or_else(|| anyhow!("share_file is available only for mobile tasks"))?;
-    let directory = context.app_data_dir.join("mobile_share_requests").join(capability);
+    let parent = context.app_data_dir.join("mobile_share_requests");
+    let capability = context.mobile_share_capability.clone().or_else(|| {
+        fs::read_to_string(parent.join("active")).ok().map(|value| value.trim().to_string())
+    }).filter(|value| value.len() == 43 && value.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
+        .ok_or_else(|| anyhow!("share_file is available only for active mobile tasks"))?;
+    let directory = parent.join(capability);
     if !directory.is_dir() { return Err(anyhow!("mobile task is no longer active")); }
     let id = uuid::Uuid::new_v4().to_string();
     let request_path = directory.join(format!("{id}.request.json"));
@@ -50,7 +54,7 @@ pub(crate) async fn call(context: &HostContext, arguments: &Value) -> Result<Val
         "path": path, "displayName": display_name
     }))?)?;
     fs::rename(&temp_path, &request_path)?;
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(630);
     loop {
         if let Ok(raw) = fs::read(&response_path) {
             let _ = fs::remove_file(&response_path);

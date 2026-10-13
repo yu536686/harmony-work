@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio_util::io::ReaderStream;
 
 const BASE: &str = "https://remote.harmonywatch.cn/api/mobile";
 
@@ -152,6 +153,31 @@ pub(crate) async fn revoke_attachment(attachment_id: &str) -> Result<(), String>
     request(reqwest::Method::DELETE, &format!("/attachments/{attachment_id}"), None).await.map(|_| ())
 }
 
+async fn upload_relay_file(attachment_id: &str, file: &PreparedAttachment) -> Result<(), String> {
+    uuid(attachment_id)?;
+    let reader = tokio::fs::File::open(&file.path).await.map_err(|_| "Attachment file is unavailable")?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600))
+        .build().map_err(|error| error.to_string())?;
+    let mut builder = apply_cookie(client.put(format!("{BASE}/attachments/{attachment_id}/relay"))).await;
+    if let Some((device_id, token)) = DEVICE_AUTH.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Device auth unavailable".to_string())?.clone() {
+        builder = builder.header("X-Harmony-Device-Id", device_id)
+            .header("X-Harmony-Device-Kind", "desktop")
+            .header("X-Harmony-Device-Token", token);
+    }
+    let response = builder.header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .header(reqwest::header::CONTENT_LENGTH, file.size)
+        .body(reqwest::Body::wrap_stream(ReaderStream::new(reader)))
+        .send().await.map_err(|error| format!("Relay upload failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Relay upload HTTP {}: {}", response.status(),
+            response.text().await.unwrap_or_default().chars().take(200).collect::<String>()));
+    }
+    Ok(())
+}
+
 async fn register_shared_file(
     app: &AppHandle, app_data_dir: PathBuf, task_id: String, lease: String,
     workspace_root: PathBuf, allow_outside_workspace: bool, share: ShareRequest,
@@ -167,6 +193,10 @@ async fn register_shared_file(
     if uuid(id).is_err() { return Err("Coordinator returned an invalid attachment ID".into()); }
     if let Err(error) = mobile_attachment::save_record(&app_data_dir, id, &file) {
         let _ = request(reqwest::Method::DELETE, &format!("/attachments/{id}"), None).await;
+        return Err(error);
+    }
+    if let Err(error) = upload_relay_file(id, &file).await {
+        let _ = revoke_attachment(id).await;
         return Err(error);
     }
     let _ = app.emit("mobile_bridge_updated", ());
@@ -473,7 +503,7 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                 };
                 if let Some((handle, directory)) = share_worker {
                     handle.abort();
-                    let _ = std::fs::remove_dir_all(directory);
+                    mobile_attachment::clear_request_context(&directory);
                 }
                 if lease_lost { uploader.abort(); return; }
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(11), uploader).await;

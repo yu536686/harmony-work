@@ -128,7 +128,7 @@ fn initialize_result(request: &Value) -> Value {
     })
 }
 
-fn tool_definitions(context: &HostContext) -> Vec<Value> {
+fn tool_definitions(_context: &HostContext) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "memory_search",
@@ -179,9 +179,9 @@ fn tool_definitions(context: &HostContext) -> Vec<Value> {
     tools.extend(im::tool_definitions());
     tools.extend(skills::tool_definitions());
     tools.extend(staffdeck::tool_definitions());
-    if context.mobile_share_capability.is_some() {
-        tools.push(mobile_share::tool_definition());
-    }
+    // Codex can cache this catalog before a mobile task injects its capability.
+    // Keep discovery stable; call_tool still gates execution to the active task.
+    tools.push(mobile_share::tool_definition());
     tools
 }
 
@@ -242,8 +242,7 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
         _ if im::handles(name) => im::call(context, name, arguments).await,
         _ if skills::handles(name) => skills::call(context, name, arguments).await,
         _ if staffdeck::handles(name) => staffdeck::call(context, name, arguments),
-        "share_file" if context.mobile_share_capability.is_some() =>
-            mobile_share::call(context, arguments).await,
+        "share_file" => mobile_share::call(context, arguments).await,
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
     }
 }
@@ -648,12 +647,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mobile_share_is_visible_only_for_a_mobile_task_and_rejects_model_supplied_identity() {
+    async fn mobile_share_is_discoverable_before_a_mobile_task_but_requires_its_capability() {
         let (mut context, root) = test_context();
         let ordinary = handle_request(&context, &request(1, "tools/list", json!({})))
             .await.expect("ordinary tool list");
-        assert!(!ordinary["result"]["tools"].as_array().unwrap().iter()
+        assert!(ordinary["result"]["tools"].as_array().unwrap().iter()
             .any(|tool| tool["name"] == "share_file"));
+        let unauthorized = handle_request(&context, &request(2, "tools/call", json!({
+            "name": "share_file", "arguments": {"path": "C:\\Users\\owner\\report.pdf"}
+        }))).await.expect("ordinary share response");
+        assert_eq!(unauthorized["result"]["isError"], true);
         context.mobile_share_capability = Some("A".repeat(43));
         let mobile = handle_request(&context, &request(1, "tools/list", json!({})))
             .await.expect("mobile tool list");
@@ -673,11 +676,12 @@ mod tests {
 
     #[tokio::test]
     async fn mobile_share_forwards_only_file_details_to_the_active_desktop_task() {
-        let (mut context, root) = test_context();
+        let (context, root) = test_context();
         let capability = "B".repeat(43);
-        context.mobile_share_capability = Some(capability.clone());
         let directory = root.join("mobile_share_requests").join(capability);
         std::fs::create_dir_all(&directory).expect("create request directory");
+        std::fs::write(root.join("mobile_share_requests").join("active"), "B".repeat(43))
+            .expect("activate mobile task");
         let file = root.join("report.txt");
         std::fs::write(&file, "report").expect("create file");
         let worker = tokio::spawn(async move {
