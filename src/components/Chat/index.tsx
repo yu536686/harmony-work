@@ -45,7 +45,7 @@ import {
 } from "./annotation/reducer";
 import type { AnnotationDraftState, WorkbenchAnnotation, WorkbenchCommentContext } from "./annotation/types";
 import GlobalSessionRail from "./GlobalSessionRail";
-import MobileTaskCard from "./MobileTaskCard";
+import MobileTaskCard, { type MobileSharedAttachment } from "./MobileTaskCard";
 import { mergeMobileTaskEvents, projectMobileTaskCards, type MobileTaskEvent } from "./mobileTaskEvents";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
@@ -502,6 +502,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
   const [mobileTaskEvents, setMobileTaskEvents] = useState<MobileTaskEvent[]>([]);
+  const [mobileAttachments, setMobileAttachments] = useState<MobileSharedAttachment[]>([]);
   const [mobileTasks, setMobileTasks] = useState<Array<{ id: string; sessionId: string; status: string; result: string | null }>>([]);
   const mobileTaskEventsSession = useRef<string | null>(null);
 
@@ -1272,6 +1273,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (displaySession?.source !== "mobile" || !displaySessionId) {
       mobileTaskEventsSession.current = null;
       setMobileTaskEvents([]);
+      setMobileAttachments([]);
       return;
     }
     let cancelled = false;
@@ -1311,6 +1313,25 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       document.removeEventListener("visibilitychange", onForeground);
       void taskListener.then(unlisten => unlisten());
       void bridgeListener.then(unlisten => unlisten());
+    };
+  }, [displaySession?.source, displaySessionId]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) return;
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    const refresh = () => {
+      void invoke<{ attachments: MobileSharedAttachment[] }>("mobile_bridge_attachments", { sessionId })
+        .then(result => { if (!cancelled) setMobileAttachments(result.attachments); })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3_000);
+    const listener = listen("mobile_bridge_updated", refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void listener.then(unlisten => unlisten());
     };
   }, [displaySession?.source, displaySessionId]);
 
@@ -2871,7 +2892,9 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                     {msg.role === "user" && mobileTaskCards
                       .filter(card => card.initiatingMessageId === msg.id)
                       .map(card => <MobileTaskCard key={card.taskId} card={card}
-                        result={mobileTasks.find(task => task.id === card.taskId)?.result} />)}
+                        result={mobileTasks.find(task => task.id === card.taskId)?.result}
+                        attachments={mobileAttachments.filter(item => item.taskId === card.taskId)}
+                        onOpenAttachment={attachmentId => invoke("mobile_attachment_open", { attachmentId })} />)}
                   </Fragment>
                 );
               })}
@@ -2879,7 +2902,9 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               {mobileTaskCards.filter(card => !card.initiatingMessageId ||
                 !activeMessages.some(message => message.id === card.initiatingMessageId))
                 .map(card => <MobileTaskCard key={card.taskId} card={card}
-                  result={mobileTasks.find(task => task.id === card.taskId)?.result} />)}
+                  result={mobileTasks.find(task => task.id === card.taskId)?.result}
+                  attachments={mobileAttachments.filter(item => item.taskId === card.taskId)}
+                  onOpenAttachment={attachmentId => invoke("mobile_attachment_open", { attachmentId })} />)}
 
               {executionTimelineInsertIndex === activeMessages.length && executionTimelineNode}
 

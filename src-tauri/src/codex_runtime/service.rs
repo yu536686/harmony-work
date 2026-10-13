@@ -674,7 +674,8 @@ impl CodexRuntimeState {
         }
         let executable = resolve_codex_executable(self.executable_override.clone())?;
         let command = build_exec_command(&executable, &options);
-        let environment = self.environment.lock().await.clone();
+        let mut environment = self.environment.lock().await.clone();
+        environment.extend(options.extra_environment.clone());
         let cancellation = Arc::new(AtomicBool::new(false));
         if let Some(previous) = self
             .active_execs

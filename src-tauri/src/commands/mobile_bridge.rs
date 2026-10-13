@@ -2,15 +2,24 @@
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::codex_runtime::service::CodexRuntimeState;
 use crate::commands::mobile_task_events::map_codex_progress;
+use crate::commands::mobile_attachment::{self, PreparedAttachment, ShareRequest};
 use crate::commands::marketing::{apply_cookie, marketing_client};
 use crate::store::AppState;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const BASE: &str = "https://remote.harmonywatch.cn/api/mobile";
+
+fn attachment_registration_body(lease: &str, file: &PreparedAttachment) -> Value {
+    json!({
+        "leaseToken": lease, "name": file.name, "mimeType": file.mime_type,
+        "size": file.size, "sha256": file.sha256,
+    })
+}
 static WORKER: OnceLock<Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>> = OnceLock::new();
 static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 static TASK_PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -85,6 +94,12 @@ pub async fn mobile_bridge_task_events(session_id: String, after_seq: u64) -> Re
 }
 
 #[tauri::command]
+pub async fn mobile_bridge_attachments(session_id: String) -> Result<Value, String> {
+    let id = uuid(&session_id)?;
+    request(reqwest::Method::GET, &format!("/sessions/{id}/attachments"), None).await
+}
+
+#[tauri::command]
 pub async fn mobile_bridge_changes(after_seq: u64) -> Result<Value, String> {
     request(reqwest::Method::GET, &format!("/changes?afterSeq={after_seq}"), None).await
 }
@@ -113,6 +128,54 @@ async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Re
     let text = response.text().await.map_err(|error| error.to_string())?;
     if !status.is_success() { return Err(format!("Bridge HTTP {status}: {text}")); }
     serde_json::from_str(&text).map_err(|error| error.to_string())
+}
+
+async fn register_shared_file(
+    app: &AppHandle, app_data_dir: PathBuf, task_id: String, lease: String,
+    workspace_root: PathBuf, allow_outside_workspace: bool, share: ShareRequest,
+) -> Result<Value, String> {
+    let file = tokio::task::spawn_blocking(move || {
+        mobile_attachment::prepare_file(&share.path, &share.display_name,
+            &workspace_root, allow_outside_workspace)
+    }).await.map_err(|_| "File inspection stopped unexpectedly".to_string())??;
+    let registered = request(reqwest::Method::POST, &format!("/tasks/{task_id}/attachments"),
+        Some(attachment_registration_body(&lease, &file))).await?;
+    let id = registered["attachment"]["id"].as_str()
+        .ok_or_else(|| "Coordinator returned an invalid attachment ID".to_string())?;
+    if uuid(id).is_err() { return Err("Coordinator returned an invalid attachment ID".into()); }
+    if let Err(error) = mobile_attachment::save_record(&app_data_dir, id, &file) {
+        let _ = request(reqwest::Method::DELETE, &format!("/attachments/{id}"), None).await;
+        return Err(error);
+    }
+    let _ = app.emit("mobile_bridge_updated", ());
+    Ok(json!({
+        "attachmentId": id, "name": file.name, "size": file.size,
+        "mimeType": file.mime_type,
+    }))
+}
+
+async fn run_mobile_share_requests(
+    app: AppHandle, app_data_dir: PathBuf, directory: PathBuf,
+    task_id: String, lease: String, workspace_root: PathBuf,
+    allow_outside_workspace: bool,
+) {
+    loop {
+        match mobile_attachment::take_pending_request(&directory) {
+            Ok(Some((processing, share))) => {
+                let answer = register_shared_file(&app, app_data_dir.clone(), task_id.clone(),
+                    lease.clone(), workspace_root.clone(), allow_outside_workspace, share).await;
+                let response = match answer {
+                    Ok(value) => value,
+                    Err(error) => json!({"error": error.chars().take(240).collect::<String>()}),
+                };
+                if let Err(error) = mobile_attachment::write_response(&processing, &response) {
+                    eprintln!("Mobile file response failed: {error}");
+                }
+            }
+            Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+            Err(_) => break,
+        }
+    }
 }
 
 async fn upload_task_progress(
@@ -332,6 +395,24 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
                 let state: State<'_, AppState> = worker_app.state();
+                let file_settings = state.settings.lock().await.clone();
+                let workspace_root = PathBuf::from(&file_settings.workspace_root);
+                let app_data_dir = worker_app.path().app_data_dir().ok();
+                let share_context = app_data_dir.as_ref().and_then(|directory| {
+                    mobile_attachment::create_request_context(directory).ok()
+                });
+                let mut extra_environment = HashMap::new();
+                let share_worker = match (app_data_dir, share_context) {
+                    (Some(app_data_dir), Some((capability, directory))) => {
+                        extra_environment.insert("WORKBUDDY_MOBILE_TASK_CAPABILITY".into(), capability);
+                        let handle = tauri::async_runtime::spawn(run_mobile_share_requests(
+                            worker_app.clone(), app_data_dir, directory.clone(), task_id.clone(),
+                            lease.clone(), workspace_root.clone(), file_settings.allow_outside_workspace,
+                        ));
+                        Some((handle, directory))
+                    }
+                    _ => None,
+                };
                 let (observer, progress) = tokio::sync::mpsc::channel(64);
                 let uploader = tauri::async_runtime::spawn(upload_task_progress(
                     worker_app.clone(), task_id.clone(), lease.clone(), progress,
@@ -339,6 +420,11 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                 let options = CodexBackgroundOptions {
                     session_title: Some(prompt.chars().take(40).collect()),
                     session_source: Some("mobile_executor".into()),
+                    workspace_root: Some(workspace_root),
+                    extra_context: share_worker.as_ref().map(|_| {
+                        "当用户需要获取电脑中的文件时，使用 share_file 工具将文件作为附件发到当前手机会话；工具只需要绝对路径和显示名。".into()
+                    }),
+                    extra_environment,
                     event_observer: Some(observer),
                     ..Default::default()
                 };
@@ -363,6 +449,10 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                         }
                     }
                 };
+                if let Some((handle, directory)) = share_worker {
+                    handle.abort();
+                    let _ = std::fs::remove_dir_all(directory);
+                }
                 if lease_lost { uploader.abort(); return; }
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(11), uploader).await;
                 let (status, text) = match result {
@@ -448,5 +538,22 @@ mod tests {
             &[json!({"type":"item.completed","item":{"error":"No available channel for model codex-auto-review under group harmony"}})]
         ));
         assert!(!approval_service_unavailable("已读取电脑上的版本号。", &[]));
+    }
+
+    #[test]
+    fn mobile_attachment_registration_contains_metadata_but_no_local_path_or_model_identity() {
+        let file = PreparedAttachment {
+            path: std::path::PathBuf::from("C:\\private\\report.txt"),
+            name: "report.txt".into(), mime_type: "text/plain".into(),
+            size: 4, sha256: "a".repeat(64), modified_ns: 42,
+        };
+        let body = attachment_registration_body("trusted-lease", &file);
+        assert_eq!(body["leaseToken"], "trusted-lease");
+        assert_eq!(body["name"], "report.txt");
+        assert_eq!(body["size"], 4);
+        assert!(body.get("path").is_none());
+        assert!(body.get("taskId").is_none());
+        assert!(body.get("sessionId").is_none());
+        assert!(body.get("modifiedNs").is_none());
     }
 }

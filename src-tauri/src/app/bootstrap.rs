@@ -266,7 +266,7 @@ async fn run_im_agent_and_send_reply(
 /// Explorer opens (ShellExecute "open" verb is unreliable for directories).
 /// Files are opened with the `start` command (equivalent to double-clicking).
 #[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
+pub(crate) fn open_path(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let p = std::path::Path::new(&path);
@@ -1309,6 +1309,8 @@ fn run_impl() {
             commands::mobile_bridge::mobile_bridge_sync,
             commands::mobile_bridge::mobile_bridge_active_turn,
             commands::mobile_bridge::mobile_bridge_task_events,
+            commands::mobile_bridge::mobile_bridge_attachments,
+            commands::mobile_attachment::mobile_attachment_open,
             commands::mobile_bridge::mobile_bridge_changes,
             commands::mobile_bridge::mobile_bridge_tasks,
             commands::mobile_bridge::mobile_bridge_devices,
