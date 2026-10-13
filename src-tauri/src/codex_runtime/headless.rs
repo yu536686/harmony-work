@@ -20,6 +20,7 @@ pub struct CodexExecOptions {
     pub permission_mode: CodexPermissionMode,
     pub attachments: Vec<CodexAttachment>,
     pub thread_id: Option<String>,
+    pub extra_environment: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +315,7 @@ mod tests {
                 },
             ],
             thread_id: None,
+            extra_environment: HashMap::new(),
         }
     }
 

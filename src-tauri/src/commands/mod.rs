@@ -27,6 +27,7 @@ pub mod ide;
 pub mod journal;
 pub mod marketing;
 pub mod mobile_bridge;
+pub mod mobile_attachment;
 pub mod mobile_task_events;
 pub mod platform;
 pub mod pool;
