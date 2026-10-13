@@ -130,6 +130,28 @@ async fn request(method: reqwest::Method, path: &str, body: Option<Value>) -> Re
     serde_json::from_str(&text).map_err(|error| error.to_string())
 }
 
+pub(crate) async fn verify_attachment_ticket(
+    attachment_id: &str, ticket: &str, mobile_device_id: &str,
+) -> Result<Value, String> {
+    uuid(attachment_id)?;
+    uuid(mobile_device_id)?;
+    if ticket.len() != 43 || !ticket.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
+        return Err("Invalid transfer ticket".into());
+    }
+    request(reqwest::Method::POST, &format!("/attachments/{attachment_id}/verify"),
+        Some(json!({"ticket":ticket,"mobileDeviceId":mobile_device_id}))).await
+}
+
+pub(crate) async fn attachment_status(attachment_id: &str) -> Result<Value, String> {
+    uuid(attachment_id)?;
+    request(reqwest::Method::GET, &format!("/attachments/{attachment_id}/status"), None).await
+}
+
+pub(crate) async fn revoke_attachment(attachment_id: &str) -> Result<(), String> {
+    uuid(attachment_id)?;
+    request(reqwest::Method::DELETE, &format!("/attachments/{attachment_id}"), None).await.map(|_| ())
+}
+
 async fn register_shared_file(
     app: &AppHandle, app_data_dir: PathBuf, task_id: String, lease: String,
     workspace_root: PathBuf, allow_outside_workspace: bool, share: ShareRequest,
