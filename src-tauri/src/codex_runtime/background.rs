@@ -7,6 +7,7 @@ use crate::codex_runtime::service::{
 use crate::gateway::MediaAttachment;
 use crate::store::AppState;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 
@@ -18,6 +19,8 @@ pub struct CodexBackgroundOptions {
     pub extra_context: Option<String>,
     pub permission_mode: Option<CodexPermissionMode>,
     pub event_channel: Option<String>,
+    pub event_observer: Option<tokio::sync::mpsc::Sender<Value>>,
+    pub extra_environment: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +67,7 @@ pub async fn run_codex_transient(
                 permission_mode: CodexPermissionMode::Restricted,
                 attachments: Vec::new(),
                 thread_id: None,
+                extra_environment: HashMap::new(),
             },
         )
         .await;
@@ -90,6 +94,7 @@ pub async fn run_codex_background(
     options: CodexBackgroundOptions,
 ) -> Result<CodexBackgroundOutput, String> {
     let event_channel = options.event_channel.clone();
+    let event_observer = options.event_observer.clone();
     let codex = state
         .app_handle
         .try_state::<CodexRuntimeState>()
@@ -165,7 +170,7 @@ pub async fn run_codex_background(
         )
     });
     let result = codex
-        .execute_headless(
+        .execute_headless_observed(
             session_id,
             CodexExecOptions {
                 workspace_root,
@@ -175,7 +180,9 @@ pub async fn run_codex_background(
                 permission_mode,
                 attachments,
                 thread_id: existing_thread,
+                extra_environment: options.extra_environment,
             },
+            event_observer,
         )
         .await;
     match result {

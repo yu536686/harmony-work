@@ -35,6 +35,7 @@ import {
 import Chat from "./components/Chat";
 import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from "./components/MobileBridgeWizard";
 import { BridgePeer, type BridgeSignal } from "./bridgePeer";
+import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
@@ -120,8 +121,8 @@ function AppContent() {
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
   const [mobileBridgeOpen, setMobileBridgeOpen] = useState(false);
+  const [mobileBridgeRevision, setMobileBridgeRevision] = useState(0);
   const [mobilePeerState, setMobilePeerState] = useState<"connecting" | "direct" | "fallback">("fallback");
-  const mobilePeer = useRef<BridgePeer | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
 
   useEffect(() => {
@@ -144,24 +145,43 @@ function AppContent() {
     const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
     if (!desktopId || !deviceToken || typeof RTCPeerConnection === "undefined") return;
     let stopped = false;
+    const peers = new Map<string, BridgePeer>();
+    const senders = new Map<string, DirectFileSender>();
+    const states = new Map<string, 'connecting' | 'direct' | 'fallback'>();
     void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
       .then(() => invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices"))
       .then(async ({ devices }) => {
-        const link = devices.find(item => item.desktopDeviceId === desktopId);
-        if (!link || stopped) return;
-        const peer = new BridgePeer({
-          desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId,
-          localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: false,
-          sendSignal: (kind, payload) => invoke("mobile_bridge_send_signal", { desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId, senderDeviceId: desktopId, recipientDeviceId: link.mobileDeviceId, kind, payload }),
-          pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
-          onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },
-          onState: setMobilePeerState,
-        });
-        mobilePeer.current = peer;
-        await peer.start();
+        await Promise.all(devices.filter(item => item.desktopDeviceId === desktopId).map(async link => {
+          if (stopped) return;
+          let sender: DirectFileSender;
+          const peer = new BridgePeer({
+            desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId,
+            localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: false,
+            sendSignal: (kind, payload) => invoke("mobile_bridge_send_signal", { desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId, senderDeviceId: desktopId, recipientDeviceId: link.mobileDeviceId, kind, payload }),
+            pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
+            onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },
+            onState: state => {
+              states.set(link.mobileDeviceId, state);
+              setMobilePeerState([...states.values()].some(value => value === 'direct') ? 'direct' : state);
+            },
+            onFileFrame: frame => { void sender.onFrame(frame); },
+          });
+          sender = new DirectFileSender(link.mobileDeviceId,
+            frame => peer.sendFileFrame(frame),
+            (attachmentId, ticket, mobileDeviceId, offset) => invoke<{ id: string; size: number; sha256: string }>('mobile_attachment_authorize', { attachmentId, ticket, mobileDeviceId, offset }),
+            (attachmentId, offset, length) => invoke<string>('mobile_attachment_read_chunk', { attachmentId, offset, length }),
+            attachmentId => invoke<void>('mobile_attachment_cancel', { attachmentId }));
+          peers.set(link.mobileDeviceId, peer);
+          senders.set(link.mobileDeviceId, sender);
+          await peer.start();
+        }));
       }).catch(() => setMobilePeerState("fallback"));
-    return () => { stopped = true; mobilePeer.current?.stop(); mobilePeer.current = null; };
-  }, [marketingUser?.id, mobileBridgeOpen]);
+    return () => {
+      stopped = true;
+      for (const sender of senders.values()) sender.stop();
+      for (const peer of peers.values()) peer.stop();
+    };
+  }, [marketingUser?.id, mobileBridgeOpen, mobileBridgeRevision]);
 
   useEffect(() => {
     localStorage.setItem("harmony-work.session-outcomes", JSON.stringify(sessionOutcomes));
@@ -691,7 +711,7 @@ function AppContent() {
           </button>
         </div>
       </aside>
-      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} />}
+      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} onLinksChanged={() => setMobileBridgeRevision(value => value + 1)} />}
       <main className="main-content">
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
           {mountedTabs.has("chat") && (

@@ -12,6 +12,7 @@ mod embedding;
 #[path = "../../shared/harvis_responses.rs"]
 mod harvis_responses;
 mod im;
+mod mobile_share;
 mod office;
 mod process;
 mod skills;
@@ -30,6 +31,7 @@ pub struct HostContext {
     pub legacy_database_path: Option<PathBuf>,
     pub skills_roots: Vec<PathBuf>,
     pub marketing_base_url: String,
+    pub mobile_share_capability: Option<String>,
 }
 
 impl HostContext {
@@ -46,6 +48,7 @@ impl HostContext {
             legacy_database_path,
             skills_roots,
             marketing_base_url,
+            mobile_share_capability: None,
         }
     }
 
@@ -90,7 +93,7 @@ pub async fn handle_request(context: &HostContext, request: &Value) -> Option<Va
     let result = match method {
         "initialize" => Ok(initialize_result(request)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools": tool_definitions()})),
+        "tools/list" => Ok(json!({"tools": tool_definitions(context)})),
         "tools/call" => call_tool(context, request.get("params").unwrap_or(&Value::Null)).await,
         _ => {
             return Some(json!({
@@ -125,7 +128,7 @@ fn initialize_result(request: &Value) -> Value {
     })
 }
 
-fn tool_definitions() -> Vec<Value> {
+fn tool_definitions(_context: &HostContext) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "memory_search",
@@ -176,6 +179,9 @@ fn tool_definitions() -> Vec<Value> {
     tools.extend(im::tool_definitions());
     tools.extend(skills::tool_definitions());
     tools.extend(staffdeck::tool_definitions());
+    // Codex can cache this catalog before a mobile task injects its capability.
+    // Keep discovery stable; call_tool still gates execution to the active task.
+    tools.push(mobile_share::tool_definition());
     tools
 }
 
@@ -236,6 +242,7 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
         _ if im::handles(name) => im::call(context, name, arguments).await,
         _ if skills::handles(name) => skills::call(context, name, arguments).await,
         _ if staffdeck::handles(name) => staffdeck::call(context, name, arguments),
+        "share_file" => mobile_share::call(context, arguments).await,
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
     }
 }
@@ -553,13 +560,17 @@ pub fn context_from_environment() -> HostContext {
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);
     let marketing_base_url = service_urls::marketing_base_url();
-    HostContext::new(
+    let mut context = HostContext::new(
         app_data,
         database_path,
         legacy_database_path,
         skills_roots,
         marketing_base_url,
-    )
+    );
+    context.mobile_share_capability = std::env::var("WORKBUDDY_MOBILE_TASK_CAPABILITY")
+        .ok().filter(|value| value.len() == 43 &&
+            value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'));
+    context
 }
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -632,6 +643,73 @@ mod tests {
         assert!(names.contains(&"staff_list"));
         assert!(names.contains(&"staff_task_create"));
         assert!(names.contains(&"staff_task_update"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn mobile_share_is_discoverable_before_a_mobile_task_but_requires_its_capability() {
+        let (mut context, root) = test_context();
+        let ordinary = handle_request(&context, &request(1, "tools/list", json!({})))
+            .await.expect("ordinary tool list");
+        assert!(ordinary["result"]["tools"].as_array().unwrap().iter()
+            .any(|tool| tool["name"] == "share_file"));
+        let unauthorized = handle_request(&context, &request(2, "tools/call", json!({
+            "name": "share_file", "arguments": {"path": "C:\\Users\\owner\\report.pdf"}
+        }))).await.expect("ordinary share response");
+        assert_eq!(unauthorized["result"]["isError"], true);
+        context.mobile_share_capability = Some("A".repeat(43));
+        let mobile = handle_request(&context, &request(1, "tools/list", json!({})))
+            .await.expect("mobile tool list");
+        assert!(mobile["result"]["tools"].as_array().unwrap().iter()
+            .any(|tool| tool["name"] == "share_file"));
+        let forged = handle_request(&context, &request(2, "tools/call", json!({
+            "name": "share_file",
+            "arguments": {
+                "path": "C:\\Users\\owner\\report.pdf", "displayName": "report.pdf",
+                "taskId": uuid::Uuid::new_v4().to_string()
+            }
+        }))).await.expect("forged share response");
+        assert_eq!(forged["result"]["isError"], true);
+        assert!(forged["result"]["content"][0]["text"].as_str().unwrap().contains("taskId"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn mobile_share_forwards_only_file_details_to_the_active_desktop_task() {
+        let (context, root) = test_context();
+        let capability = "B".repeat(43);
+        let directory = root.join("mobile_share_requests").join(capability);
+        std::fs::create_dir_all(&directory).expect("create request directory");
+        std::fs::write(root.join("mobile_share_requests").join("active"), "B".repeat(43))
+            .expect("activate mobile task");
+        let file = root.join("report.txt");
+        std::fs::write(&file, "report").expect("create file");
+        let worker = tokio::spawn(async move {
+            for _ in 0..50 {
+                let request = std::fs::read_dir(&directory).unwrap().flatten()
+                    .map(|entry| entry.path())
+                    .find(|path| path.to_string_lossy().ends_with(".request.json"));
+                if let Some(request) = request {
+                    let value: Value = serde_json::from_slice(&std::fs::read(&request).unwrap()).unwrap();
+                    assert_eq!(value.as_object().unwrap().len(), 2);
+                    assert_eq!(value["displayName"], "report.txt");
+                    assert!(value.get("taskId").is_none());
+                    let response = request.to_string_lossy().replace(".request.json", ".response.json");
+                    std::fs::write(response, json!({
+                        "attachmentId": uuid::Uuid::new_v4().to_string(), "name": "report.txt"
+                    }).to_string()).unwrap();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("desktop did not receive file request");
+        });
+        let result = handle_request(&context, &request(3, "tools/call", json!({
+            "name":"share_file", "arguments":{"path":file.to_string_lossy(),"displayName":"report.txt"}
+        }))).await.expect("share response");
+        worker.await.expect("desktop worker");
+        assert_eq!(result["result"]["isError"], false);
+        assert_eq!(result["result"]["structuredContent"]["name"], "report.txt");
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
