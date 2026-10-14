@@ -44,8 +44,15 @@ if (-not $InnerInstaller) {
 }
 if (-not $InnerInstaller) { throw "Could not locate the generated NSIS installer." }
 
+& (Join-Path $PSScriptRoot "build-uninstaller.ps1") -OutputDirectory $OutputDirectory
+if ($LASTEXITCODE -ne 0) { throw "Standalone uninstaller publish failed." }
+$StandaloneUninstaller = Join-Path $OutputDirectory "Harmony-Work-$Version-x64-uninstaller.exe"
+if (-not (Test-Path -LiteralPath $StandaloneUninstaller)) {
+  throw "Standalone uninstaller not found: $StandaloneUninstaller"
+}
+
 $global:LASTEXITCODE = 0
-& (Join-Path $PSScriptRoot "stage-full-installer-payload.ps1") -InnerInstaller $InnerInstaller -PayloadCache $PayloadCache
+& (Join-Path $PSScriptRoot "stage-full-installer-payload.ps1") -InnerInstaller $InnerInstaller -Uninstaller $StandaloneUninstaller -PayloadCache $PayloadCache
 if ($LASTEXITCODE -ne 0) { throw "Failed to stage full installer payload." }
 
 $StagedPayload = Join-Path $ProjectRoot "installer\.build\payload"
@@ -74,6 +81,3 @@ if (-not (Test-Path -LiteralPath $PublishedInstaller)) {
 }
 Copy-Item -LiteralPath $PublishedInstaller -Destination $FinalInstaller -Force
 Write-Host "Full offline installer: $FinalInstaller" -ForegroundColor Green
-
-& (Join-Path $PSScriptRoot "build-uninstaller.ps1") -OutputDirectory $OutputDirectory
-if ($LASTEXITCODE -ne 0) { throw "Standalone uninstaller publish failed." }

@@ -1,4 +1,5 @@
 use crate::store::Settings;
+use crate::service_urls::HARMONY_API_BASE;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -85,12 +86,13 @@ struct RawHarvisPromptResult {
 
 const RESPONSE_TIMEOUT_SECONDS: u64 = 40;
 
-fn responses_endpoint(provider: &str) -> Result<&'static str, String> {
+fn responses_endpoint(provider: &str) -> Result<String, String> {
     match provider.trim().to_ascii_lowercase().as_str() {
-        "deepseek" => Ok("https://api.deepseek.com/responses"),
-        "openai" => Ok("https://api.openai.com/v1/responses"),
+        "deepseek" => Ok("https://api.deepseek.com/responses".to_string()),
+        "openai" => Ok("https://api.openai.com/v1/responses".to_string()),
+        "harmony" => Ok(format!("{HARMONY_API_BASE}/responses")),
         other => Err(format!(
-            "Harvis 提示词助手需要 OpenAI 或 DeepSeek Responses API，当前提供商“{other}”不受支持"
+            "Harvis 提示词助手需要 OpenAI、DeepSeek 或 Harmony Responses API，当前提供商“{other}”不受支持"
         )),
     }
 }
@@ -613,20 +615,20 @@ pub async fn compose_harvis_music_prompt(settings: &Settings, input: HarvisPromp
     let model = settings.model.trim();
     let api_key = settings.active_api_key().trim();
     if model.is_empty() || api_key.is_empty() {
-        return Err("请先在设置中配置 DeepSeek 或 OpenAI 的默认模型与 API 密钥，再使用 Harvis 提示词助手".to_string());
+        return Err("请先在设置中配置当前提供商的默认模型与 API 密钥，再使用 Harvis 提示词助手".to_string());
     }
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECONDS))
         .build()
         .map_err(|error| format!("无法创建 Harvis 提示词助手客户端：{error}"))?;
-    let first = request_once(&client, endpoint, api_key, request_body(model, &input, None)).await?;
+    let first = request_once(&client, &endpoint, api_key, request_body(model, &input, None)).await?;
     let first_text = output_text(&first).ok_or_else(|| "Harvis 提示词助手没有返回文本内容".to_string())?;
     let first_result = parse_raw_harvis_prompt_result(&first_text)
         .and_then(|raw| normalize_result(raw, &input, model));
     match first_result {
         Ok(result) => Ok(result),
         Err(error) => {
-            let repaired_result = request_once(&client, endpoint, api_key, request_body(model, &input, Some(&error))).await
+            let repaired_result = request_once(&client, &endpoint, api_key, request_body(model, &input, Some(&error))).await
                 .and_then(|response| output_text(&response).ok_or_else(|| "修复请求没有返回文本内容".to_string()))
                 .and_then(|text| parse_raw_harvis_prompt_result(&text))
                 .and_then(|raw| normalize_result(raw, &input, model));
@@ -658,6 +660,19 @@ pub async fn compose_harvis_music_prompt(settings: &Settings, input: HarvisPromp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harmony_prompt_assistant_uses_the_configured_gateway() {
+        let mut settings = Settings::default();
+        settings.provider = "harmony".to_string();
+        settings.harmony_api_key = "harmony-test-key".to_string();
+
+        assert_eq!(
+            responses_endpoint(&settings.provider).expect("Harmony supports Responses"),
+            "https://api.harmonywatch.cn/v1/responses"
+        );
+        assert_eq!(settings.active_api_key(), "harmony-test-key");
+    }
 
     #[test]
     fn extracts_responses_output_text_from_standard_payload() {

@@ -159,6 +159,20 @@ test("full installer reuses managed runtimes and reports generic user-facing pro
   assert.match(engine, /ExtractPayloadArchiveAsync/);
 });
 
+test("full installer bundles the deep uninstaller and exposes an installed entry", async () => {
+  const [build, stage, engine, cleanup] = await Promise.all([
+    readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+    readFile(new URL("./stage-full-installer-payload.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
+    readFile(new URL("../installer/HarmonyWorkUninstaller/UninstallEngine.cs", import.meta.url), "utf8"),
+  ]);
+  assert.ok(build.indexOf("build-uninstaller.ps1") < build.indexOf("stage-full-installer-payload.ps1"));
+  assert.match(stage, /Harmony-Work-Uninstaller\.exe/);
+  assert.match(engine, /InstallDeepUninstaller\(payloadRoot\)/);
+  assert.match(engine, /卸载 Harmony Work\.lnk/);
+  assert.match(cleanup, /卸载 Harmony Work\.lnk/);
+});
+
 test("Harmony Work 1.0.9 release metadata, payload manifest, and installer naming stay aligned", async () => {
   const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
     await Promise.all([

@@ -122,6 +122,7 @@ public sealed class UninstallEngine
         var shortcuts = new[] {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Harmony Work.lnk"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Harmony Work", "Harmony Work.lnk"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Harmony Work", "卸载 Harmony Work.lnk"),
         };
         foreach (var path in shortcuts) {
             try {
