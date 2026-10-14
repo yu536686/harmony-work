@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -125,13 +125,33 @@ function AppContent() {
   const [mobilePeerState, setMobilePeerState] = useState<"connecting" | "direct" | "fallback">("fallback");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
 
+  useLayoutEffect(() => {
+    if (!IS_WINDOWS) return;
+    const current = store.getState().sessions;
+    const mobileIds = current.sessions.filter(session => session.source === "mobile").map(session => session.id);
+    const visible = current.sessions.filter(session => session.source !== "mobile");
+    if (mobileIds.includes(current.activeSessionId ?? "")) dispatch(sessionsActions.setActiveSession(null));
+    if (mobileIds.length) dispatch(chatActions.forgetSessions(mobileIds));
+    dispatch(sessionsActions.setSessions(visible));
+  }, [marketingUser?.id, dispatch]);
+
   useEffect(() => {
-    if (!IS_WINDOWS || !marketingUser) return;
-    const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
-    const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
-    if (!desktopId || !deviceToken) return;
+    if (!IS_WINDOWS) return;
+    const desktopId = marketingUser ? localStorage.getItem(mobileBridgeStorageKey(marketingUser.id)) : null;
+    const deviceToken = marketingUser ? localStorage.getItem(mobileBridgeTokenKey(marketingUser.id)) : null;
+    if (!desktopId || !deviceToken) {
+      void invoke("mobile_bridge_sign_out")
+        .then(() => sessionsApi.list(200))
+        .then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions)))
+        .catch(error => console.warn("Mobile bridge sign out:", error));
+      return;
+    }
     void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
-      .then(() => invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId }))
+      .then(async () => {
+        const { sessions } = await sessionsApi.list(200);
+        dispatch(sessionsActions.setSessions(sessions));
+        await invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId });
+      })
       .catch(error => console.warn("Mobile bridge worker:", error));
     const unlisten = listen("mobile_bridge_updated", () => {
       void sessionsApi.list(200).then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions))).catch(() => undefined);

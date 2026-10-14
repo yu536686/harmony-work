@@ -7,6 +7,7 @@ use crate::commands::marketing::{apply_cookie, marketing_client};
 use crate::store::AppState;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -25,14 +26,51 @@ static WORKER: OnceLock<Mutex<Option<(String, tauri::async_runtime::JoinHandle<(
 static SYNC_CURSOR: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 static TASK_PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 static DEVICE_AUTH: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
+static AUTH_SWITCH: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+pub(crate) fn has_device_auth() -> bool {
+    DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map(|value| value.is_some()).unwrap_or(false)
+}
+
+fn device_auth_matches(expected: &(String, String)) -> bool {
+    DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map(|current| current.as_ref() == Some(expected)).unwrap_or(false)
+}
 
 #[tauri::command]
-pub fn mobile_bridge_set_device(device_id: String, device_token: String) -> Result<(), String> {
+pub async fn mobile_bridge_set_device(app: AppHandle, state: State<'_, AppState>, device_id: String, device_token: String) -> Result<(), String> {
     uuid(&device_id)?;
     if device_token.len() != 43 || !device_token.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
         return Err("Invalid device token".into());
     }
+    let _switch = AUTH_SWITCH.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+    let changed = DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Device auth unavailable")?
+        .as_ref().is_none_or(|(id, token)| id != &device_id || token != &device_token);
+    if changed {
+        let db = state.db.lock().await;
+        db.delete_all_mobile_sessions().map_err(|error| error.to_string())?;
+        SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new())).lock()
+            .map_err(|_| "Session cursor unavailable")?.clear();
+    }
     *DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Device auth unavailable")? = Some((device_id, device_token));
+    if changed { let _ = app.emit("mobile_bridge_updated", ()); }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mobile_bridge_sign_out(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let _switch = AUTH_SWITCH.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+    if let Ok(mut active) = worker().lock() {
+        if let Some((_, handle)) = active.take() { handle.abort(); }
+    }
+    *DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Device auth unavailable")? = None;
+    let db = state.db.lock().await;
+    db.delete_all_mobile_sessions().map_err(|error| error.to_string())?;
+    SYNC_CURSOR.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|_| "Session cursor unavailable")?.clear();
+    let _ = app.emit("mobile_bridge_updated", ());
     Ok(())
 }
 
@@ -80,6 +118,12 @@ pub(crate) async fn abort_desktop_send(state: &State<'_, AppState>, session_id: 
         let db = state.db.lock().await;
         let _ = db.complete_shared_desktop_turn(&turn_id);
     }
+}
+
+pub(crate) async fn delete_shared_session(session_id: &str) -> Result<(), String> {
+    uuid(session_id)?;
+    request(reqwest::Method::DELETE, &format!("/sessions/{session_id}"), None).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -342,9 +386,15 @@ pub async fn mobile_bridge_send_signal(
 #[tauri::command]
 pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Result<Value, String> {
     let desktop_id = uuid(&desktop_device_id)?;
+    let expected_auth = DEVICE_AUTH.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Device auth unavailable")?.clone()
+        .filter(|(id, _)| id == desktop_id)
+        .ok_or("Desktop device changed")?;
     let state: State<'_, AppState> = app.state();
     let mut imported = 0;
     let mut uploaded = 0;
+    let mut added = 0;
+    let mut remote_ids = HashSet::new();
     let mut before: Option<(String, String)> = None;
     loop {
         let mut session_path = format!("/sessions?desktopDeviceId={desktop_id}");
@@ -352,13 +402,17 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             session_path.push_str(&format!("&before={timestamp}&beforeId={id}"));
         }
         let sessions = request(reqwest::Method::GET, &session_path, None).await?;
+        if !device_auth_matches(&expected_auth) { return Err("Desktop device changed".into()); }
         let items = sessions["sessions"].as_array().ok_or("Invalid session page")?;
         let page_size = items.len();
         for item in items {
+            if !device_auth_matches(&expected_auth) { return Err("Desktop device changed".into()); }
             let Some(id) = item["id"].as_str().and_then(|id| uuid(id).ok()) else { continue };
             let Some(title) = item["title"].as_str() else { continue };
+            remote_ids.insert(id.to_string());
             {
                 let db = state.db.lock().await;
+                if db.get_session(id).map_err(|error| error.to_string())?.is_none() { added += 1; }
                 let local = db.ensure_fixed_session(id, title, "mobile").map_err(|error| error.to_string())?;
                 if local.title.as_deref() != Some(title) {
                     db.rename_session(id, title).map_err(|error| error.to_string())?;
@@ -374,6 +428,7 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                 if messages.is_empty() { break; }
                 let previous_seq = after_seq;
                 for message in messages {
+                    if !device_auth_matches(&expected_auth) { return Err("Desktop device changed".into()); }
                     let (Some(mid), Some(role), Some(content), Some(seq)) = (
                         message["id"].as_str(), message["role"].as_str(),
                         message["content"].as_str(), message["seq"].as_u64()) else { continue };
@@ -394,6 +449,7 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
                 db.get_unshared_mobile_messages(id, 100).map_err(|error| error.to_string())?
             };
             for message in unshared {
+                if !device_auth_matches(&expected_auth) { return Err("Desktop device changed".into()); }
                 if !matches!(message.role.as_str(), "user" | "assistant") || message.content.chars().count() > 8_000 { continue; }
                 let ack = request(reqwest::Method::POST, &format!("/sessions/{id}/messages"),
                     Some(json!({"id":message.id,"role":message.role,"content":message.content}))).await;
@@ -408,6 +464,16 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
         before = items.last().and_then(|item| Some((item["cursor"].as_str()?.to_string(), item["id"].as_str()?.to_string())));
         if page_size < 100 || before.is_none() { break; }
     }
+    if !device_auth_matches(&expected_auth) { return Err("Desktop device changed".into()); }
+    let removed = {
+        let db = state.db.lock().await;
+        let stale = db.mobile_session_ids().map_err(|error| error.to_string())?
+            .into_iter().filter(|id| !remote_ids.contains(id)).collect::<Vec<_>>();
+        for id in &stale {
+            db.delete_session(id).map_err(|error| error.to_string())?;
+        }
+        stale.len()
+    };
     let pending_turns = {
         let db = state.db.lock().await;
         db.pending_shared_desktop_turns().map_err(|error| error.to_string())?
@@ -526,8 +592,8 @@ pub async fn mobile_bridge_sync(app: AppHandle, desktop_device_id: String) -> Re
             claimed += 1;
         }
     }
-    if imported > 0 || uploaded > 0 || claimed > 0 { let _ = app.emit("mobile_bridge_updated", ()); }
-    Ok(json!({"importedMessages": imported, "uploadedMessages": uploaded, "claimedTasks": claimed}))
+    if added > 0 || imported > 0 || uploaded > 0 || claimed > 0 || removed > 0 { let _ = app.emit("mobile_bridge_updated", ()); }
+    Ok(json!({"addedSessions": added, "importedMessages": imported, "uploadedMessages": uploaded, "claimedTasks": claimed, "removedSessions": removed}))
 }
 
 #[tauri::command]

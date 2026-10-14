@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { chatSlice } from "./chat";
 
 describe("chat run status lifecycle", () => {
+  it("removes prior account mobile content without clearing desktop chat", () => {
+    const message = (sessionId: string) => ({
+      id: `${sessionId}-message`, session_id: sessionId, role: "user" as const,
+      content: "account-private", created_at: "2026-10-14T00:00:00.000Z",
+    });
+    let state = chatSlice.reducer(undefined, chatSlice.actions.setMessages({ sessionId: "phone-a", messages: [message("phone-a")] }));
+    state = chatSlice.reducer(state, chatSlice.actions.setMessages({ sessionId: "desktop", messages: [message("desktop")] }));
+    state = chatSlice.reducer(state, chatSlice.actions.setSessionOutcome({ sessionId: "phone-a", outcome: "unread" }));
+    state = chatSlice.reducer(state, chatSlice.actions.forgetSessions(["phone-a"]));
+    expect(state.messagesBySession["phone-a"]).toBeUndefined();
+    expect(state.sessionOutcomes["phone-a"]).toBeUndefined();
+    expect(state.messagesBySession.desktop).toHaveLength(1);
+  });
+
   it("clears the transient runtime phase when a turn stops running", () => {
     let state = chatSlice.reducer(
       undefined,
