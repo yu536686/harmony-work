@@ -85,14 +85,15 @@ flowchart LR
 
 正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
-源码版本为 `1.0.9`。Windows 构建机已生成全量离线安装包和独立深度卸载器，位于 `release/full/`，不纳入 Git 仓库；尚未发布到官网或 CDN。正式下载入口展示的版本以官网为准。
+源码版本为 `1.0.9`。全量离线安装包已发布到官网和腾讯云 CDN；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
 
 ### 1. 下载安装包
 
-从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN：
+从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN，当前文件为：
 
 ```text
-Harmony-Work-<version>-x64-setup.exe
+Harmony-Work-1.0.9-x64-full-setup.exe
+SHA-256: bc54404bfe1212e8d904a4b96c5b7f62cc8bc0555dbdf3778be69f4f7e0e6426
 ```
 
 需要核对文件完整性时，在安装包所在目录运行：
