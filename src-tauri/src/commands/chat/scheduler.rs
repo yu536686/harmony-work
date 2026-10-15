@@ -82,7 +82,7 @@ fn memory_revision(db: &Database) -> Vec<(String, String, f64, Option<String>)> 
 }
 
 fn build_memory_consolidation_snapshot(db: &Database) -> String {
-    let sessions = db.list_sessions(200, 0).unwrap_or_default();
+    let sessions = db.list_sessions(200, 0, false).unwrap_or_default();
     let task_states = db.list_recent_task_states(100).unwrap_or_default();
     let memories = db.list_memories_for_owner("xiaoheng").unwrap_or_default();
 

@@ -1501,20 +1501,33 @@ impl Database {
             })
     }
 
-    pub fn list_sessions(&self, limit: i64, offset: i64) -> Result<Vec<Session>> {
+    pub fn list_sessions(&self, limit: i64, offset: i64, include_mobile: bool) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count, \
                     COALESCE(rolling_summary, ''), COALESCE(rolling_summary_version, 0), \
                     COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0), last_compacted_at, \
                     workspace_root, pinned_at, archived_at, pool_session_id, policy_mode, \
                     allow_outside_workspace \
-             FROM sessions WHERE archived_at IS NULL AND COALESCE(source, 'chat') != 'mobile_executor' ORDER BY \
+             FROM sessions WHERE archived_at IS NULL AND COALESCE(source, 'chat') != 'mobile_executor' \
+               AND (?2 = 1 OR COALESCE(source, 'chat') != 'mobile') ORDER BY \
                     CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END, \
-                    COALESCE(pinned_at, updated_at) DESC, updated_at DESC LIMIT ?1 OFFSET ?2"
+                    COALESCE(pinned_at, updated_at) DESC, updated_at DESC LIMIT ?1 OFFSET ?3"
         )?;
-        let rows = stmt.query_map(params![limit, offset], map_session_row)?;
+        let rows = stmt.query_map(params![limit, include_mobile as i32, offset], map_session_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    pub fn mobile_session_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM sessions WHERE source = 'mobile'")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>().map_err(Into::into)
+    }
+
+    pub fn delete_all_mobile_sessions(&self) -> Result<usize> {
+        let ids = self.mobile_session_ids()?;
+        for id in &ids { self.delete_session(id)?; }
+        Ok(ids.len())
     }
 
     /// Sessions currently in `running` status (agent loop active).
@@ -5398,9 +5411,21 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.ensure_fixed_session("visible", "Phone chat", "mobile").unwrap();
         db.ensure_fixed_session("internal", "Desktop job", "mobile_executor").unwrap();
-        let sessions = db.list_sessions(20, 0).unwrap();
+        let sessions = db.list_sessions(20, 0, true).unwrap();
         assert!(sessions.iter().any(|session| session.id == "visible"));
         assert!(!sessions.iter().any(|session| session.id == "internal"));
+        let signed_out = db.list_sessions(20, 0, false).unwrap();
+        assert!(!signed_out.iter().any(|session| session.id == "visible"));
+    }
+
+    #[test]
+    fn clearing_mobile_cache_does_not_delete_desktop_chats() {
+        let db = Database::open_in_memory().unwrap();
+        db.ensure_fixed_session("phone", "Phone chat", "mobile").unwrap();
+        db.ensure_fixed_session("desktop", "Desktop chat", "chat").unwrap();
+        assert_eq!(db.delete_all_mobile_sessions().unwrap(), 1);
+        assert!(db.get_session("phone").unwrap().is_none());
+        assert!(db.get_session("desktop").unwrap().is_some());
     }
 
     #[test]

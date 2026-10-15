@@ -276,6 +276,22 @@ export const chatSlice = createSlice({
     executionBySession: {},
   } as ChatState,
   reducers: {
+    forgetSessions: (state, action: PayloadAction<string[]>) => {
+      for (const id of action.payload) {
+        delete state.messagesBySession[id];
+        delete state.streaming[id];
+        delete state.toolSteps[id];
+        delete state.toolStepsTurnDone[id];
+        delete state.planBySession[id];
+        delete state.isRunning[id];
+        delete state.sessionOutcomes[id];
+        delete state.frozenBubble[id];
+        delete state.pendingSummary[id];
+        delete state.contextUsage[id];
+        delete state.runStatusBySession[id];
+        delete state.executionBySession[id];
+      }
+    },
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
       // Replace messages, discarding any optimistic placeholders
       state.messagesBySession[action.payload.sessionId] = action.payload.messages;
