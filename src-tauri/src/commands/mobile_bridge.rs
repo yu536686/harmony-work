@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_util::io::ReaderStream;
 
-const BASE: &str = "https://remote.harmonywatch.cn/api/mobile";
+const BASE: &str = "https://remote.harmonywatch.cn:8443/api/mobile";
 
 fn attachment_registration_body(lease: &str, file: &PreparedAttachment) -> Value {
     json!({
@@ -634,7 +634,7 @@ mod tests {
     use super::*;
     #[test]
     fn bridge_uses_direct_host_and_rejects_non_uuid_ids() {
-        assert_eq!(BASE, "https://remote.harmonywatch.cn/api/mobile");
+        assert_eq!(BASE, "https://remote.harmonywatch.cn:8443/api/mobile");
         assert!(uuid("../admin").is_err());
     }
 
