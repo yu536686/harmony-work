@@ -79,3 +79,10 @@ test('preflight probes write permissions and failure restores validated prior ap
  assert.ok(source.includes('catch {continue} # A partially published ack'));
  assert.ok(source.includes("throw 'Updated application health acknowledgement does not match this transaction'"));
 });
+test('manual update leaves running tray app untouched; automatic update only waits',async()=>{
+ const source=await readFile(new URL('../installer/light/update.ps1',import.meta.url),'utf8');
+ assert.ok(!source.includes('CloseMainWindow'));
+ assert.ok(source.includes("if($old -and !$Automatic){throw 'Please choose Exit from the Harmony Work tray menu"));
+ assert.ok(source.indexOf('if($Check){exit 0}')<source.indexOf('if($old -and !$Automatic)'));
+ const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(nsi.includes('"/UPDATE"'));assert.ok(nsi.includes('"-Automatic"'));
+});

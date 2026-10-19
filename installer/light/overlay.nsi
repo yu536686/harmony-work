@@ -11,6 +11,7 @@ ShowInstDetails show
 Var Result
 Var SilentArg
 Var CheckArg
+Var AutomaticArg
 Section
  InitPluginsDir
  SetOutPath "$PLUGINSDIR\payload"
@@ -24,10 +25,16 @@ Section
  ${IfNot} ${Errors}
   StrCpy $CheckArg "-Check"
  ${EndIf}
+ StrCpy $AutomaticArg ""
+ ClearErrors
+ ${GetOptions} $R0 "/UPDATE" $R1
+ ${IfNot} ${Errors}
+  StrCpy $AutomaticArg "-Automatic"
+ ${EndIf}
  StrCpy $SilentArg ""
  IfSilent 0 +2
  StrCpy $SilentArg "-Silent"
- nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update.ps1" -Payload "$PLUGINSDIR\payload" -InstallDirectory "$INSTDIR" $SilentArg $CheckArg'
+ nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update.ps1" -Payload "$PLUGINSDIR\payload" -InstallDirectory "$INSTDIR" $SilentArg $CheckArg $AutomaticArg'
  Pop $Result
  SetErrorLevel $Result
 SectionEnd

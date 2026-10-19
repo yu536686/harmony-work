@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Payload,[string]$InstallDirectory,[switch]$Silent,[switch]$Check)
+param([Parameter(Mandatory=$true)][string]$Payload,[string]$InstallDirectory,[switch]$Silent,[switch]$Check,[switch]$Automatic)
 $ErrorActionPreference='Stop'
 $logRoot=if($Check){Join-Path $env:TEMP 'HarmonyWorkUpdateCheck'}else{Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\updates'}
 New-Item -ItemType Directory -Force $logRoot | Out-Null
@@ -95,9 +95,14 @@ try {
  ProbeInstallWrite $actual
  if($Check){exit 0}
  $exe=Join-Path $actual $manifest.mainExe
+ $old=@(Get-Process harmony-work -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
+ if($old -and !$Automatic){throw 'Please choose Exit from the Harmony Work tray menu, then run the lightweight installer again.'}
  $deadline=(Get-Date).AddSeconds(120)
- do { $old=@(Get-Process harmony-work -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }); if(!$old){break}; foreach($p in $old){$null=$p.CloseMainWindow()}; Start-Sleep -Seconds 1 } while((Get-Date) -lt $deadline)
- if($old){throw 'Harmony Work is still running. Finish active tasks and close it before retrying.'}
+ while($old -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Seconds 1
+  $old=@(Get-Process harmony-work -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
+ }
+ if($old){throw 'Harmony Work is still running. Please choose Exit from the Harmony Work tray menu, then run the lightweight installer again.'}
  try { RecoverTransactions $actual $key } catch { $recoveryFailed=$true;throw }
  $transaction=Join-Path $actual ('.harmony-update-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory -Path "$transaction\stage","$transaction\backup" | Out-Null
