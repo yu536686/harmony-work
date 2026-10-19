@@ -1,7 +1,7 @@
 {
   "name": "harmony-work",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.1.2-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
