@@ -12,6 +12,22 @@ function SafeJoin($root,$relative) {
  return $p
 }
 function Verify($root,$items) { foreach($f in $items) { $p=SafeJoin $root $f.path; if(!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-Item -LiteralPath $p).Length -ne $f.size -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $f.sha256) { throw "Missing or incompatible dependency/payload: $($f.path). Use the full offline installer." } } }
+function SmokeRuntime($root) {
+ $checks=@(
+  @{path='node/node.exe';args=@('--version')},
+  @{path='python/python.exe';args=@('-I','-B','-c','"import cv2,numpy,starlette,uvicorn,pydantic,imageio_ffmpeg"')},
+  @{path='git/bin/git.exe';args=@('--version')}
+ )
+ foreach($check in $checks) {
+  $process=$null
+  try {
+   $process=Start-Process -FilePath (SafeJoin $root $check.path) -ArgumentList $check.args -WindowStyle Hidden -PassThru
+   if(!$process.WaitForExit(45000)){ $process.Kill();throw "Runtime preflight timed out: $($check.path)" }
+   $process.WaitForExit()
+   if($process.ExitCode -ne 0){throw "Runtime preflight failed: $($check.path), exit $($process.ExitCode). Repair with the full offline installer."}
+  } finally {if($process){$process.Dispose()}}
+ }
+}
 function OwnedPath($p) { return $p -eq 'harmony-work.exe' -or $p -match '^(resources/(workbuddy-mcp-host|harmony-cut)/|licenses/|resources/artifact-runtime/THIRD_PARTY_NOTICES.txt$)' }
 function WriteJournal($state) {
  $journal=@{schemaVersion=1;installDirectory=$InstallDirectory;previousVersion=$key.DisplayVersion;state=$state;changes=@($changed | ForEach-Object { @{path=$_.path;existed=$_.existed;sha256=$_.sha256;size=$_.size} })}
@@ -54,7 +70,9 @@ try {
  foreach($f in $manifest.files) { if(!(OwnedPath $f.path)){throw 'Forbidden overlay destination'}; $null=SafeJoin $actual $f.path }
  Verify $Payload $manifest.files
  Verify $actual $manifest.dependencies
- Verify (Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\runtime') $manifest.managedDependencies
+ $runtimeRoot=Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\runtime'
+ Verify $runtimeRoot $manifest.managedDependencies
+ SmokeRuntime $runtimeRoot
  $webview=@('HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKLM:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKCU:\Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKLM:\Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') | Where-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv -match '^[1-9]' }
  if(!$webview){throw 'WebView2 runtime missing. Use the full offline installer.'}
  $required=100MB + 3 * (($manifest.files | Measure-Object -Property size -Sum).Sum)

@@ -55,3 +55,17 @@ test('license directory optional and updater uses verified WebView2 GUID and dry
  assert.ok(source.includes("WriteJournal 'committed'"));
  const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(nsi.includes('"/CHECK"'));
 });
+test('Python extension and Git support hashes detect changes while caches/config are ignored',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'light-support-'));
+ async function put(p,text){const f=join(dir,p);await mkdir(dirname(f),{recursive:true});await writeFile(f,text)}
+ try {
+  for(const p of ['python/Lib/site-packages/cv2/cv2.pyd','python/Lib/site-packages/numpy/__init__.py','git/mingw64/bin/libcrypto-3-x64.dll','git/mingw64/libexec/git-core/git-remote-https.exe','git/usr/bin/sh.exe'])await put(p,'original');
+  await put('python/Lib/site-packages/cv2/__pycache__/x.pyc','cache');await put('git/etc/gitconfig','config');
+  const a=await inventory(dir,stableRuntimePath);assert.equal(a.length,5);
+  await put('python/Lib/site-packages/cv2/cv2.pyd','changed');await put('git/mingw64/bin/libcrypto-3-x64.dll','changed');
+  const b=await inventory(dir,stableRuntimePath);
+  for(const p of ['python/Lib/site-packages/cv2/cv2.pyd','git/mingw64/bin/libcrypto-3-x64.dll'])assert.notEqual(a.find(f=>f.path===p).sha256,b.find(f=>f.path===p).sha256);
+  await put('python/Lib/site-packages/cv2/__pycache__/x.pyc','new cache');await put('git/etc/gitconfig','new config');assert.deepEqual(await inventory(dir,stableRuntimePath),b);
+  const source=await readFile(new URL('../installer/light/update.ps1',import.meta.url),'utf8');assert.ok(source.indexOf('SmokeRuntime $runtimeRoot')<source.indexOf('if($Check){exit 0}'));assert.ok(source.includes('import cv2,numpy,starlette,uvicorn,pydantic,imageio_ffmpeg'));
+ }finally{await rm(dir,{recursive:true,force:true})}
+});

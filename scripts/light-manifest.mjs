@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url';
 export function safePath(p) { return typeof p === 'string' && /^[a-zA-Z0-9_. /@+-]+$/.test(p) && !p.startsWith('/') && p.split('/').every(x => x && x !== '.' && x !== '..' && !x.endsWith('.') && !x.endsWith(' ')); }
 export function owned(p) { return p === 'harmony-work.exe' || p.startsWith('resources/workbuddy-mcp-host/') || p.startsWith('resources/harmony-cut/') || p.startsWith('licenses/') || p === 'resources/artifact-runtime/THIRD_PARTY_NOTICES.txt'; }
 export function stableRuntimePath(p) {
+ if(!stableResourcePath(p)) return false;
+ if(/^python\/(?:Lib|libs)\/.*\.(?:py|pyd|dll|zip)$/i.test(p)) return true;
+ // Only immutable Git executable/support directories, never etc/config or user state.
+ if(/^git\/(?:bin|cmd|mingw64\/(?:bin|libexec\/git-core)|usr\/(?:bin|libexec|lib\/perl5))\//i.test(p) && ( /\.(?:exe|dll|sh|pl|pm|py)$/i.test(p) || !p.split('/').at(-1).includes('.') )) return true;
  return /^(node\/(node\.exe|[^/]+\.dll)|python\/(python(?:3|312)?\.(?:exe|dll)|python312\.zip|python312\._pth)|git\/(?:bin\/git\.exe|cmd\/git\.exe)|wecom\/(?:wecom-cli\.cmd|node_modules\/@wecom\/cli\/(?:package\.json|bin\/wecom\.js)))$/.test(p);
 }
 export function stableResourcePath(p) { return !/(^|\/)(__pycache__|\.cache|cache|logs|tmp|temp)(\/|$)/i.test(p) && !/\.(pyc|pyo|log)$/i.test(p); }
