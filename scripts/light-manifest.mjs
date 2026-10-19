@@ -2,7 +2,7 @@ import { readdir, lstat, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-export function safePath(p) { return typeof p === 'string' && /^[a-zA-Z0-9_. /@+-]+$/.test(p) && !p.startsWith('/') && p.split('/').every(x => x && x !== '.' && x !== '..' && !x.endsWith('.') && !x.endsWith(' ')); }
+export function safePath(p) { return typeof p === 'string' && /^[a-zA-Z0-9_. /@+\[\]()-]+$/.test(p) && !p.startsWith('/') && p.split('/').every(x => x && x !== '.' && x !== '..' && !x.endsWith('.') && !x.endsWith(' ')); }
 export function owned(p) { return p === 'harmony-work.exe' || p.startsWith('resources/workbuddy-mcp-host/') || p.startsWith('resources/harmony-cut/') || p.startsWith('licenses/') || p === 'resources/artifact-runtime/THIRD_PARTY_NOTICES.txt'; }
 export function stableRuntimePath(p) {
  if(!stableResourcePath(p)) return false;

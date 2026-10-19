@@ -86,3 +86,13 @@ test('manual update leaves running tray app untouched; automatic update only wai
  assert.ok(source.indexOf('if($Check){exit 0}')<source.indexOf('if($old -and !$Automatic)'));
  const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(nsi.includes('"/UPDATE"'));assert.ok(nsi.includes('"-Automatic"'));
 });
+test('standard Git bracket executable and localized Vim paths are accepted safely',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'light-git-names-'));
+ try {
+  for(const p of ['git/usr/bin/[.exe','git/usr/share/vim/vim91/lang/menu_chinese(gb)_gb.936.vim']) {
+   assert.equal(safePath(p),true,p);const f=join(dir,p);await mkdir(dirname(f),{recursive:true});await writeFile(f,'fixture');
+  }
+  const files=await inventory(dir,stableRuntimePath);
+  assert.deepEqual(files.map(f=>f.path),['git/usr/bin/[.exe']);
+ } finally{await rm(dir,{recursive:true,force:true})}
+});

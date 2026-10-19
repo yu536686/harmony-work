@@ -5,7 +5,7 @@ New-Item -ItemType Directory -Force $logRoot | Out-Null
 $log=Join-Path $logRoot 'light-installer.log'
 function Log($text) { Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) $text" }
 function SafeJoin($root,$relative) {
- if($relative -notmatch '^[a-zA-Z0-9_. /@+-]+$' -or $relative.StartsWith('/') -or @($relative.Split('/') | Where-Object { !$_ -or $_ -eq '.' -or $_ -eq '..' -or $_.EndsWith('.') -or $_.EndsWith(' ') }).Count) { throw "Unsafe manifest path: $relative" }
+ if($relative -notmatch '^[a-zA-Z0-9_. /@+\[\]()-]+$' -or $relative.StartsWith('/') -or @($relative.Split('/') | Where-Object { !$_ -or $_ -eq '.' -or $_ -eq '..' -or $_.EndsWith('.') -or $_.EndsWith(' ') }).Count) { throw "Unsafe manifest path: $relative" }
  $p=Join-Path $root ($relative.Replace('/','\'))
  $cursor=$p
  while($cursor -and $cursor.Length -ge $root.Length) { if((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Reparse point forbidden: $cursor" }; $cursor=Split-Path -Parent $cursor }
