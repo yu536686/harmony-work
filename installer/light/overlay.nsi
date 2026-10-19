@@ -11,6 +11,7 @@ SilentInstall normal
 SetCompressor /SOLID lzma
 ShowInstDetails show
 AutoCloseWindow true
+Page instfiles
 Var Result
 Var SilentArg
 Var CheckArg
