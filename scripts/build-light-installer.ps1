@@ -16,7 +16,7 @@ foreach($relative in @('resources\workbuddy-mcp-host','resources\harmony-cut','l
  New-Item -ItemType Directory -Force (Split-Path -Parent $dest)|Out-Null
  Copy-Item -LiteralPath $source -Destination $dest -Recurse
 }
-& node (Join-Path $PSScriptRoot 'light-manifest.mjs') $stage $BaselineInstall $BaselineManagedRuntime $Version (Join-Path $stage 'payload.manifest.json')
+& node (Join-Path $PSScriptRoot 'light-manifest.mjs') $stage $BaselineInstall $BaselineManagedRuntime $Version (Join-Path $stage 'payload.manifest.json') $InstalledPayload
 if($LASTEXITCODE -ne 0){throw 'Manifest creation failed'}
 $out=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "Harmony-Work-$Version-x64-light.exe"
 Push-Location (Join-Path $root 'installer\light')
