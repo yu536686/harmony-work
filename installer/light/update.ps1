@@ -12,10 +12,18 @@ function SafeJoin($root,$relative) {
  return $p
 }
 function Verify($root,$items) { foreach($f in $items) { $p=SafeJoin $root $f.path; if(!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-Item -LiteralPath $p).Length -ne $f.size -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $f.sha256) { throw "Missing or incompatible dependency/payload: $($f.path). Use the full offline installer." } } }
+function VerifyManagedRuntime($root,$manifest) {
+ if(!$manifest.managedRuntimeProfiles){Verify $root $manifest.managedDependencies;return}
+ $id=if((Test-Path -LiteralPath (Join-Path $root 'python/python312._pth')) -and (Test-Path -LiteralPath (Join-Path $root 'python/python312.zip'))){'python-embedded'}else{'python-standard'}
+ $profiles=@($manifest.managedRuntimeProfiles|Where-Object {$_.id -eq $id})
+ if($profiles.Count -ne 1 -or !@($profiles[0].files).Count){throw "Unsupported managed runtime layout: $id. Use the full offline installer."}
+ Verify $root $profiles[0].files
+ Log "Runtime compatibility verified profile=$id files=$(@($profiles[0].files).Count)"
+}
 function SmokeRuntime($root) {
  $checks=@(
   @{path='node/node.exe';args=@('--version')},
-  @{path='python/python.exe';args=@('-I','-B','-c','"import cv2,numpy,starlette,uvicorn,pydantic,imageio_ffmpeg"')},
+  @{path='python/python.exe';args=@('-I','-B','-c','"import cv2,numpy,starlette,uvicorn,pydantic,imageio_ffmpeg; import ssl,sqlite3,zipfile,asyncio"')},
   @{path='git/bin/git.exe';args=@('--version')}
  )
  foreach($check in $checks) {
@@ -85,7 +93,7 @@ try {
  Verify $Payload $manifest.files
  Verify $actual $manifest.dependencies
  $runtimeRoot=Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\runtime'
- Verify $runtimeRoot $manifest.managedDependencies
+ VerifyManagedRuntime $runtimeRoot $manifest
  SmokeRuntime $runtimeRoot
  $webview=@('HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKLM:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKCU:\Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}','HKLM:\Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') | Where-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv -match '^[1-9]' }
  if(!$webview){throw 'WebView2 runtime missing. Use the full offline installer.'}

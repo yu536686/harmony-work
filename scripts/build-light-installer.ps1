@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Version,[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
+param([Parameter(Mandatory=$true)][string]$Version,[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$CompatibleManagedRuntime='',[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
 $ErrorActionPreference='Stop'
 if($Version -notmatch '^1\.1\.(1|2-rc\.1)$'){throw 'Expected 1.1.1 or 1.1.2-rc.1'}
 $exe=Join-Path $InstalledPayload 'harmony-work.exe'
@@ -19,7 +19,9 @@ foreach($relative in @('resources\workbuddy-mcp-host','resources\harmony-cut','r
 }
 # Copy optional owned license directory when present; existing full installations may omit it.
 if(Test-Path -LiteralPath (Join-Path $InstalledPayload 'licenses')) { Copy-Item -LiteralPath (Join-Path $InstalledPayload 'licenses') -Destination (Join-Path $stage 'licenses') -Recurse }
-& node (Join-Path $PSScriptRoot 'light-manifest.mjs') $stage $BaselineInstall $BaselineManagedRuntime $Version (Join-Path $stage 'payload.manifest.json') $InstalledPayload
+$manifestArgs=@((Join-Path $PSScriptRoot 'light-manifest.mjs'),$stage,$BaselineInstall,$BaselineManagedRuntime,$Version,(Join-Path $stage 'payload.manifest.json'),$InstalledPayload)
+if($CompatibleManagedRuntime){$manifestArgs+=$CompatibleManagedRuntime}
+& node @manifestArgs
 if($LASTEXITCODE -ne 0){throw 'Manifest creation failed'}
 $out=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "Harmony-Work-$Version-x64-light.exe"
 Push-Location (Join-Path $root 'installer\light')

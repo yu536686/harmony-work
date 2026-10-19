@@ -96,3 +96,28 @@ test('standard Git bracket executable and localized Vim paths are accepted safel
   assert.deepEqual(files.map(f=>f.path),['git/usr/bin/[.exe']);
  } finally{await rm(dir,{recursive:true,force:true})}
 });
+test('Python native extensions are hashed in both standard and embedded layouts',()=>{
+ for(const p of ['python/DLLs/_ssl.pyd','python/DLLs/sqlite3.dll','python/_ssl.pyd','python/vcruntime140.dll'])assert.equal(stableRuntimePath(p),true,p);
+});
+test('compatible runtime profiles preserve full and embedded Python without weakening common dependencies',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'light-python-layouts-'));
+ async function put(root,p,text='reference'){const f=join(dir,root,p);await mkdir(dirname(f),{recursive:true});await writeFile(f,text)}
+ try{
+  for(const p of ['harmony-work.exe','resources/workbuddy-mcp-host/host.exe','resources/harmony-cut/server.py'])await put('payload',p);
+  for(const p of ['resources/codex/codex.exe','resources/flaui-mcp/mcp.exe','resources/playwright-mcp/cli.js'])await put('app',p);
+  const common=['node/node.exe','git/bin/git.exe','wecom/wecom-cli.cmd','python/python.exe','python/python312.dll','python/Lib/site-packages/numpy/__init__.py'];
+  for(const root of ['embedded','standard'])for(const p of common)await put(root,p);
+  for(const p of ['python/python312._pth','python/python312.zip','python/_ssl.pyd'])await put('embedded',p);
+  for(const p of ['python/Lib/os.py','python/Lib/encodings/__init__.py','python/DLLs/_ssl.pyd'])await put('standard',p);
+  const args=[join(dir,'payload'),join(dir,'app'),join(dir,'embedded'),'1.1.2-rc.1',undefined,join(dir,'standard')];
+  const m=await generate(...args);
+  assert.deepEqual(m.managedRuntimeProfiles.map(p=>p.id),['python-embedded','python-standard']);
+  const full=m.managedRuntimeProfiles[1].files;
+  assert.ok(full.some(f=>f.path==='python/Lib/os.py'));
+  assert.ok(full.some(f=>f.path==='python/DLLs/_ssl.pyd'));
+  assert.ok(!full.some(f=>f.path==='python/python312.zip'));
+  await put('standard','node/node.exe','changed');await assert.rejects(generate(...args),/Common runtime differs/);
+  await put('standard','node/node.exe');await put('standard','python/Lib/site-packages/numpy/__init__.py','changed');await assert.rejects(generate(...args),/Python dependency differs/);
+  await put('standard','python/Lib/site-packages/numpy/__init__.py');await rm(join(dir,'standard/python/Lib/encodings/__init__.py'));await assert.rejects(generate(...args),/Unsupported Python layout/);
+ }finally{await rm(dir,{recursive:true,force:true})}
+});
