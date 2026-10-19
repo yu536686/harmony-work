@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 if(![Environment]::Is64BitProcess){throw 'Run this regression test with 64-bit Windows PowerShell'}
 $installer=Join-Path (Split-Path -Parent $PSScriptRoot) 'installer\light\update.ps1'
 $source=Get-Content -LiteralPath $installer -Raw
-$from=$source.IndexOf('function Log(');$to=$source.IndexOf('$changed=@()')
+$from=$source.IndexOf('function Progress(');$to=$source.IndexOf('$changed=@()')
 if($from -lt 0 -or $to -le $from){throw 'Installer function boundary not found'}
 $fixture=Join-Path $env:TEMP ('HarmonyUpdateHandoffTest-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $fixture|Out-Null

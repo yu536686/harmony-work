@@ -12,6 +12,25 @@ use tauri_plugin_updater::UpdaterExt;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateTheme {
+    Violet,
+    Gold,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateColorMode {
+    Light,
+    Dark,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateAppearance {
+    theme: UpdateTheme,
+    color_mode: UpdateColorMode,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Available {
     version: String,
@@ -343,9 +362,25 @@ pub async fn update_install(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     service: tauri::State<'_, Arc<UpdateService>>,
+    appearance: Option<UpdateAppearance>,
 ) -> Result<UpdateSnapshot, String> {
     main_only(&window)?;
     supported(&service)?;
+    // Cosmetic preferences are isolated from account settings and never gate installation.
+    if let (Some(appearance), Some(local)) = (appearance, std::env::var_os("LOCALAPPDATA")) {
+        let directory = PathBuf::from(local)
+            .join("Harmony")
+            .join("WorkBuddy")
+            .join("updates");
+        let saved = (|| -> std::io::Result<()> {
+            std::fs::create_dir_all(&directory)?;
+            let bytes = serde_json::to_vec(&appearance)?;
+            write_atomic_health(&directory.join("appearance.json"), &bytes)
+        })();
+        if let Err(error) = saved {
+            tracing::warn!("Cannot persist updater appearance: {error}");
+        }
+    }
     // Reserve the transaction before returning, preventing duplicate button presses.
     let owned = service.inner().clone();
     let transaction = owned
@@ -677,6 +712,21 @@ mod tests {
         assert_eq!(restored.next_check_at, Some(123456));
         assert_eq!(restored.last_success, Some(100));
         assert_eq!(restored.available.unwrap().version, "1.1.2-rc.1");
+    }
+    #[test]
+    fn appearance_only_accepts_supported_theme_values_and_exports_no_settings() {
+        let a: UpdateAppearance =
+            serde_json::from_str(r#"{"theme":"gold","colorMode":"dark"}"#).unwrap();
+        let saved = serde_json::to_value(a).unwrap();
+        assert_eq!(saved.as_object().unwrap().len(), 2);
+        assert_eq!(saved["colorMode"], "dark");
+        for invalid in [
+            r#"{"theme":"bad","colorMode":"light"}"#,
+            r#"{"theme":"violet","colorMode":"bad"}"#,
+            r#"{"theme":"violet","colorMode":"light","key":"secret"}"#,
+        ] {
+            assert!(serde_json::from_str::<UpdateAppearance>(invalid).is_err());
+        }
     }
     #[tokio::test]
     async fn transaction_is_single_flight_and_guard_releases_after_cancel() {

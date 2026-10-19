@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$Version,[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$CompatibleManagedRuntime='',[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
 $ErrorActionPreference='Stop'
-if($Version -notmatch '^1\.1\.(1|2-rc\.1)$'){throw 'Expected 1.1.1 or 1.1.2-rc.1'}
+if($Version -notmatch '^1\.1\.(1|2-rc\.[1-9]\d*)$'){throw 'Expected 1.1.1 or a 1.1.2 release candidate'}
 $exe=Join-Path $InstalledPayload 'harmony-work.exe'
 $embedded=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
 if($embedded -ne $Version){throw "Embedded EXE version $embedded differs from requested $Version"}

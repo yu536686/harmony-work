@@ -23,7 +23,9 @@
 - [ ] 运行定向 Rust 和前端测试，在 Windows 缓存构建 stable/RC 两个新主程序，替换各自冻结 payload 的主程序，不修改第三方组件。
 
 ### 4. 实机与发布
-- [ ] Windows 构建两份 r5 包，签名并验证原包和篡改字节。交互桌面检查窗口浅/深色、失败/关闭/重试、CHECK 无 GUI。
+- [ ] Windows 构建两份 r6 包，签名并验证原包和篡改字节。交互桌面检查窗口浅/深色、失败/关闭/重试、CHECK 无 GUI。
 - [ ] 隔离账号安装 stable 后走真实 CDN 更新到 RC，检查版本、健康回执、会话/配置/工作区与运行环境。
-- [ ] 先上传不可变 r5 EXE 并全量下载核对 SHA，最后切换 stable/preview JSON 和官网轻量入口。保持既有 full 包。
+- [ ] 先上传不可变 r6 EXE 并全量下载核对 SHA，最后切换 stable/preview JSON 和官网轻量入口。保持既有 full 包。
 - [ ] 清理测试客户端/任务/临时凭据，提交推送代码和验收报告。
+
+生产构建必须显式启用 `--features tauri/custom-protocol`。实机断言生产 URL 与已渲染 root，不由测试脚本调用 update_status 人工制造健康回执。
