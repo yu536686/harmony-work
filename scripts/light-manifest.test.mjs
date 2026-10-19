@@ -32,3 +32,26 @@ test('transaction validates dependencies before overlay and retains rollback bac
  assert.ok(!source.includes('Remove-Item -LiteralPath $InstallDirectory'));
  const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(!nsi.includes('WriteUninstaller'));assert.ok(!nsi.includes('ExecWait'));
 });
+import {stableRuntimePath, inventory} from './light-manifest.mjs';
+test('managed runtime compatibility ignores markers, caches, tools but hashes node',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'light-runtime-'));
+ async function put(p,text){const f=join(dir,p);await mkdir(dirname(f),{recursive:true});await writeFile(f,text)}
+ try {
+  await put('node/node.exe','stable node');await put('python/python.exe','stable python');await put('managed-runtime.json','{"installedAt":"yesterday"}');await put('python/Lib/site-packages/__pycache__/module.pyc','cache1');await put('tools/Harmony-Work-Uninstaller.exe','uninstaller1');
+  const a=await inventory(dir,stableRuntimePath);
+  await put('managed-runtime.json','{"installedAt":"today"}');await put('python/Lib/site-packages/__pycache__/module.pyc','cache2');await put('tools/Harmony-Work-Uninstaller.exe','uninstaller2');
+  assert.deepEqual(await inventory(dir,stableRuntimePath),a);
+  await put('node/node.exe','changed node');
+  const b=await inventory(dir,stableRuntimePath);assert.notEqual(a.find(f=>f.path==='node/node.exe').sha256,b.find(f=>f.path==='node/node.exe').sha256);
+  assert.equal(b.some(f=>f.path.includes('pyc')||f.path.startsWith('tools/')||f.path==='managed-runtime.json'),false);
+ }finally{await rm(dir,{recursive:true,force:true})}
+});
+test('license directory optional and updater uses verified WebView2 GUID and dry-run',async()=>{
+ const source=await readFile(new URL('../installer/light/update.ps1',import.meta.url),'utf8');
+ assert.ok(source.includes('{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'));
+ assert.ok(source.includes('if($Check){exit 0}'));
+ assert.ok(source.indexOf('if($Check){exit 0}')<source.indexOf('RecoverTransactions $actual'));
+ assert.ok(source.indexOf("WriteJournal 'pending';New-Item")<source.lastIndexOf(' -Destination $target -Force}'));
+ assert.ok(source.includes("WriteJournal 'committed'"));
+ const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(nsi.includes('"/CHECK"'));
+});
