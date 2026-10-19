@@ -38,6 +38,7 @@ import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
 import { UpdateBadge } from "./updates/UpdateControls";
+import { nativeUpdateStore } from "./updates/nativeUpdateStore";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { useMacNativeMenu } from "./components/ui/useMacNativeMenu";
@@ -879,6 +880,9 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    if (IS_WINDOWS && !IS_OVERLAY) void nativeUpdateStore.connect();
+  }, []);
   if (IS_OVERLAY) {
     return (
       <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{i18n.t("common.loadingApp")}</p></div>}>
