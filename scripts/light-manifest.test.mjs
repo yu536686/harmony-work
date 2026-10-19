@@ -51,7 +51,7 @@ test('license directory optional and updater uses verified WebView2 GUID and dry
  assert.ok(source.includes('{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'));
  assert.ok(source.includes('if($Check){exit 0}'));
  assert.ok(source.indexOf('if($Check){exit 0}')<source.indexOf('RecoverTransactions $actual'));
- assert.ok(source.indexOf("WriteJournal 'pending';New-Item")<source.lastIndexOf(' -Destination $target -Force}'));
+ assert.ok(source.indexOf("WriteJournal 'pending';New-Item")<source.lastIndexOf(' -Destination $target -Force;'));
  assert.ok(source.includes("WriteJournal 'committed'"));
  const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(nsi.includes('"/CHECK"'));
 });
@@ -74,7 +74,7 @@ test('preflight probes write permissions and failure restores validated prior ap
  assert.ok(source.indexOf('ProbeInstallWrite $actual')<source.indexOf('if($Check){exit 0}'));
  assert.ok(source.includes('[IO.FileMode]::CreateNew'));assert.ok(source.includes('$stream.Flush($true)'));
  assert.ok(source.includes(".VersionInfo.ProductName -eq 'Harmony Work'"));
- assert.ok(source.includes('if(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed)'));
+ assert.ok(source.includes('$safeRestart=(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed)'));assert.ok(source.includes('if($safeRestart -and !$ProgressFile)'));
  assert.ok(source.includes('if(!$running){Start-Process -FilePath $originalExe'));
  assert.ok(source.includes('catch {continue} # A partially published ack'));
  assert.ok(source.includes("throw 'Updated application health acknowledgement does not match this transaction'"));

@@ -7,7 +7,7 @@ Name "Harmony Work ${VERSION} Light Update"
 OutFile "${OUTPUT}"
 RequestExecutionLevel user
 InstallDir ""
-SilentInstall normal
+SilentInstall silent
 SetCompressor /SOLID lzma
 ShowInstDetails show
 AutoCloseWindow true
@@ -39,22 +39,6 @@ Function .onInit
  ${If} ${RunningX64}
   StrCpy $PowerShellExe "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
  ${EndIf}
- ${If} $AutomaticArg != ""
- ${AndIf} $CheckArg == ""
-  SetSilent normal
- ${EndIf}
-FunctionEnd
-Function .onGUIInit
- ${If} $AutomaticArg != ""
-  GetDlgItem $0 $HWNDPARENT 2
-  EnableWindow $0 0
- ${EndIf}
-FunctionEnd
-Function .onUserAbort
- ${If} $AutomaticArg != ""
- ${AndIf} $Result == ""
-  Abort
- ${EndIf}
 FunctionEnd
 Section
  InitPluginsDir
@@ -63,14 +47,13 @@ Section
  File /r "${PAYLOAD}\*"
  SetOutPath "$PLUGINSDIR"
  File "update.ps1"
+ File "progress.ps1"
+ File "window.ps1"
+ File "launcher.ps1"
+ File "ProgressWindow.xaml"
+ File /oname=brand.png "..\..\assets\branding\harmony-work-icon-original.png"
  DetailPrint "正在检查运行环境并安装更新，请等待完成。"
- nsExec::ExecToLog '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update.ps1" -Payload "$PLUGINSDIR\payload" -InstallDirectory "$INSTDIR" $SilentArg $CheckArg $AutomaticArg'
+ nsExec::ExecToLog '"$PowerShellExe" -NoProfile -STA -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\launcher.ps1" -Payload "$PLUGINSDIR\payload" -InstallDirectory "$INSTDIR" $SilentArg $CheckArg $AutomaticArg'
  Pop $Result
- ${If} $Result != 0
-  DetailPrint "更新未完成，请查看上方详情和更新日志。"
-  SetAutoClose false
- ${Else}
-  SetAutoClose true
- ${EndIf}
  SetErrorLevel $Result
 SectionEnd

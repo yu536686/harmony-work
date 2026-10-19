@@ -1,8 +1,10 @@
-param([Parameter(Mandatory=$true)][string]$Payload,[string]$InstallDirectory,[switch]$Silent,[switch]$Check,[switch]$Automatic)
+﻿param([Parameter(Mandatory=$true)][string]$Payload,[string]$InstallDirectory,[switch]$Silent,[switch]$Check,[switch]$Automatic,[string]$ProgressFile)
 $ErrorActionPreference='Stop'
 $logRoot=if($Check){Join-Path $env:TEMP 'HarmonyWorkUpdateCheck'}else{Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\updates'}
 New-Item -ItemType Directory -Force $logRoot | Out-Null
 $log=Join-Path $logRoot 'light-installer.log'
+. (Join-Path $PSScriptRoot 'progress.ps1')
+function Progress($phase,$detail,$completed=$null,$total=$null,[bool]$safeRestart=$false,[string]$restartPath='') {try {WriteUpdateProgress -Path $ProgressFile -Phase $phase -Detail $detail -Completed $completed -Total $total -SafeRestart $safeRestart -RestartPath $restartPath}catch{}}
 function Log($text) { Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) $text"; Write-Host $text }
 function SafeJoin($root,$relative) {
  if($relative -notmatch '^[a-zA-Z0-9_. /@+\[\]()-]+$' -or $relative.StartsWith('/') -or @($relative.Split('/') | Where-Object { !$_ -or $_ -eq '.' -or $_ -eq '..' -or $_.EndsWith('.') -or $_.EndsWith(' ') }).Count) { throw "Unsafe manifest path: $relative" }
@@ -11,13 +13,21 @@ function SafeJoin($root,$relative) {
  while($cursor -and $cursor.Length -ge $root.Length) { if((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Reparse point forbidden: $cursor" }; $cursor=Split-Path -Parent $cursor }
  return $p
 }
-function Verify($root,$items) { foreach($f in $items) { $p=SafeJoin $root $f.path; if(!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-Item -LiteralPath $p).Length -ne $f.size -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $f.sha256) { throw "Missing or incompatible dependency/payload: $($f.path). Use the full offline installer." } } }
+function Verify($root,$items,[string]$description='') {
+ $done=0;$count=@($items).Count
+ foreach($f in $items) {
+  $p=SafeJoin $root $f.path
+  if(!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-Item -LiteralPath $p).Length -ne $f.size -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $f.sha256){throw "Missing or incompatible dependency/payload: $($f.path). Use the full offline installer."}
+  $done++
+  if($description -and ($done % 25 -eq 0 -or $done -eq $count)){Progress 'verifying' $description $done $count}
+ }
+}
 function VerifyManagedRuntime($root,$manifest) {
- if(!$manifest.managedRuntimeProfiles){Verify $root $manifest.managedDependencies;return}
+ if(!$manifest.managedRuntimeProfiles){Verify $root $manifest.managedDependencies '正在校验运行环境';return}
  $id=if((Test-Path -LiteralPath (Join-Path $root 'python/python312._pth')) -and (Test-Path -LiteralPath (Join-Path $root 'python/python312.zip'))){'python-embedded'}else{'python-standard'}
  $profiles=@($manifest.managedRuntimeProfiles|Where-Object {$_.id -eq $id})
  if($profiles.Count -ne 1 -or !@($profiles[0].files).Count){throw "Unsupported managed runtime layout: $id. Use the full offline installer."}
- Verify $root $profiles[0].files
+ Verify $root $profiles[0].files '正在校验运行环境'
  Log "Runtime compatibility verified profile=$id files=$(@($profiles[0].files).Count)"
 }
 function SmokeRuntime($root) {
@@ -51,7 +61,7 @@ function WaitForProductExit($exe,[int]$timeoutSeconds=120) {
  $deadline=[DateTime]::UtcNow.AddSeconds($timeoutSeconds)
  $announced=$false
  while(@(GetRunningProduct $exe).Count) {
-  if(!$announced){Log 'Waiting for Harmony Work to exit. Do not reopen the client until the update completes.';$announced=$true}
+  if(!$announced){Progress 'waiting' '正在等待客户端退出，请暂时不要重新打开';Log 'Waiting for Harmony Work to exit. Do not reopen the client until the update completes.';$announced=$true}
   if([DateTime]::UtcNow -ge $deadline){throw 'Harmony Work is still running. Choose Exit from the tray menu and retry.'}
   Start-Sleep -Milliseconds 250
  }
@@ -98,6 +108,7 @@ $changed=@(); $transaction=$null; $child=$null; $mutex=$null; $originalExe=$null
 try {
  if(![Environment]::Is64BitProcess){throw 'The light updater requires 64-bit PowerShell. Run the signed lightweight installer instead of a 32-bit script host.'}
  $mutex=New-Object Threading.Mutex($false,'Local\HarmonyWorkLightUpdate'); if(!$mutex.WaitOne(0)){throw 'Another update is running'}
+ Progress 'preparing' '正在准备更新'
  Log "START check=$Check automatic=$Automatic architecture=x64"
  $keys=@(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'Harmony Work' -and $_.InstallLocation })
  if($keys.Count -ne 1){throw 'Existing per-user Harmony Work installation not found. Use the full offline installer.'}
@@ -113,9 +124,10 @@ try {
  if($manifest.schemaVersion -ne 1 -or $manifest.mainExe -ne 'harmony-work.exe'){throw 'Invalid manifest schema'}
  foreach($f in $manifest.files) { if(!(OwnedPath $f.path)){throw 'Forbidden overlay destination'}; $null=SafeJoin $actual $f.path }
  if($Automatic -and !$Check){WaitForProductExit $originalExe}
+ Progress 'verifying' '正在校验更新内容'
  Log 'Verifying update payload and installed dependencies.'
- Verify $Payload $manifest.files
- Verify $actual $manifest.dependencies
+ Verify $Payload $manifest.files '正在校验更新内容'
+ Verify $actual $manifest.dependencies '正在校验应用组件'
  $runtimeRoot=Join-Path $env:LOCALAPPDATA 'Harmony\WorkBuddy\runtime'
  VerifyManagedRuntime $runtimeRoot $manifest
  SmokeRuntime $runtimeRoot
@@ -131,6 +143,7 @@ try {
  if($old -and !$Automatic){throw 'Please choose Exit from the Harmony Work tray menu, then run the lightweight installer again.'}
  WaitForProductExit $exe
  foreach($f in $manifest.files|Where-Object {$_.path.EndsWith('.exe')}){WaitForInstallAccess (SafeJoin $actual $f.path)}
+ Progress 'staging' '正在备份当前版本'
  Log 'Preparing recovery and staged application files.'
  try { RecoverTransactions $actual $key } catch { $recoveryFailed=$true;throw }
  $transaction=Join-Path $actual ('.harmony-update-'+[guid]::NewGuid().ToString('N'))
@@ -138,9 +151,11 @@ try {
  foreach($f in $manifest.files){$stage=SafeJoin "$transaction\stage" $f.path; New-Item -ItemType Directory -Force (Split-Path -Parent $stage)|Out-Null; Copy-Item -LiteralPath (SafeJoin $Payload $f.path) -Destination $stage}
  Verify "$transaction\stage" $manifest.files
  WriteJournal 'pending'
- foreach($f in $manifest.files){Log "Installing $($f.path)";$target=SafeJoin $actual $f.path;$backup=SafeJoin "$transaction\backup" $f.path;$existed=Test-Path -LiteralPath $target; if($existed){New-Item -ItemType Directory -Force (Split-Path -Parent $backup)|Out-Null;Copy-Item -LiteralPath $target -Destination $backup};$backupInfo=if($existed){Get-Item -LiteralPath $backup}else{$null};$backupHash=if($existed){(Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash}else{$null};$changed+=@{path=$f.path;target=$target;backup=$backup;existed=$existed;size=$backupInfo.Length;sha256=$backupHash};WriteJournal 'pending';New-Item -ItemType Directory -Force (Split-Path -Parent $target)|Out-Null;Copy-Item -LiteralPath (SafeJoin "$transaction\stage" $f.path) -Destination $target -Force}
+ $copied=0
+ foreach($f in $manifest.files){Log "Installing $($f.path)";$target=SafeJoin $actual $f.path;$backup=SafeJoin "$transaction\backup" $f.path;$existed=Test-Path -LiteralPath $target; if($existed){New-Item -ItemType Directory -Force (Split-Path -Parent $backup)|Out-Null;Copy-Item -LiteralPath $target -Destination $backup};$backupInfo=if($existed){Get-Item -LiteralPath $backup}else{$null};$backupHash=if($existed){(Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash}else{$null};$changed+=@{path=$f.path;target=$target;backup=$backup;existed=$existed;size=$backupInfo.Length;sha256=$backupHash};WriteJournal 'pending';New-Item -ItemType Directory -Force (Split-Path -Parent $target)|Out-Null;Copy-Item -LiteralPath (SafeJoin "$transaction\stage" $f.path) -Destination $target -Force;$copied++;Progress 'copying' '正在安装更新' $copied @($manifest.files).Count}
  $health=Join-Path $transaction 'health.json';$token=[guid]::NewGuid().ToString('N')
  $env:HARMONY_UPDATE_HEALTH_FILE=$health;$env:HARMONY_UPDATE_HEALTH_TOKEN=$token
+ Progress 'starting' '正在启动新版客户端'
  Log 'Starting the updated client and waiting for startup acknowledgement.'
  $child=Start-Process -FilePath $exe -PassThru
  Remove-Item Env:HARMONY_UPDATE_HEALTH_FILE,Env:HARMONY_UPDATE_HEALTH_TOKEN
@@ -156,23 +171,29 @@ try {
   }
  }while((Get-Date) -lt $deadline)
  if(!$healthy){throw 'Updated application did not acknowledge healthy startup'}
+ Progress 'starting' '正在确认新版运行正常'
  Start-Sleep -Seconds 15;$child.Refresh();if($child.HasExited){throw 'Updated application failed stability check'}
  Set-ItemProperty -LiteralPath $key.PSPath -Name DisplayVersion -Value $manifest.version
  WriteJournal 'committed'
  Log "SUCCESS version=$($manifest.version) directory=$actual"
  Remove-Item -LiteralPath $transaction -Recurse -Force -ErrorAction SilentlyContinue
+ Progress 'complete' '更新已完成，正在返回客户端'
  exit 0
 } catch {
  $failure=$_.Exception.Message
+ Progress 'rollback' '正在恢复原版本'
  if($child -and !$child.HasExited){Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue; $child.WaitForExit(10000)|Out-Null}
  $rollbackErrors=@()
  [array]::Reverse($changed)
  foreach($c in $changed){try{if($c.existed){Copy-Item -LiteralPath $c.backup -Destination $c.target -Force}else{Remove-Item -LiteralPath $c.target -Force -ErrorAction Stop}}catch{$rollbackErrors+=$_.Exception.Message}}
  Log "FAILED $failure rollbackErrors=$($rollbackErrors -join '; ') backup=$transaction"
- if(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed) {
+ $safeRestart=(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed)
+ $message=if($failure -like '*still running*' -or $failure -like 'Please choose Exit*'){'请先从托盘退出客户端，再点击重试。'}elseif($failure -like 'Missing or incompatible*' -or $failure -like '*Runtime preflight*'){'运行环境校验未通过，请查看日志或使用完整安装包。'}elseif($safeRestart){'更新未完成，原版本已恢复。可以重试或返回客户端。'}else{'更新未完成。请查看日志或使用完整安装包修复。'}
+ Progress 'failed' $message $null $null $safeRestart $originalExe
+ if($safeRestart -and !$ProgressFile) {
   $running=@(GetRunningProduct $originalExe)
   if(!$running){Start-Process -FilePath $originalExe -ErrorAction SilentlyContinue}
  }
- if(!$Silent){Add-Type -AssemblyName PresentationFramework;[Windows.MessageBox]::Show("Harmony Work update failed: $failure`nLog: $log`nRollback errors: $($rollbackErrors -join '; ')",'Harmony Work update')|Out-Null}
+ if(!$Silent -and !$ProgressFile){Add-Type -AssemblyName PresentationFramework;[Windows.MessageBox]::Show("Harmony Work update failed: $failure`nLog: $log`nRollback errors: $($rollbackErrors -join '; ')",'Harmony Work update')|Out-Null}
  exit 1
 } finally {if($mutex){try{$mutex.ReleaseMutex()}catch{};$mutex.Dispose()}}
