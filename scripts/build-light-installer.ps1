@@ -1,10 +1,11 @@
-param([Parameter(Mandatory=$true)][string]$Version,[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$OutputDirectory=(Join-Path $PSScriptRoot '..\release\light'),[string]$MakeNsis='makensis.exe')
+param([Parameter(Mandatory=$true)][string]$Version,[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
 $ErrorActionPreference='Stop'
 if($Version -notmatch '^1\.1\.(1|2-rc\.1)$'){throw 'Expected 1.1.1 or 1.1.2-rc.1'}
 $exe=Join-Path $InstalledPayload 'harmony-work.exe'
 $embedded=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
 if($embedded -ne $Version){throw "Embedded EXE version $embedded differs from requested $Version"}
 $root=Split-Path -Parent $PSScriptRoot
+if(!$OutputDirectory){$OutputDirectory=Join-Path $root 'release\light'}
 $stage=Join-Path $root 'installer\.build\light'
 Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage,$OutputDirectory|Out-Null
