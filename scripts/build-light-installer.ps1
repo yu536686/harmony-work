@@ -25,5 +25,5 @@ if($CompatibleManagedRuntime){$manifestArgs+=$CompatibleManagedRuntime}
 if($LASTEXITCODE -ne 0){throw 'Manifest creation failed'}
 $out=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "Harmony-Work-$Version-x64-light.exe"
 Push-Location (Join-Path $root 'installer\light')
-try{& $MakeNsis "/DVERSION=$Version" "/DPAYLOAD=$stage" "/DOUTPUT=$out" 'overlay.nsi';if($LASTEXITCODE -ne 0){throw 'NSIS compilation failed'}}finally{Pop-Location}
+try{& $MakeNsis '/INPUTCHARSET' 'UTF8' "/DVERSION=$Version" "/DPAYLOAD=$stage" "/DOUTPUT=$out" 'overlay.nsi';if($LASTEXITCODE -ne 0){throw 'NSIS compilation failed'}}finally{Pop-Location}
 Get-FileHash -LiteralPath $out -Algorithm SHA256
