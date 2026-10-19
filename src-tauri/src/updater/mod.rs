@@ -381,6 +381,17 @@ pub async fn update_install(
     });
     Ok(service.snapshot())
 }
+fn installer_directory_arg(command: &mut std::process::Command, directory: &std::path::Path) {
+    // NSIS consumes the remainder after /D=, so it must be last and unquoted.
+    // Windows Command::arg would quote the entire argument when spaces occur.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.raw_arg(format!("/D={}", directory.display()));
+    }
+    #[cfg(not(windows))]
+    command.arg(format!("/D={}", directory.display()));
+}
 async fn install(
     app: &tauri::AppHandle,
     service: &UpdateService,
@@ -439,10 +450,8 @@ async fn install(
     // The verified installer owns the compatibility schema. Its dry run hashes
     // baseline dependencies and checks writable path / free space before exit.
     let mut preflight = tokio::process::Command::new(&installer);
-    preflight
-        .args(["/S", "/CHECK"])
-        .arg(format!("/D={}", directory.display()))
-        .kill_on_drop(true);
+    preflight.args(["/S", "/CHECK"]).kill_on_drop(true);
+    installer_directory_arg(preflight.as_std_mut(), directory);
     let status = tokio::select! {
         _=cancel.cancelled()=>{let _=std::fs::remove_dir_all(&stage);return Ok(());},
         result=tokio::time::timeout(Duration::from_secs(120),preflight.status())=>result.map_err(|_|"更新兼容性检查超时")?.map_err(|e|format!("无法检查更新兼容性: {e}"))?
@@ -474,9 +483,8 @@ async fn install(
         crate::app::shutdown::prepare_shutdown(&state).await;
     }
     let mut command = std::process::Command::new(&installer);
-    command
-        .args(["/S", "/UPDATE", "/R"])
-        .arg(format!("/D={}", directory.display()));
+    command.args(["/S", "/UPDATE", "/R"]);
+    installer_directory_arg(&mut command, directory);
     command
         .spawn()
         .map_err(|e| format!("无法启动更新安装器: {e}"))?;
@@ -556,18 +564,83 @@ pub fn setup(app: &tauri::AppHandle) {
     }
 }
 
+fn write_atomic_health(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "health target lacks parent",
+        )
+    })?;
+    let temporary = parent.join(format!(".health-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        // Same-directory replacement exposes either the complete old or new JSON.
+        std::fs::rename(&temporary, target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+fn valid_health_target(install: &std::path::Path, target: &std::path::Path) -> bool {
+    if !target.is_absolute() || target.file_name().and_then(|s| s.to_str()) != Some("health.json") {
+        return false;
+    }
+    let Some(parent) = target.parent() else {
+        return false;
+    };
+    let Some(name) = parent
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.strip_prefix(".harmony-update-"))
+    else {
+        return false;
+    };
+    if name.len() != 32 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let Ok(parent) = parent.canonicalize() else {
+        return false;
+    };
+    let Ok(install) = install.canonicalize() else {
+        return false;
+    };
+    parent.parent() == Some(install.as_path())
+}
 fn acknowledge_health(app: &tauri::AppHandle) {
-    // Called from main-window IPC after the frontend initializes.
-    if app.get_webview_window("main").is_some() {
-        if let (Ok(file), Ok(token)) = (
-            std::env::var("HARMONY_UPDATE_HEALTH_FILE"),
-            std::env::var("HARMONY_UPDATE_HEALTH_TOKEN"),
-        ) {
-            let _ = std::fs::write(
-                file,
-                serde_json::json!({"token":token,"version":app.package_info().version.to_string()})
-                    .to_string(),
-            );
+    // Called from main-window IPC after the frontend initializes. Installer
+    // environment is accepted only for its existing transaction under install.
+    if app.get_webview_window("main").is_none() {
+        return;
+    }
+    if let (Ok(file), Ok(token), Ok(exe)) = (
+        std::env::var("HARMONY_UPDATE_HEALTH_FILE"),
+        std::env::var("HARMONY_UPDATE_HEALTH_TOKEN"),
+        std::env::current_exe(),
+    ) {
+        if token.len() != 32 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return;
+        }
+        let target = std::path::Path::new(&file);
+        if !exe
+            .parent()
+            .is_some_and(|install| valid_health_target(install, target))
+        {
+            return;
+        }
+        let bytes =
+            serde_json::json!({"token":token,"version":app.package_info().version.to_string()})
+                .to_string();
+        if let Err(error) = write_atomic_health(target, bytes.as_bytes()) {
+            tracing::warn!("Updater health acknowledgement failed: {error}");
         }
     }
 }
@@ -621,6 +694,64 @@ mod tests {
         saved.record_failure(10);
         assert_eq!(saved.available.unwrap().version, "1.2.0");
         assert_eq!(saved.next_check_at, Some(310));
+    }
+    #[test]
+    fn health_target_is_confined_to_installer_transaction() {
+        let root =
+            std::env::temp_dir().join(format!("harmony-health-target-{}", uuid::Uuid::new_v4()));
+        let transaction = root.join(format!(".harmony-update-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&transaction).unwrap();
+        assert!(valid_health_target(&root, &transaction.join("health.json")));
+        assert!(!valid_health_target(
+            &root,
+            &transaction.join("settings.json")
+        ));
+        assert!(!valid_health_target(
+            &transaction,
+            &transaction.join("health.json")
+        ));
+        assert!(!valid_health_target(
+            &root,
+            std::path::Path::new("relative/health.json")
+        ));
+        assert!(!valid_health_target(&root, &root.join("health.json")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn health_ack_is_atomic_for_concurrent_readers() {
+        let dir =
+            std::env::temp_dir().join(format!("harmony-health-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let target = dir.join("health.json");
+        let bytes =
+            serde_json::to_vec(&serde_json::json!({"token":"first","version":"1.1.1"})).unwrap();
+        write_atomic_health(&target, &bytes).unwrap();
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let reader_flag = running.clone();
+        let reader_target = target.clone();
+        let reader = std::thread::spawn(move || {
+            let mut reads = 0;
+            while reader_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                let data = std::fs::read(&reader_target).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                assert_eq!(json["version"], "1.1.1");
+                reads += 1;
+            }
+            reads
+        });
+        for i in 0..100 {
+            write_atomic_health(
+                &target,
+                &serde_json::to_vec(&serde_json::json!({"token":i,"version":"1.1.1"})).unwrap(),
+            )
+            .unwrap();
+        }
+        running.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(reader.join().unwrap() > 0);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        assert!(write_atomic_health(&dir.join("missing/health.json"), &bytes).is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn ipc_snapshot_is_camel_case() {
