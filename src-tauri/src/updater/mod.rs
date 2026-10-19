@@ -41,6 +41,15 @@ struct Saved {
     available: Option<Available>,
 }
 impl Saved {
+    fn clear_obsolete_available(&mut self, current: &semver::Version) {
+        if self.available.as_ref().is_some_and(|available| {
+            semver::Version::parse(&available.version)
+                .map(|version| version <= *current)
+                .unwrap_or(true)
+        }) {
+            self.available = None;
+        }
+    }
     fn record_failure(&mut self, at: u64) {
         self.failures = self.failures.saturating_add(1);
         self.next_check_at = Some(policy::failure_due(at, self.failures));
@@ -488,6 +497,7 @@ async fn install(
     command
         .spawn()
         .map_err(|e| format!("无法启动更新安装器: {e}"))?;
+    _quiesce.commit();
     crate::app::shutdown::request_app_exit(app.clone());
     Ok(())
 }
@@ -509,6 +519,7 @@ pub fn setup(app: &tauri::AppHandle) {
         saved.channel = "stable".into();
         saved.available = None;
     }
+    saved.clear_obsolete_available(&app.package_info().version);
     if saved.next_check_at.is_none() {
         saved.next_check_at = Some(now() + 30 + jitter(30));
     }
@@ -752,6 +763,31 @@ mod tests {
         assert!(write_atomic_health(&dir.join("missing/health.json"), &bytes).is_err());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn startup_clears_installed_older_and_invalid_cached_updates() {
+        let current = semver::Version::parse("1.1.2-rc.1").unwrap();
+        for (version, retained) in [
+            ("1.1.2-rc.1", false),
+            ("1.1.1", false),
+            ("invalid", false),
+            ("1.1.2", true),
+            ("1.1.2-rc.2", true),
+        ] {
+            let mut saved = Saved {
+                available: Some(Available {
+                    version: version.into(),
+                    notes: String::new(),
+                    date: None,
+                    download_url: String::new(),
+                }),
+                next_check_at: Some(123456),
+                ..Default::default()
+            };
+            saved.clear_obsolete_available(&current);
+            assert_eq!(saved.available.is_some(), retained, "{version}");
+            assert_eq!(saved.next_check_at, Some(123456));
+        }
     }
     #[test]
     fn ipc_snapshot_is_camel_case() {

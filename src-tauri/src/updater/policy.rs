@@ -39,6 +39,21 @@ mod tests {
         assert!(admit_work().is_ok());
     }
     #[test]
+    fn committed_handoff_never_reopens_admission() {
+        let state = std::sync::Mutex::new(Admission::default());
+        {
+            let waiting = Quiesce::for_state(&state);
+            assert!(state.lock().unwrap().blocked);
+            drop(waiting);
+        }
+        assert!(!state.lock().unwrap().blocked);
+        {
+            let waiting = Quiesce::for_state(&state);
+            waiting.commit();
+        }
+        assert!(state.lock().unwrap().blocked);
+    }
+    #[test]
     fn preview_is_explicit() {
         assert!(valid_channel("stable"));
         assert!(valid_channel("preview"));
@@ -97,18 +112,34 @@ pub fn admit_work() -> Result<WorkPermit, &'static str> {
         _inner: std::sync::Arc::new(PermitInner),
     })
 }
-pub struct Quiesce;
-impl Quiesce {
+pub struct Quiesce<'a> {
+    state: &'a std::sync::Mutex<Admission>,
+    committed: bool,
+}
+impl Quiesce<'static> {
     pub fn begin() -> Self {
-        ADMISSION.lock().unwrap().blocked = true;
-        Self
-    }
-    pub fn ready(&self) -> bool {
-        ADMISSION.lock().unwrap().active == 0
+        Self::for_state(&ADMISSION)
     }
 }
-impl Drop for Quiesce {
+impl<'a> Quiesce<'a> {
+    fn for_state(state: &'a std::sync::Mutex<Admission>) -> Self {
+        state.lock().unwrap().blocked = true;
+        Self {
+            state,
+            committed: false,
+        }
+    }
+    pub fn ready(&self) -> bool {
+        self.state.lock().unwrap().active == 0
+    }
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+}
+impl Drop for Quiesce<'_> {
     fn drop(&mut self) {
-        ADMISSION.lock().unwrap().blocked = false;
+        if !self.committed {
+            self.state.lock().unwrap().blocked = false;
+        }
     }
 }

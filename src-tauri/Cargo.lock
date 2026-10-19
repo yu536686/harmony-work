@@ -2149,6 +2149,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rusqlite",
  "russh",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

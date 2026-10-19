@@ -74,6 +74,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-updater = "=2.10.1"
 updater-reqwest = { package = "reqwest", version = "0.13", default-features = false }
 fs2 = "0.4"
+semver = "1"
 tauri-plugin-process = "2"
 
 # Async runtime
