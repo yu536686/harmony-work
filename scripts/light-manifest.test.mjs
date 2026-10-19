@@ -28,7 +28,7 @@ test('transaction validates dependencies before overlay and retains rollback bac
  assert.ok(source.indexOf('Verify $actual $manifest.dependencies')<source.indexOf('$transaction=Join-Path'));
  assert.ok(source.includes('[array]::Reverse($changed)'));
  assert.ok(source.includes('HARMONY_UPDATE_HEALTH_TOKEN'));
- assert.ok(source.includes("$ack.version -eq $manifest.version"));
+ assert.ok(source.includes("$ack.version -ne $manifest.version"));
  assert.ok(!source.includes('Remove-Item -LiteralPath $InstallDirectory'));
  const nsi=await readFile(new URL('../installer/light/overlay.nsi',import.meta.url),'utf8');assert.ok(!nsi.includes('WriteUninstaller'));assert.ok(!nsi.includes('ExecWait'));
 });
@@ -68,4 +68,14 @@ test('Python extension and Git support hashes detect changes while caches/config
   await put('python/Lib/site-packages/cv2/__pycache__/x.pyc','new cache');await put('git/etc/gitconfig','new config');assert.deepEqual(await inventory(dir,stableRuntimePath),b);
   const source=await readFile(new URL('../installer/light/update.ps1',import.meta.url),'utf8');assert.ok(source.indexOf('SmokeRuntime $runtimeRoot')<source.indexOf('if($Check){exit 0}'));assert.ok(source.includes('import cv2,numpy,starlette,uvicorn,pydantic,imageio_ffmpeg'));
  }finally{await rm(dir,{recursive:true,force:true})}
+});
+test('preflight probes write permissions and failure restores validated prior app',async()=>{
+ const source=await readFile(new URL('../installer/light/update.ps1',import.meta.url),'utf8');
+ assert.ok(source.indexOf('ProbeInstallWrite $actual')<source.indexOf('if($Check){exit 0}'));
+ assert.ok(source.includes('[IO.FileMode]::CreateNew'));assert.ok(source.includes('$stream.Flush($true)'));
+ assert.ok(source.includes(".VersionInfo.ProductName -eq 'Harmony Work'"));
+ assert.ok(source.includes('if(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed)'));
+ assert.ok(source.includes('if(!$running){Start-Process -FilePath $originalExe'));
+ assert.ok(source.includes('catch {continue} # A partially published ack'));
+ assert.ok(source.includes("throw 'Updated application health acknowledgement does not match this transaction'"));
 });

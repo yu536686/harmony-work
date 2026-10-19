@@ -28,6 +28,16 @@ function SmokeRuntime($root) {
   } finally {if($process){$process.Dispose()}}
  }
 }
+function ProbeInstallWrite($root) {
+ $probe=SafeJoin $root ('.harmony-write-probe-'+[guid]::NewGuid().ToString('N'))
+ $stream=$null
+ try {
+  $stream=[IO.File]::Open($probe,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  $stream.WriteByte(1);$stream.Flush($true);$stream.Dispose();$stream=$null
+  Remove-Item -LiteralPath $probe -Force
+ } catch {throw "Installation directory is not writable: $root. $($_.Exception.Message)"}
+ finally {if($stream){$stream.Dispose()};if(Test-Path -LiteralPath $probe){Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue}}
+}
 function OwnedPath($p) { return $p -eq 'harmony-work.exe' -or $p -match '^(resources/(workbuddy-mcp-host|harmony-cut)/|licenses/|resources/artifact-runtime/THIRD_PARTY_NOTICES.txt$)' }
 function WriteJournal($state) {
  $journal=@{schemaVersion=1;installDirectory=$InstallDirectory;previousVersion=$key.DisplayVersion;state=$state;changes=@($changed | ForEach-Object { @{path=$_.path;existed=$_.existed;sha256=$_.sha256;size=$_.size} })}
@@ -56,7 +66,7 @@ function RecoverTransactions($root,$registryKey) {
   Remove-Item -LiteralPath $dir.FullName -Recurse -Force
  }
 }
-$changed=@(); $transaction=$null; $child=$null; $mutex=$null
+$changed=@(); $transaction=$null; $child=$null; $mutex=$null; $originalExe=$null; $canRestart=$false; $recoveryFailed=$false
 try {
  $mutex=New-Object Threading.Mutex($false,'Local\HarmonyWorkLightUpdate'); if(!$mutex.WaitOne(0)){throw 'Another update is running'}
  $keys=@(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'Harmony Work' -and $_.InstallLocation })
@@ -65,6 +75,10 @@ try {
  if($InstallDirectory -and [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\') -ne $actual){throw 'Requested directory does not match the registered installation'}
  $InstallDirectory=$actual
  if(!(Test-Path -LiteralPath (Join-Path $actual 'uninstall.exe'))){throw 'Existing uninstaller missing; repair with full installer'}
+ $originalExe=SafeJoin $actual 'harmony-work.exe'
+ if(!(Test-Path -LiteralPath $originalExe -PathType Leaf)){throw 'Existing Harmony Work executable missing; use the full offline installer'}
+ # Only relaunch the registered, validated product; never an arbitrary /D path or fresh payload.
+ $canRestart=((Get-Item -LiteralPath $originalExe).VersionInfo.ProductName -eq 'Harmony Work')
  $manifest=Get-Content -Raw -LiteralPath (Join-Path $Payload 'payload.manifest.json') | ConvertFrom-Json
  if($manifest.schemaVersion -ne 1 -or $manifest.mainExe -ne 'harmony-work.exe'){throw 'Invalid manifest schema'}
  foreach($f in $manifest.files) { if(!(OwnedPath $f.path)){throw 'Forbidden overlay destination'}; $null=SafeJoin $actual $f.path }
@@ -78,12 +92,13 @@ try {
  $required=100MB + 3 * (($manifest.files | Measure-Object -Property size -Sum).Sum)
  $drive=New-Object IO.DriveInfo([IO.Path]::GetPathRoot($actual))
  if($drive.AvailableFreeSpace -lt $required){throw 'Insufficient disk space for staging and rollback backups'}
+ ProbeInstallWrite $actual
  if($Check){exit 0}
  $exe=Join-Path $actual $manifest.mainExe
  $deadline=(Get-Date).AddSeconds(120)
  do { $old=@(Get-Process harmony-work -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }); if(!$old){break}; foreach($p in $old){$null=$p.CloseMainWindow()}; Start-Sleep -Seconds 1 } while((Get-Date) -lt $deadline)
  if($old){throw 'Harmony Work is still running. Finish active tasks and close it before retrying.'}
- RecoverTransactions $actual $key
+ try { RecoverTransactions $actual $key } catch { $recoveryFailed=$true;throw }
  $transaction=Join-Path $actual ('.harmony-update-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory -Path "$transaction\stage","$transaction\backup" | Out-Null
  foreach($f in $manifest.files){$stage=SafeJoin "$transaction\stage" $f.path; New-Item -ItemType Directory -Force (Split-Path -Parent $stage)|Out-Null; Copy-Item -LiteralPath (SafeJoin $Payload $f.path) -Destination $stage}
@@ -95,7 +110,16 @@ try {
  $child=Start-Process -FilePath $exe -PassThru
  Remove-Item Env:HARMONY_UPDATE_HEALTH_FILE,Env:HARMONY_UPDATE_HEALTH_TOKEN
  $deadline=(Get-Date).AddSeconds(60);$healthy=$false
- do {Start-Sleep -Seconds 1;$child.Refresh();if($child.HasExited){throw 'Updated application exited during startup'};if(Test-Path -LiteralPath $health){$ack=Get-Content -Raw -LiteralPath $health|ConvertFrom-Json;if($ack.token -eq $token -and $ack.version -eq $manifest.version){$healthy=$true;break}}}while((Get-Date) -lt $deadline)
+ do {
+  Start-Sleep -Seconds 1;$child.Refresh()
+  if($child.HasExited){throw 'Updated application exited during startup'}
+  if(Test-Path -LiteralPath $health) {
+   $ack=$null
+   try {$ack=Get-Content -Raw -LiteralPath $health|ConvertFrom-Json} catch {continue} # A partially published ack may become complete next poll.
+   if($ack.token -ne $token -or $ack.version -ne $manifest.version){throw 'Updated application health acknowledgement does not match this transaction'}
+   $healthy=$true;break
+  }
+ }while((Get-Date) -lt $deadline)
  if(!$healthy){throw 'Updated application did not acknowledge healthy startup'}
  Start-Sleep -Seconds 15;$child.Refresh();if($child.HasExited){throw 'Updated application failed stability check'}
  Set-ItemProperty -LiteralPath $key.PSPath -Name DisplayVersion -Value $manifest.version
@@ -110,7 +134,10 @@ try {
  [array]::Reverse($changed)
  foreach($c in $changed){try{if($c.existed){Copy-Item -LiteralPath $c.backup -Destination $c.target -Force}else{Remove-Item -LiteralPath $c.target -Force -ErrorAction Stop}}catch{$rollbackErrors+=$_.Exception.Message}}
  Log "FAILED $failure rollbackErrors=$($rollbackErrors -join '; ') backup=$transaction"
- if($changed.Count -and !$rollbackErrors.Count){Start-Process -FilePath (Join-Path $InstallDirectory 'harmony-work.exe') -ErrorAction SilentlyContinue}
+ if(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed) {
+  $running=@(Get-Process harmony-work -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq $originalExe})
+  if(!$running){Start-Process -FilePath $originalExe -ErrorAction SilentlyContinue}
+ }
  if(!$Silent){Add-Type -AssemblyName PresentationFramework;[Windows.MessageBox]::Show("Harmony Work update failed: $failure`nLog: $log`nRollback errors: $($rollbackErrors -join '; ')",'Harmony Work update')|Out-Null}
  exit 1
 } finally {if($mutex){try{$mutex.ReleaseMutex()}catch{};$mutex.Dispose()}}
