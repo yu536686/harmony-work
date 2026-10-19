@@ -29,6 +29,7 @@ pub mod store;
 #[path = "../shared/service_urls.rs"]
 pub mod service_urls;
 mod tools;
+pub mod updater;
 
 pub use app::run;
 pub use store::AppState;
