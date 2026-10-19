@@ -6,7 +6,7 @@ import type { UpdateSnapshot, UpdateStore } from "./updateStore";
 import "./updates.css";
 
 interface Props { store?: UpdateStore; enabled?: boolean }
-const busyPhases = new Set(["downloading", "verifying", "waiting", "installing"]);
+const busyPhases = new Set(["checking", "downloading", "verifying", "waiting", "installing"]);
 function useUpdate(store: UpdateStore, enabled: boolean) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   useEffect(() => { if (enabled) void store.connect(); }, [store, enabled]);
@@ -25,11 +25,12 @@ function UpdateDialog({ snapshot, store, onClose, manual, anchor }: { snapshot: 
     return () => previous?.focus();
   }, []);
   useEffect(() => {
+    if (handingOff) dialog.current?.focus();
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !handingOff) { event.preventDefault(); onClose(); }
       if (event.key === "Tab") {
         const buttons = dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), [tabindex='0']");
-        if (!buttons?.length) return;
+        if (!buttons?.length) { event.preventDefault(); dialog.current?.focus(); return; }
         const first = buttons[0], last = buttons[buttons.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -41,11 +42,11 @@ function UpdateDialog({ snapshot, store, onClose, manual, anchor }: { snapshot: 
   const busy = busyPhases.has(snapshot.phase);
   const canCancel = snapshot.phase === "downloading" || snapshot.phase === "waiting";
   const progress = snapshot.total && snapshot.total > 0 ? Math.min(100, Math.floor(snapshot.downloaded / snapshot.total * 100)) : null;
-  const phaseLabel: Partial<Record<UpdateSnapshot["phase"], string>> = { downloading: "正在下载轻量安装包", verifying: "正在验证安装包", waiting: "等待当前任务结束后安装，可取消等待", installing: "正在准备退出，安装完成后将自动重启" };
+  const phaseLabel: Partial<Record<UpdateSnapshot["phase"], string>> = { checking: "正在确认更新版本", downloading: "正在下载轻量安装包", verifying: "正在验证安装包", waiting: "等待当前任务结束后安装，可取消等待", installing: "正在准备退出，安装完成后将自动重启" };
   const anchoredStyle = anchor ? { position: "fixed" as const, left: Math.max(12, Math.min(anchor.left, window.innerWidth - 392)), top: Math.max(12, Math.min(anchor.bottom + 10, window.innerHeight - 360)) } : undefined;
   return createPortal(
     <div className={`update-backdrop ${anchor ? "update-backdrop-card" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget && !handingOff) onClose(); }}>
-      <div className="update-dialog" ref={dialog} role="dialog" aria-modal="true" aria-labelledby={id} style={anchoredStyle}>
+      <div className="update-dialog" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={id} style={anchoredStyle}>
         <div className="update-heading"><ArrowUpCircle size={22} /><h2 id={id}>Harmony Work 可用更新</h2></div>
         <p className="update-version">v{snapshot.currentVersion} → v{snapshot.available?.version}</p>
         {snapshot.available?.version.includes("-") && <span className="update-preview-label">测试版本</span>}
@@ -84,6 +85,7 @@ export function UpdateAbout({ store = nativeUpdateStore, enabled = supportsDeskt
     {message && <span role="status" className={snapshot.error ? "update-error" : "update-hint"}>{message}</span>}
     <label className="update-channel"><input type="checkbox" checked={snapshot.channel === "preview"} disabled={busy || checking || channelBusy} onChange={async (e) => { setChannelBusy(true); setMessage(""); await store.setChannel(e.target.checked ? "preview" : "stable"); setChannelBusy(false); }} />接收测试版本更新</label>
     {snapshot.channel === "preview" && <small className="update-hint">已加入测试频道，可能收到 RC 等预发布版本。</small>}
+    {!message && snapshot.error && <small className="update-error" role="status">{snapshot.error}</small>}
     {open && snapshot.available && <UpdateDialog snapshot={snapshot} store={store} manual onClose={() => setOpen(false)} />}
   </div>;
 }

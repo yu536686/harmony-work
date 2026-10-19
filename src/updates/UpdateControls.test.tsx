@@ -50,4 +50,19 @@ describe("update entry points", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消下载" }));
     await waitFor(() => expect(h.calls).toContain("update_cancel"));
   });
+  it("blocks another installation while the native pre-download check runs", async () => {
+    const h = setup(); render(<UpdateBadge store={h.store} enabled />);
+    await waitFor(() => expect(h.calls).toContain("update_status"));
+    h.emit({ ...release, phase: "checking" });
+    fireEvent.click(screen.getByRole("button", { name: "可用更新" }));
+    expect(screen.queryByRole("button", { name: "立即安装" })).toBeNull();
+  });
+  it("keeps keyboard focus in the dialog during installation handoff", async () => {
+    const h = setup(); render(<UpdateBadge store={h.store} enabled />);
+    await waitFor(() => expect(h.calls).toContain("update_status"));
+    h.emit(release); fireEvent.click(screen.getByRole("button", { name: "可用更新" }));
+    h.emit({ ...release, phase: "installing" });
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(screen.getByRole("dialog")).toHaveFocus();
+  });
 });

@@ -29,9 +29,10 @@ export function createUpdateStore(transport: UpdateTransport) {
     return snapshot;
   }
   async function command(name: string, args?: Record<string, unknown>) {
+    const revision = eventRevision;
     try {
       const result = await transport.invoke<UpdateSnapshot | null>(name, args);
-      if (result) publish(result);
+      if (result && eventRevision === revision) publish(result);
       return snapshot;
     } catch (error) { return failure(error); }
   }

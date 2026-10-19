@@ -47,4 +47,12 @@ describe("shared update state", () => {
     expect(store.getSnapshot().available?.version).toBe("1.1.2-rc.1");
     expect(store.getSnapshot().error).toContain("网络中断");
   });
+  it("does not let a late command response replace newer progress events", async () => {
+    const h = harness(); await h.store.connect();
+    const pending = h.store.check();
+    h.emit({ ...available, phase: "downloading", downloaded: 75, total: 100 });
+    h.finish(available); await pending;
+    expect(h.store.getSnapshot().phase).toBe("downloading");
+    expect(h.store.getSnapshot().downloaded).toBe(75);
+  });
 });
