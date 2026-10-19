@@ -663,6 +663,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 30px max(24px, calc((100% - 920px) / 2)) 150px;
+  padding-bottom: max(150px, var(--composer-clearance, 150px));
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -1232,7 +1233,7 @@
 
 @media (max-width: 900px) {
   .chat-topbar { padding-inline: 18px; }
-  .messages-area { padding: 24px 22px 150px; }
+  .messages-area { padding: 24px 22px 150px; padding-bottom: max(150px, var(--composer-clearance, 150px)); }
   .message { max-width: 92%; }
   .input-area { width: calc(100% - 28px); bottom: 12px; }
   .composer-selector.workspace-selector,

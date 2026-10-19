@@ -4,7 +4,7 @@ param(
   [switch]$SkipDownload,
   [switch]$SkipTauriBuild,
   [string]$InnerInstaller,
-  [string]$Version = "1.0.9"
+  [string]$Version = "1.1.0"
 )
 
 $ErrorActionPreference = "Stop"

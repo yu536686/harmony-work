@@ -51,3 +51,14 @@ test("approval overlays stay above the composer and workbench", async () => {
   assert.ok(workbenchZIndex > composerZIndex, "narrow workbench must cover the composer when open");
   assert.ok(permissionZIndex > workbenchZIndex, "permission overlay must stay above the workbench and composer");
 });
+
+test("conversation keeps its last card above the measured composer", async () => {
+  const [chat, css] = await Promise.all([
+    readProjectFile("src/components/Chat/index.tsx"),
+    readProjectFile("src/components/Chat/Chat.css"),
+  ]);
+
+  assert.match(chat, /ResizeObserver/);
+  assert.match(chat, /--composer-clearance/);
+  assert.match(css, /\.messages-area\s*\{[\s\S]*?padding-bottom:\s*max\([^;]*var\(--composer-clearance/);
+});

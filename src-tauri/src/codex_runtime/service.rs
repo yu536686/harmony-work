@@ -1897,8 +1897,7 @@ pub async fn codex_chat_send(
         &attachments,
     );
     let mut developer_instructions =
-        "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
-            .to_string();
+        crate::codex_runtime::runner::harmony_identity_instructions(&provider, &model);
     let self_improvement_enabled = {
         let db = app_state.db.lock().await;
         db.get_skill("self-improvement-codex")

@@ -1,6 +1,6 @@
 use crate::codex_runtime::event_adapter::WorkBuddyEvent;
 use crate::codex_runtime::headless::{CodexExecOptions, CodexExecResult};
-use crate::codex_runtime::runner::{CodexAttachment, CodexPermissionMode};
+use crate::codex_runtime::runner::{harmony_identity_instructions, CodexAttachment, CodexPermissionMode};
 use crate::codex_runtime::service::{
     permission_mode_from_settings, resolve_model_selection, CodexRuntimeState,
 };
@@ -56,6 +56,7 @@ pub async fn run_codex_transient(
         )
     })?;
     let transient_id = format!("transient_{}", uuid::Uuid::new_v4());
+    let prompt = compose_background_prompt(prompt, "internal", &[], extra_context, &provider, &model);
     let result = codex
         .execute_headless(
             &transient_id,
@@ -63,7 +64,7 @@ pub async fn run_codex_transient(
                 workspace_root,
                 provider,
                 model,
-                prompt: compose_background_prompt(prompt, "internal", &[], extra_context),
+                prompt,
                 permission_mode: CodexPermissionMode::Restricted,
                 attachments: Vec::new(),
                 thread_id: None,
@@ -134,6 +135,8 @@ pub async fn run_codex_background(
         channel,
         &prior_messages,
         options.extra_context.as_deref(),
+        &provider,
+        &model,
     );
     let title = options
         .session_title
@@ -348,9 +351,11 @@ fn compose_background_prompt(
     channel: &str,
     prior_messages: &[(String, String)],
     extra_context: Option<&str>,
+    provider: &str,
+    model: &str,
 ) -> String {
     let mut sections = vec![
-        "<workbuddy_runtime_instructions>\n你是小亨，运行于 Harmony Work，是用户的桌面 AI 工作伙伴。始终自称“小亨”，直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。\n</workbuddy_runtime_instructions>".to_string(),
+        format!("<workbuddy_runtime_instructions>\n{}\n</workbuddy_runtime_instructions>", harmony_identity_instructions(provider, model)),
         format!("<workbuddy_channel>{channel}</workbuddy_channel>"),
     ];
     if !prior_messages.is_empty() {
@@ -468,8 +473,12 @@ mod tests {
             "wecom",
             &[("user".to_string(), "生成报告".to_string())],
             Some("企业微信入站任务"),
+            "harmony",
+            "deepseek-v4-flash",
         );
-        assert!(prompt.contains("你是小亨，运行于 Harmony Work"));
+        assert!(prompt.contains("你是小亨，Harmony Work"));
+        assert!(prompt.contains("deepseek-v4-flash"));
+        assert!(!prompt.contains("Codex app-server"));
         assert!(prompt.contains("user: 生成报告"));
         assert!(prompt.contains("企业微信入站任务"));
         assert!(prompt.ends_with("继续生成报告"));

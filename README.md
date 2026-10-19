@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/source-1.0.9-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/source-1.1.0-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -85,15 +85,15 @@ flowchart LR
 
 正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
-源码版本为 `1.0.9`。全量离线安装包已发布到官网和腾讯云 CDN；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
+源码与官网当前公开下载版本均为 `1.1.0`；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
 
 ### 1. 下载安装包
 
 从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN，当前文件为：
 
 ```text
-Harmony-Work-1.0.9-x64-full-setup.exe
-SHA-256: bc54404bfe1212e8d904a4b96c5b7f62cc8bc0555dbdf3778be69f4f7e0e6426
+Harmony-Work-1.1.0-x64-setup.exe
+SHA-256: 53f18da7253a817d74b1e773ea97c2ea245cd058a58bb426d55cb47994e19116
 ```
 
 需要核对文件完整性时，在安装包所在目录运行：
@@ -349,7 +349,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前源码版本：`1.0.9`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
+- 当前源码版本：`1.1.0`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---
