@@ -16,6 +16,8 @@ test('manifest deterministic with exact compatibility hashes, missing dependency
   for(const p of ['node/node.exe','python/python.exe','git/bin/git.exe','wecom/wecom-cli.cmd'])await put('managed',p);
   const args=['payload','baseline','managed'].map(x=>join(dir,x));
   const a=await generate(...args,'1.1.1');assert.deepEqual(a,await generate(...args,'1.1.1'));assert.equal(a.dependencies.length,3);assert.equal(a.files.length,4);assert.equal(a.files[0].sha256.length,64);
+  const formal=await generate(...args,'1.1.2');assert.equal(formal.version,'1.1.2');assert.deepEqual(formal.files,a.files);
+  await assert.rejects(generate(...args,'1.1.2-rc.0'),/Unsupported version/);
   await assert.rejects(generate(...args,'1.1.1',join(dir,'payload')),/New build dependencies differ/);
   await put('baseline','resources/codex/codex.exe','changed');assert.notEqual((await generate(...args,'1.1.1')).dependencies[0].sha256,a.dependencies[0].sha256);
   await rm(join(dir,'baseline/resources/flaui-mcp'),{recursive:true});await assert.rejects(generate(...args,'1.1.1'),/Missing baseline flaui-mcp/);
