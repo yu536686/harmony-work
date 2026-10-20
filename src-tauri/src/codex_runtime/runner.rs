@@ -58,6 +58,14 @@ pub struct CodexTurnOptions {
     pub attachments: Vec<CodexAttachment>,
 }
 
+pub fn harmony_identity_instructions(provider: &str, model: &str) -> String {
+    let provider = serde_json::to_string(provider).expect("provider ID is serializable");
+    let model = serde_json::to_string(model).expect("model ID is serializable");
+    format!(
+        "你是小亨，Harmony Work 的桌面 AI 工作伙伴。直接协助用户完成任务。当前会话配置的提供商 ID 是 {provider}，模型 ID 是 {model}。用户询问当前模型时，以这两个实际配置值回答；不要根据模型模板、历史对话或模型自述猜测。若服务端可能再次路由，仅说明这是客户端选择的配置，勿声称已核实服务端部署。通常按产品身份介绍自己，无需主动谈底层实现；用户明确询问技术实现时如实回答。"
+    )
+}
+
 pub fn thread_start_params(options: &CodexTurnOptions) -> Value {
     json!({
         "approvalPolicy": options.permission_mode.approval_policy(),
@@ -177,6 +185,16 @@ mod tests {
         let full = thread_start_params(&options(CodexPermissionMode::FullAccess));
         assert_eq!(full["sandbox"], "danger-full-access");
         assert_eq!(full["approvalPolicy"], "never");
+    }
+
+    #[test]
+    fn identity_instructions_ground_the_selected_provider_and_model() {
+        let instructions = harmony_identity_instructions("harmony", "deepseek-v4-flash");
+        assert!(instructions.contains("小亨"));
+        assert!(instructions.contains("deepseek-v4-flash"));
+        assert!(instructions.contains("harmony"));
+        assert!(!instructions.contains("Codex app-server"));
+        assert!(!instructions.contains("GPT-5"));
     }
 
     #[test]

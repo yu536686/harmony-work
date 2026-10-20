@@ -37,6 +37,8 @@ import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from
 import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
+import { UpdateBadge } from "./updates/UpdateControls";
+import { nativeUpdateStore } from "./updates/nativeUpdateStore";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { useMacNativeMenu } from "./components/ui/useMacNativeMenu";
@@ -648,6 +650,7 @@ function AppContent() {
           <div className="sidebar-brand">
             <img src={PRODUCT_BRAND.iconPath} className="logo" alt="" aria-hidden="true" />
             <BrandWordmark className="app-name" />
+            <UpdateBadge />
           </div>
           <button
             type="button"
@@ -877,6 +880,9 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    if (IS_WINDOWS && !IS_OVERLAY) void nativeUpdateStore.connect();
+  }, []);
   if (IS_OVERLAY) {
     return (
       <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{i18n.t("common.loadingApp")}</p></div>}>

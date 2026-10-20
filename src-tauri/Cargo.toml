@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [package]
 name = "harmony-work"
-version = "1.0.9"
+version = "1.1.2"
 autobins = false
 default-run = "harmony-work"
 description = "Harmony Work desktop AI workbench"
@@ -71,7 +71,10 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "=2.10.1"
+updater-reqwest = { package = "reqwest", version = "0.13", default-features = false }
+fs2 = "0.4"
+semver = "1"
 tauri-plugin-process = "2"
 
 # Async runtime

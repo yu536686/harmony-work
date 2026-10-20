@@ -795,6 +795,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   contextUsageRef.current = contextUsage;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const artifactsUnlistenRef = useRef<UnlistenFn | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1782,6 +1783,27 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       el.scrollTop = el.scrollHeight;
     }
   }, []);
+
+  useLayoutEffect(() => {
+    const messages = messagesAreaRef.current;
+    const composer = composerRef.current;
+    if (!messages || !composer) return;
+    const main = composer.parentElement;
+    if (!main) return;
+    const updateClearance = () => {
+      const clearance = main.getBoundingClientRect().bottom - composer.getBoundingClientRect().top + 24;
+      messages.style.setProperty("--composer-clearance", `${Math.ceil(clearance)}px`);
+      if (isNearBottomRef.current) messages.scrollTop = messages.scrollHeight;
+    };
+    const observer = new ResizeObserver(updateClearance);
+    observer.observe(composer);
+    observer.observe(main);
+    updateClearance();
+    return () => {
+      observer.disconnect();
+      messages.style.removeProperty("--composer-clearance");
+    };
+  }, [displaySessionId, isImSession, isDraft]);
 
   // Detect real-time appends (tail id changed), apply FIFO trim, auto-scroll or show unread badge
   const prevLastChatIdRef = useRef<string | null>(null);
@@ -3008,6 +3030,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             )}
 
             {!isImSession && <div
+              ref={composerRef}
               className={`input-area${isDragging ? " drag-over" : ""}`}
               onDragEnter={handleComposerDragEnter}
               onDragOver={handleComposerDragOver}

@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
 import { PRODUCT_BRAND } from "../../branding";
 import BrandWordmark from "../BrandWordmark";
+import { UpdateAbout } from "../../updates/UpdateControls";
 import "./About.css";
 
 const HARMONY_WATCH_SITE_URL = "https://www.harmonywatch.com";
@@ -38,6 +39,7 @@ export default function About() {
         <h1 className="about-title"><BrandWordmark /></h1>
         <p className="about-tagline">{t("about.tagline")}</p>
         <span className="about-version">v{version}</span>
+        <UpdateAbout />
       </div>
 
       <div className="about-desc">

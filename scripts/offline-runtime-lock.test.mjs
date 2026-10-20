@@ -173,7 +173,7 @@ test("full installer bundles the deep uninstaller and exposes an installed entry
   assert.match(cleanup, /卸载 Harmony Work\.lnk/);
 });
 
-test("Harmony Work 1.0.9 release metadata, payload manifest, and installer naming stay aligned", async () => {
+test("Harmony Work 1.1.2 release metadata, payload manifest, and installer naming stay aligned", async () => {
   const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
@@ -187,7 +187,7 @@ test("Harmony Work 1.0.9 release metadata, payload manifest, and installer namin
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.0.9");
+  assert.equal(packageJson.version, "1.1.2");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");
@@ -195,10 +195,10 @@ test("Harmony Work 1.0.9 release metadata, payload manifest, and installer namin
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(tauriConfig.identifier, "com.harmony.xiaoheng-workbuddy");
   assert.match(cargoToml, /name = "harmony-work"/);
-  assert.match(cargoToml, /version = "1\.0\.9"/);
+  assert.match(cargoToml, /version = "1\.1\.2"/);
   assert.match(cargoToml, /default-run = "harmony-work"/);
   assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
-  assert.match(project, /<Version>1\.0\.9<\/Version>/);
+  assert.match(project, /<Version>1\.1\.2<\/Version>/);
   assert.match(engine, /private const string ProductName = "Harmony Work"/);
   assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
   assert.match(stageScript, /app\\harmony-work-setup\.exe/);
@@ -207,11 +207,11 @@ test("Harmony Work 1.0.9 release metadata, payload manifest, and installer namin
     /\[PSCustomObject\]@\{ version = \$Version; files = @\(\$Files\) \}/,
     "the staged payload manifest must inherit the formal release version",
   );
-  assert.match(buildScript, /\[string\]\$Version = "1\.0\.9"/);
+  assert.match(buildScript, /\[string\]\$Version = "1\.1\.2"/);
   assert.match(buildScript, /Harmony-Work-\$Version-x64-setup\.exe/);
 });
 
-test("the 1.0.9 installer refreshes the alpha payload without removing user state", async () => {
+test("the formal installer refreshes the alpha payload without removing user state", async () => {
   const [engine, buildScript] = await Promise.all([
     readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
     readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
@@ -249,7 +249,7 @@ test("the 1.0.9 installer refreshes the alpha payload without removing user stat
   );
   assert.match(
     buildScript,
-    /\[string\]\$Version = "1\.0\.9"/,
+    /\[string\]\$Version = "1\.1\.2"/,
     "the release build must emit the formal installer filename by default",
   );
 });

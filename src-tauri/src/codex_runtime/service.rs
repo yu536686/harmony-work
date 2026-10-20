@@ -31,8 +31,9 @@ use std::time::SystemTime;
 use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ActiveCodexTurn {
+    _update_permit: crate::updater::WorkPermit,
     thread_id: String,
     turn_id: String,
 }
@@ -537,6 +538,8 @@ pub enum CodexRuntimeStateError {
     ApprovalNotFound,
     #[error("session already has an active Codex turn")]
     TurnAlreadyActive,
+    #[error("waiting for updater installation")]
+    UpdatePending,
 }
 
 impl CodexRuntimeState {
@@ -666,6 +669,7 @@ impl CodexRuntimeState {
         mut options: CodexExecOptions,
         observer: Option<mpsc::Sender<Value>>,
     ) -> Result<CodexExecResult, CodexRuntimeStateError> {
+        let _update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
         if options.thread_id.is_none() {
             options.thread_id = self
                 .sessions
@@ -745,6 +749,7 @@ impl CodexRuntimeState {
         workbuddy_session_id: &str,
         options: CodexTurnOptions,
     ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
+        let update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
         if self
             .active_turns
             .lock()
@@ -822,6 +827,7 @@ impl CodexRuntimeState {
         self.active_turns.lock().await.insert(
             workbuddy_session_id.to_string(),
             ActiveCodexTurn {
+                _update_permit: update_permit,
                 thread_id: thread_id.clone(),
                 turn_id: turn_id.clone(),
             },
@@ -1897,8 +1903,7 @@ pub async fn codex_chat_send(
         &attachments,
     );
     let mut developer_instructions =
-        "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
-            .to_string();
+        crate::codex_runtime::runner::harmony_identity_instructions(&provider, &model);
     let self_improvement_enabled = {
         let db = app_state.db.lock().await;
         db.get_skill("self-improvement-codex")

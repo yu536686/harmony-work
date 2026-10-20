@@ -8,7 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\src-tauri\icons\icon.ico</ApplicationIcon>
     <AssemblyName>Harmony-Work-Uninstaller</AssemblyName>
-    <Version>1.0.9</Version>
+    <Version>1.1.2</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
