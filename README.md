@@ -12,6 +12,7 @@
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
 [下载 Windows 版](https://www.harmonywork.com.cn/workbuddy#download) · [下载 macOS 预览版](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg) · [功能概览](#功能概览) · [Windows 安装](#windows-安装) · [macOS 预览版](#macos-预览版) · [源码构建](#从源码构建) · [常见问题](#常见问题)
@@ -197,7 +198,7 @@ API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。�
 
 ### 获取源码
 
-仓库当前为私有项目，拉取前需要具有访问权限并完成 GitHub 登录：
+本仓库公开提供源码，项目原创代码采用 [MIT 许可证](LICENSE)。可以直接克隆后按以下步骤构建：
 
 ```powershell
 git clone https://github.com/yu536686/harmony-work.git
@@ -288,6 +289,18 @@ harmony-work/
 ├─ scripts/                          环境准备、Sidecar 暂存与构建脚本
 └─ docs/                             设计与实施记录
 ```
+
+## 开源与贡献
+
+欢迎通过 [GitHub Issues](https://github.com/yu536686/harmony-work/issues) 报告问题、提出改进建议，或提交 Pull Request。报告问题时请提供系统与客户端版本、复现步骤、预期和实际行为，以及脱敏后的日志；请勿提交 API Key、账号凭据或用户业务数据。
+
+提交 Pull Request 前，请说明改动目的和验证结果，并根据改动范围运行下方“开发验证”中的检查。Windows 与 macOS 的适配状态不同，涉及平台功能时请注明实际验证的平台。贡献者应确保有权提交相关内容；提交贡献即表示同意按本项目 MIT 许可证许可该贡献，第三方内容须保留原有许可与来源说明。
+
+## 许可证与第三方组件
+
+本项目原创代码与文档采用 [MIT 许可证](LICENSE)，允许使用、复制、修改和商业分发，分发时须保留版权与许可声明。
+
+第三方源码、依赖和随安装包分发的运行环境保留各自的版权与许可，不因本项目采用 MIT 而改变。已知组件与现有声明入口见 [第三方说明](THIRD_PARTY_NOTICES.md)。Harmony Work 的名称、Logo 和商标不因代码许可而获得商标使用授权。在线服务、第三方 API 和账号访问仍须遵守相应服务条款。
 
 ## 开发验证
 
