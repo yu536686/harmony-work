@@ -2494,7 +2494,7 @@ impl Database {
         );
         match bound {
             Ok(existing) if existing == user_id => Ok(()),
-            Ok(_) => Err(anyhow::anyhow!("本机记忆已绑定其他账号；请使用独立的 Windows 用户资料或先完整清理本机数据")),
+            Ok(_) => Err(anyhow::anyhow!("本机记忆已绑定其他账号；请使用独立的系统用户资料或先完整清理本机数据")),
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 self.conn.execute(
                     "INSERT INTO memory_sync_identity (singleton, user_id) VALUES (1, ?1)",

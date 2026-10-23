@@ -8,4 +8,4 @@ export const nativeUpdateStore = createUpdateStore({
   invoke: (command, args) => invoke(command, command === "update_install" ? { ...args, appearance: readUpdateAppearance() } : args),
   listen: (handler) => listen<UpdateSnapshot>("harmony-update-state", (event) => handler(event.payload)),
 });
-export function supportsDesktopUpdates() { return navigator.userAgent.includes("Windows"); }
+export function supportsDesktopUpdates() { return /Windows|Macintosh/.test(navigator.userAgent); }

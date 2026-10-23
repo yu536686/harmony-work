@@ -149,7 +149,17 @@ pub fn generation_body(model: &str, kind: &str, request: &Value) -> Result<Value
         body["mvVersion"] = json!("chirp-v5-5");
         body["makeInstrumental"] = json!(true);
         body["title"] = json!(value_str(request, "title").unwrap_or("Harvis Music"));
-        body["tags"] = json!(prompt);
+        let tags = value_str(request, "tags").unwrap_or(prompt);
+        let mut end = 0;
+        let mut utf16_len = 0;
+        for (start, character) in tags.char_indices() {
+            if utf16_len + character.len_utf16() > 900 {
+                break;
+            }
+            utf16_len += character.len_utf16();
+            end = start + character.len_utf8();
+        }
+        body["tags"] = json!(tags[..end].trim_end());
         body["customMode"] = json!(true);
         body["inputType"] = json!("20");
         body["prompt"] = json!("[Instrumental]");
@@ -192,6 +202,39 @@ pub fn generation_body(model: &str, kind: &str, request: &Value) -> Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn music_tags_stay_within_gateway_limit_without_losing_full_prompt() {
+        let prompt = format!("{}final refrain", "cinematic orchestral ".repeat(80));
+        let body = generation_body("suno_music", "music", &json!({"prompt":prompt})).unwrap();
+        assert_eq!(body["input"], prompt);
+        assert!(body["tags"].as_str().unwrap().encode_utf16().count() <= 900);
+        assert_eq!(body["makeInstrumental"], true);
+    }
+
+    #[test]
+    fn music_uses_explicit_short_tags_when_prompt_is_long() {
+        let prompt = format!("{}outro", "full arrangement ".repeat(100));
+        let body = generation_body(
+            "suno_music",
+            "music",
+            &json!({
+                "prompt":prompt,
+                "tags":"cinematic, orchestral, no vocals"
+            }),
+        )
+        .unwrap();
+        assert_eq!(body["input"], prompt);
+        assert_eq!(body["tags"], "cinematic, orchestral, no vocals");
+    }
+
+    #[test]
+    fn music_tags_count_utf16_units_like_the_gateway() {
+        let prompt = "🎼".repeat(600);
+        let body = generation_body("suno_music", "music", &json!({"prompt":prompt})).unwrap();
+        assert_eq!(body["input"], prompt);
+        assert!(body["tags"].as_str().unwrap().encode_utf16().count() <= 900);
+    }
 
     #[test]
     fn progress_is_nullable_until_the_provider_reports_it() {

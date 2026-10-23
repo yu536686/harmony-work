@@ -1,6 +1,8 @@
 pub mod db;
 pub mod secrets;
 pub mod settings;
+#[cfg(target_os = "macos")]
+mod upgrade;
 mod vector;
 
 pub use db::Database;
@@ -77,6 +79,9 @@ impl AppState {
         std::fs::create_dir_all(&app_dir)?;
 
         let db_path = database_path(&app_dir);
+        #[cfg(target_os = "macos")]
+        let db = upgrade::initialize(&db_path, || Database::open(&db_path))?;
+        #[cfg(not(target_os = "macos"))]
         let db = Database::open(&db_path)?;
 
         let config_path = app_dir.join("config.json");

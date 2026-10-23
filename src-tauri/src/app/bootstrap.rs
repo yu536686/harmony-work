@@ -322,7 +322,10 @@ fn run_impl() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init());
 
-    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    if cfg!(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        target_os = "macos"
+    )) {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
@@ -1215,6 +1218,11 @@ fn run_impl() {
             crate::updater::update_install,
             crate::updater::update_cancel,
             crate::updater::update_set_channel,
+            crate::mac_update_panel::show_macos_update,
+            crate::mac_update_panel::close_macos_update,
+            crate::mac_mobile_bridge::show_macos_mobile_bridge,
+            crate::mac_mobile_bridge::update_macos_mobile_bridge,
+            crate::mac_mobile_bridge::close_macos_mobile_bridge,
             open_path,
             crate::mac_native_shell::set_macos_shell_state,
             crate::mac_native_shell::show_macos_dropdown,

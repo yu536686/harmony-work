@@ -3,11 +3,16 @@ fn main() {
     {
         cc::Build::new()
             .file("native/HWNativeShell.m")
+            .file("native/HWUpdatePanel.m")
+            .file("native/HWMobileBridge.m")
             .flag("-fobjc-arc")
             .compile("harmony_native_shell");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rustc-link-lib=framework=CoreImage");
         println!("cargo:rerun-if-changed=native/HWNativeShell.m");
+        println!("cargo:rerun-if-changed=native/HWUpdatePanel.m");
+        println!("cargo:rerun-if-changed=native/HWMobileBridge.m");
     }
 
     #[cfg(target_os = "windows")]

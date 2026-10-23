@@ -37,7 +37,7 @@ import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from
 import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
-import { UpdateBadge } from "./updates/UpdateControls";
+import { NativeUpdateBridge, UpdateBadge } from "./updates/UpdateControls";
 import { nativeUpdateStore } from "./updates/nativeUpdateStore";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
@@ -67,6 +67,7 @@ type SchoolSubTab = "fish" | "koi";
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const IS_MACOS = navigator.userAgent.includes("Macintosh");
+const HAS_MOBILE_BRIDGE = IS_WINDOWS || IS_MACOS;
 if (IS_MACOS) document.documentElement.dataset.platform = "macos";
 if (IS_MACOS && isTauri()) document.documentElement.dataset.nativeShell = "true";
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
@@ -128,7 +129,8 @@ function AppContent() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
 
   useLayoutEffect(() => {
-    if (!IS_WINDOWS) return;
+    if (!HAS_MOBILE_BRIDGE) return;
+    setMobileBridgeOpen(false);
     const current = store.getState().sessions;
     const mobileIds = current.sessions.filter(session => session.source === "mobile").map(session => session.id);
     const visible = current.sessions.filter(session => session.source !== "mobile");
@@ -138,31 +140,46 @@ function AppContent() {
   }, [marketingUser?.id, dispatch]);
 
   useEffect(() => {
-    if (!IS_WINDOWS) return;
+    if (!IS_MACOS) return;
+    const openMobileBridge = () => {
+      if (marketingUser) setMobileBridgeOpen(true);
+      else setActiveTab("account");
+    };
+    window.addEventListener("harmony:native-mobile-bridge", openMobileBridge);
+    return () => window.removeEventListener("harmony:native-mobile-bridge", openMobileBridge);
+  }, [marketingUser?.id]);
+
+  useEffect(() => {
+    if (!HAS_MOBILE_BRIDGE) return;
+    let stopped = false;
+    const reloadSessions = async () => {
+      const { sessions } = await sessionsApi.list(200);
+      if (!stopped) dispatch(sessionsActions.setSessions(sessions));
+    };
     const desktopId = marketingUser ? localStorage.getItem(mobileBridgeStorageKey(marketingUser.id)) : null;
     const deviceToken = marketingUser ? localStorage.getItem(mobileBridgeTokenKey(marketingUser.id)) : null;
     if (!desktopId || !deviceToken) {
       void invoke("mobile_bridge_sign_out")
-        .then(() => sessionsApi.list(200))
-        .then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions)))
+        .then(() => { if (!stopped) return reloadSessions(); })
         .catch(error => console.warn("Mobile bridge sign out:", error));
-      return;
+      return () => { stopped = true; };
     }
     void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
       .then(async () => {
-        const { sessions } = await sessionsApi.list(200);
-        dispatch(sessionsActions.setSessions(sessions));
-        await invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId });
+        if (stopped) return;
+        await reloadSessions();
+        if (!stopped) await invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId });
       })
       .catch(error => console.warn("Mobile bridge worker:", error));
     const unlisten = listen("mobile_bridge_updated", () => {
-      void sessionsApi.list(200).then(({ sessions }) => dispatch(sessionsActions.setSessions(sessions))).catch(() => undefined);
+      if (!stopped) void reloadSessions().catch(() => undefined);
     });
-    return () => { void unlisten.then(fn => fn()); void invoke("mobile_bridge_stop_worker"); };
+    return () => { stopped = true; void unlisten.then(fn => fn()).catch(() => undefined); void invoke("mobile_bridge_stop_worker").catch(() => undefined); };
   }, [marketingUser?.id, mobileBridgeOpen, dispatch]);
 
   useEffect(() => {
-    if (!IS_WINDOWS || !marketingUser) return;
+    if (!HAS_MOBILE_BRIDGE || !marketingUser) return;
+    setMobilePeerState("fallback");
     const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
     const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
     if (!desktopId || !deviceToken || typeof RTCPeerConnection === "undefined") return;
@@ -171,8 +188,10 @@ function AppContent() {
     const senders = new Map<string, DirectFileSender>();
     const states = new Map<string, 'connecting' | 'direct' | 'fallback'>();
     void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
-      .then(() => invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices"))
-      .then(async ({ devices }) => {
+      .then(() => stopped ? null : invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices"))
+      .then(async result => {
+        if (stopped || !result) return;
+        const { devices } = result;
         await Promise.all(devices.filter(item => item.desktopDeviceId === desktopId).map(async link => {
           if (stopped) return;
           let sender: DirectFileSender;
@@ -183,6 +202,7 @@ function AppContent() {
             pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
             onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },
             onState: state => {
+              if (stopped) return;
               states.set(link.mobileDeviceId, state);
               setMobilePeerState([...states.values()].some(value => value === 'direct') ? 'direct' : state);
             },
@@ -197,7 +217,7 @@ function AppContent() {
           senders.set(link.mobileDeviceId, sender);
           await peer.start();
         }));
-      }).catch(() => setMobilePeerState("fallback"));
+      }).catch(() => { if (!stopped) setMobilePeerState("fallback"); });
     return () => {
       stopped = true;
       for (const sender of senders.values()) sender.stop();
@@ -881,7 +901,7 @@ function AppContent() {
 
 export default function App() {
   useEffect(() => {
-    if (IS_WINDOWS && !IS_OVERLAY) void nativeUpdateStore.connect();
+    if ((IS_WINDOWS || IS_MACOS) && !IS_OVERLAY) void nativeUpdateStore.connect();
   }, []);
   if (IS_OVERLAY) {
     return (
@@ -893,6 +913,7 @@ export default function App() {
   return (
     <Provider store={store}>
       <div className="desktop-window">
+        {IS_MACOS && <NativeUpdateBridge />}
         {IS_WINDOWS && <WindowTitlebar />}
         <div className="desktop-window-content"><AppContent /></div>
       </div>

@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/source-1.1.0-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/source-1.1.2-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -35,7 +35,7 @@ Harmony Work 是一款桌面 AI Agent 工作台，提供 Windows 稳定版和 Ap
 | --- | --- |
 | **Agent 对话工作台** | 支持流式回复、附件、模型切换、Todo、工具活动、权限审批、成果卡片和任务中断。 |
 | **项目与会话** | 按项目目录组织会话，保存上下文、工作区、文件引用和 Codex Thread 映射。 |
-| **手机与桌面协作** | 同一账号扫码配对手机与 Windows 客户端，桌面端同步显示手机会话，并承接远程任务。 |
+| **手机与桌面协作** | 同一账号扫码配对手机与桌面客户端，同步手机会话并承接远程任务。Mac 1.1.2 内部版使用 AppKit 配对窗口。 |
 | **StaffDeck 多 Agent 协作** | 创建不同职责的人员，分派任务，在看板中跟踪执行状态和交付结果。 |
 | **Harvis AI 创作** | 提供图片与音乐创作页面，支持参考图、提示词助手、任务进度、结果预览与下载。 |
 | **Office 成果生成** | 通过 Artifact Runtime 创建并验证 Word、PowerPoint 和 Excel 文件，生成后直接进入成果区。 |
@@ -86,7 +86,7 @@ flowchart LR
 
 正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
-当前开发源码版本为 `1.1.1`，官网公开版本以发布信息为准；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
+当前开发源码版本为 `1.1.2`，官网公开版本以发布信息为准；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
 
 ### 1. 下载安装包
 
@@ -153,7 +153,7 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 5. 勾选允许在会话底部切换的模型。
 6. 选择工作区目录和会话权限策略。
 
-在“设置 → 渠道与 API”配置 Harmony 时，可获取可用模型列表，并从下拉框选择向量模型；未指定或原选择已不可用时，界面会预选一个可用模型。向量服务故障不会阻止记忆写入，检索会回退到关键词匹配。
+在“设置 → 渠道与 API”配置 Harmony 时，可获取可用模型列表，并从下拉框选择向量模型；也可以不指定模型，仅使用关键词检索。原选择已不可用时会提示重新选择。向量服务故障不会阻止记忆写入，检索会回退到关键词匹配。
 
 API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。模型请求会发送到用户选择的模型服务，请根据业务的数据安全要求配置供应商和权限模式。
 
@@ -255,19 +255,31 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 ## macOS 预览版
 
-macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
+### 1.1.2 内部开发版
 
-从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64.dmg`，SHA-256：
+`1.1.2` 在独立 Mac 检出目录中整合 Windows 1.1.2 的共享业务能力，不改 Windows 构建目录。新增手机协作原生配对窗口、统一记忆与升级前 SQLite 快照、原生更新窗口及应用包失败回滚；保留现有 AppKit 外壳、980px 最小宽度和 Mac 桌面工具。
+
+离线载荷包含 Node.js、Git、Python、WeCom CLI、FFmpeg 和 Harmony Cut 所需的锁定 Python 依赖，不覆盖系统环境。手机配对、模型服务和企业微信仍需要用户账号或官方授权，不代表这些云服务可离线使用。
+
+此版本仅用于内部验收，尚未替换下方公开预览包，也未发布 Mac 在线更新清单。更新流程在本地校验应用归档、可信下载域名与 minisign 签名；无可用发布清单时应明确报错，不会显示虚假的“已是最新版本”。完整实现与验证记录见 [Mac 1.1.2 实施记录](docs/superpowers/plans/2026-10-23-macos-1.1.2-upgrade.md)。
+
+### 公开预览包
+
+macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13.5。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
+
+从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64-offline.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64-offline.dmg`，SHA-256：
 
 ```text
-c8aa36f70fe719e993a065a1f975108b25fcf7f05495077d6f20ce085d1e0a67
+3dbf1f3a3fdc6153793a50222e113b7bef9ddb8f63def94649ba728d0dcbe2a6
 ```
 
 该预览包尚未进行 Apple Developer ID 签名和公证。首次打开时，macOS 可能提示无法验证开发者；请先确认文件来自 Harmony Work 官网并核对 SHA-256，再按组织的设备安全策略决定是否运行。不要为安装此预览版关闭 Gatekeeper。
 
 桌面操控首次使用时，需要用户在“系统设置 → 隐私与安全性”中授予辅助功能和屏幕录制权限；安装包不能代为授权。
 
-构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools，以及可用的网络来安装锁定的 npm/Cargo 依赖。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。
+此 Mac 包将 Git 2.54.0、完整 Node.js/npm 24.18.0、Python/pip 3.12.12 和 WeCom CLI 0.1.9 放在应用自身的资源目录中；首次向导只检查这些程序，不要求用户访问 GitHub、npm 或 Python 下载站点。企业微信授权及实际线上服务仍需网络。
+
+构建机需要 Node.js `v24.18.0`、Rust stable、Xcode Command Line Tools、`uv` 管理的 Python 3.12.12，以及首次获取锁定载荷和 npm/Cargo 依赖所需的网络。不要在 Windows 共用的 `node_modules` 中直接执行 macOS 的 `npm ci`；先使用独立的 Mac 检出目录。Mac 构建脚本校验离线包的 SHA-256，并把依赖仅放入 Mac 专属 Tauri 资源，不改 Windows 安装载荷。包内还附带与内置 Git 二进制对应的源码归档及许可证。
 
 ```sh
 npm ci
@@ -275,7 +287,7 @@ npm test
 ./scripts/build-mac.sh
 ```
 
-脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。
+脚本使用 Mac 专属 Tauri 配置，不执行 Windows FlaUI/安装器暂存。生成的 `.app` 和 `.dmg` 位于脚本输出的 Cargo target 目录。构建后可运行 `zsh scripts/verify-macos-offline-bundle.sh "<Harmony Work.app 的完整路径>"`，在不使用用户 PATH 中运行时的条件下验证包内版本和可执行路径。
 
 ## 项目结构
 
@@ -362,7 +374,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前源码版本：`1.1.1`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
+- 当前源码版本：`1.1.2`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---

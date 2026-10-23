@@ -1,4 +1,6 @@
 //! Native updater. Only signed, freshly checked payloads reach installer handoff.
+#[cfg(target_os = "macos")]
+pub mod macos;
 mod policy;
 pub use policy::{admit_work, WorkPermit};
 use serde::{Deserialize, Serialize};
@@ -161,7 +163,7 @@ fn main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 fn supported(service: &UpdateService) -> Result<(), String> {
-    if !cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    if !platform_supported() {
         return Err("此平台暂不支持客户端更新".into());
     }
     if service.owner.is_none() {
@@ -169,13 +171,31 @@ fn supported(service: &UpdateService) -> Result<(), String> {
     }
     Ok(())
 }
+fn platform_supported() -> bool {
+    cfg!(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(
+            target_os = "macos",
+            any(target_arch = "aarch64", target_arch = "x86_64")
+        )
+    ))
+}
 fn endpoint(channel: &str) -> String {
+    #[cfg(target_os = "macos")]
+    return format!(
+        "https://download.harmonywatch.cn/updates/macos/{}/{channel}.json",
+        std::env::consts::ARCH
+    );
+    #[cfg(not(target_os = "macos"))]
     format!("https://download.harmonywatch.cn/updates/windows/x86_64/{channel}.json")
 }
 async fn fresh_update(
     app: &tauri::AppHandle,
     channel: &str,
 ) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    if !policy::valid_channel(channel) {
+        return Err("未知更新频道".into());
+    }
     let updater = app
         .updater_builder()
         .endpoints(vec![endpoint(channel)
@@ -191,7 +211,7 @@ async fn fresh_update(
         .map_err(|_| "检查更新超时，请重试".to_string())?
         .map_err(|e| e.to_string())?;
     if let Some(update) = &update {
-        if !policy::allowed_download(update.download_url.as_str()) {
+        if !policy::allowed_platform_download(update.download_url.as_str()) {
             return Err("更新包地址不属于可信发布目录".into());
         }
         if channel == "stable" && update.version.contains('-') {
@@ -275,15 +295,16 @@ async fn check(
         }
         Err(error) => {
             tracing::warn!("Updater check failed: {error}");
+            let show_error = manual || cfg!(target_os = "macos");
             s.phase = if s.available.is_some() {
                 "available"
-            } else if manual {
+            } else if show_error {
                 "error"
             } else {
                 "idle"
             }
             .into();
-            s.error = if manual { Some(error) } else { None };
+            s.error = if show_error { Some(error) } else { None };
         }
     });
     Ok(service.snapshot())
@@ -425,6 +446,7 @@ pub async fn update_install(
     });
     Ok(service.snapshot())
 }
+#[cfg(not(target_os = "macos"))]
 fn installer_directory_arg(command: &mut std::process::Command, directory: &std::path::Path) {
     // NSIS consumes the remainder after /D=, so it must be last and unquoted.
     // Windows Command::arg would quote the entire argument when spaces occur.
@@ -458,81 +480,160 @@ async fn install(
         s.phase = "downloading".into();
     });
     update.timeout = Some(Duration::from_secs(1800));
+    #[cfg(target_os = "macos")]
+    let oversized = CancellationToken::new();
     let download = update.download(
         |size, total| {
             service.change(app, |s| {
                 s.downloaded += size as u64;
                 s.total = total;
+                #[cfg(target_os = "macos")]
+                if s.downloaded > macos::MAX_ARCHIVE_BYTES
+                    || total.is_some_and(|n| n > macos::MAX_ARCHIVE_BYTES)
+                {
+                    oversized.cancel();
+                }
             })
         },
         || service.change(app, |s| s.phase = "verifying".into()),
     );
+    #[cfg(target_os = "macos")]
+    let bytes = tokio::select! {
+        _=cancel.cancelled()=>return Ok(()),
+        _=oversized.cancelled()=>return Err("更新归档超过安全大小限制".into()),
+        result=download=>result.map_err(|e|e.to_string())?
+    };
+    #[cfg(not(target_os = "macos"))]
     let bytes = tokio::select! { _=cancel.cancelled()=>return Ok(()), result=download=>result.map_err(|e|e.to_string())? };
     // Update.download returns bytes only AFTER minisign verification succeeds.
     if cancel.is_cancelled() {
         return Ok(());
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let directory = exe.parent().ok_or("无法确定安装目录")?;
-    if !directory.join("uninstall.exe").is_file() {
-        return Err("请先使用完整安装包安装 Harmony Work，再应用轻量更新".into());
+    #[cfg(target_os = "macos")]
+    return install_macos(app, service, cancel, bytes, update.version).await;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let directory = exe.parent().ok_or("无法确定安装目录")?;
+        if !directory.join("uninstall.exe").is_file() {
+            return Err("请先使用完整安装包安装 Harmony Work，再应用轻量更新".into());
+        }
+        let stage = service
+            .path
+            .parent()
+            .ok_or("更新目录不可用")?
+            .join(format!("payload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+        let installer = stage.join("harmony-work-update.exe");
+        std::fs::write(&installer, &bytes).map_err(|e| e.to_string())?;
+        use sha2::Digest;
+        std::fs::write(
+            stage.join("payload.sha256"),
+            hex::encode(sha2::Sha256::digest(&bytes)),
+        )
+        .map_err(|e| e.to_string())?;
+        // The verified installer owns the compatibility schema. Its dry run hashes
+        // baseline dependencies and checks writable path / free space before exit.
+        let mut preflight = tokio::process::Command::new(&installer);
+        preflight.args(["/S", "/CHECK"]).kill_on_drop(true);
+        installer_directory_arg(preflight.as_std_mut(), directory);
+        let status = tokio::select! {
+            _=cancel.cancelled()=>{let _=std::fs::remove_dir_all(&stage);return Ok(());},
+            result=tokio::time::timeout(Duration::from_secs(120),preflight.status())=>result.map_err(|_|"更新兼容性检查超时")?.map_err(|e|format!("无法检查更新兼容性: {e}"))?
+        };
+        if !status.success() {
+            return Err("轻量更新兼容性检查失败，请使用完整安装包；详见临时目录 HarmonyWorkUpdateCheck/light-installer.log".into());
+        }
+        let _quiesce = policy::Quiesce::begin();
+        service.change(app, |s| s.phase = "waiting".into());
+        while !_quiesce.ready()
+            || if let Some(state) = app.try_state::<crate::store::AppState>() {
+                !state.cancel_flags.lock().await.is_empty()
+            } else {
+                false
+            }
+        {
+            tokio::select! { _=cancel.cancelled()=>{let _=std::fs::remove_dir_all(&stage);return Ok(());}, _=tokio::time::sleep(Duration::from_millis(250))=>{} }
+        }
+        if cancel.is_cancelled() {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Ok(());
+        }
+        // No cancellation once cleanup/handoff begins.
+        service.change(app, |s| s.phase = "installing".into());
+        if let Some(runtime) = app.try_state::<crate::codex_runtime::service::CodexRuntimeState>() {
+            runtime.shutdown().await.map_err(|e| e.to_string())?;
+        }
+        if let Some(state) = app.try_state::<crate::store::AppState>() {
+            crate::app::shutdown::prepare_shutdown(&state).await;
+        }
+        let mut command = std::process::Command::new(&installer);
+        command.args(["/S", "/UPDATE", "/R"]);
+        installer_directory_arg(&mut command, directory);
+        command
+            .spawn()
+            .map_err(|e| format!("无法启动更新安装器: {e}"))?;
+        _quiesce.commit();
+        crate::app::shutdown::request_app_exit(app.clone());
+        Ok(())
     }
-    let stage = service
-        .path
-        .parent()
-        .ok_or("更新目录不可用")?
-        .join(format!("payload-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
-    let installer = stage.join("harmony-work-update.exe");
-    std::fs::write(&installer, &bytes).map_err(|e| e.to_string())?;
-    use sha2::Digest;
-    std::fs::write(
-        stage.join("payload.sha256"),
-        hex::encode(sha2::Sha256::digest(&bytes)),
-    )
-    .map_err(|e| e.to_string())?;
-    // The verified installer owns the compatibility schema. Its dry run hashes
-    // baseline dependencies and checks writable path / free space before exit.
-    let mut preflight = tokio::process::Command::new(&installer);
-    preflight.args(["/S", "/CHECK"]).kill_on_drop(true);
-    installer_directory_arg(preflight.as_std_mut(), directory);
-    let status = tokio::select! {
-        _=cancel.cancelled()=>{let _=std::fs::remove_dir_all(&stage);return Ok(());},
-        result=tokio::time::timeout(Duration::from_secs(120),preflight.status())=>result.map_err(|_|"更新兼容性检查超时")?.map_err(|e|format!("无法检查更新兼容性: {e}"))?
-    };
-    if !status.success() {
-        return Err("轻量更新兼容性检查失败，请使用完整安装包；详见临时目录 HarmonyWorkUpdateCheck/light-installer.log".into());
-    }
-    let _quiesce = policy::Quiesce::begin();
+}
+
+#[cfg(target_os = "macos")]
+async fn install_macos(
+    app: &tauri::AppHandle,
+    service: &UpdateService,
+    cancel: &CancellationToken,
+    bytes: Vec<u8>,
+    version: String,
+) -> Result<(), String> {
+    let old_version = app.package_info().version.to_string();
+    let prepared =
+        tokio::task::spawn_blocking(move || macos::prepare(&bytes, &old_version, &version))
+            .await
+            .map_err(|e| e.to_string())??;
+    let quiesce = policy::Quiesce::begin();
     service.change(app, |s| s.phase = "waiting".into());
-    while !_quiesce.ready()
+    while !quiesce.ready()
         || if let Some(state) = app.try_state::<crate::store::AppState>() {
             !state.cancel_flags.lock().await.is_empty()
         } else {
             false
         }
     {
-        tokio::select! { _=cancel.cancelled()=>{let _=std::fs::remove_dir_all(&stage);return Ok(());}, _=tokio::time::sleep(Duration::from_millis(250))=>{} }
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        }
     }
     if cancel.is_cancelled() {
-        let _ = std::fs::remove_dir_all(&stage);
         return Ok(());
     }
-    // No cancellation once cleanup/handoff begins.
     service.change(app, |s| s.phase = "installing".into());
+    // The helper validates its copy, manifest, archive hash and fresh extraction
+    // before signalling ready. Until then the existing runtime remains intact.
+    tokio::task::spawn_blocking(move || prepared.handoff())
+        .await
+        .map_err(|e| e.to_string())??;
     if let Some(runtime) = app.try_state::<crate::codex_runtime::service::CodexRuntimeState>() {
-        runtime.shutdown().await.map_err(|e| e.to_string())?;
+        match tokio::time::timeout(Duration::from_secs(10), runtime.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!("Runtime shutdown during Mac update: {error}"),
+            Err(_) => tracing::warn!("Runtime shutdown timed out during Mac update"),
+        }
     }
     if let Some(state) = app.try_state::<crate::store::AppState>() {
-        crate::app::shutdown::prepare_shutdown(&state).await;
+        if tokio::time::timeout(
+            Duration::from_secs(10),
+            crate::app::shutdown::prepare_shutdown(&state),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!("Resource shutdown timed out during Mac update");
+        }
     }
-    let mut command = std::process::Command::new(&installer);
-    command.args(["/S", "/UPDATE", "/R"]);
-    installer_directory_arg(&mut command, directory);
-    command
-        .spawn()
-        .map_err(|e| format!("无法启动更新安装器: {e}"))?;
-    _quiesce.commit();
+    quiesce.commit();
     crate::app::shutdown::request_app_exit(app.clone());
     Ok(())
 }
@@ -596,7 +697,7 @@ pub fn setup(app: &tauri::AppHandle) {
     service.persist();
     app.manage(service.clone());
     let handle = app.clone();
-    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    if platform_supported() {
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(15)).await;
@@ -636,6 +737,7 @@ fn write_atomic_health(target: &std::path::Path, bytes: &[u8]) -> std::io::Resul
     }
     result
 }
+#[cfg(any(not(target_os = "macos"), test))]
 fn valid_health_target(install: &std::path::Path, target: &std::path::Path) -> bool {
     if !target.is_absolute() || target.file_name().and_then(|s| s.to_str()) != Some("health.json") {
         return false;
@@ -676,10 +778,18 @@ fn acknowledge_health(app: &tauri::AppHandle) {
             return;
         }
         let target = std::path::Path::new(&file);
-        if !exe
+        #[cfg(target_os = "macos")]
+        let valid = macos::valid_health_target(
+            &exe,
+            target,
+            &token,
+            &app.package_info().version.to_string(),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let valid = exe
             .parent()
-            .is_some_and(|install| valid_health_target(install, target))
-        {
+            .is_some_and(|install| valid_health_target(install, target));
+        if !valid {
             return;
         }
         let bytes =

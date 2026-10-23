@@ -41,7 +41,9 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "description":"Submit instrumental music or BGM through the user's Harmony API key and return its resumable task ID immediately. Poll with harvis_job_status.",
             "inputSchema":{
                 "type":"object","properties":{
-                    "prompt":{"type":"string","minLength":1},"title":{"type":"string"},
+                    "prompt":{"type":"string","minLength":1},
+                    "tags":{"type":"string","description":"Optional concise music style tags, at most 900 characters. The full prompt is preserved separately."},
+                    "title":{"type":"string"},
                     "duration":{"type":"integer","minimum":10,"maximum":600,"default":45},
                     "mode":{"type":"string","enum":["free","assistant"],"default":"free"}
                 },"required":["prompt"],"additionalProperties":false
@@ -480,7 +482,7 @@ fn normalize_music_request(input: &Value) -> Result<Value> {
     let prompt = required_string(input, "prompt")?;
     Ok(compact_object([
         ("prompt", Some(Value::String(prompt.clone()))),
-        ("tags", Some(Value::String(prompt))),
+        ("tags", optional_string(input, "tags").map(Value::String)),
         (
             "title",
             Some(Value::String(
@@ -817,6 +819,20 @@ mod tests {
         assert_eq!(request["mode"], "text");
         assert_eq!(request["canvasPreset"], "vertical");
         assert!(request.get("referenceUrls").is_none());
+    }
+
+    #[test]
+    fn music_tool_preserves_separate_style_tags() {
+        let request = normalize_music_request(&json!({
+            "prompt": "A complete arrangement with intro and outro",
+            "tags": "cinematic instrumental"
+        }))
+        .unwrap();
+        assert_eq!(
+            request["prompt"],
+            "A complete arrangement with intro and outro"
+        );
+        assert_eq!(request["tags"], "cinematic instrumental");
     }
 
     #[tokio::test]

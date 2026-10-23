@@ -40,7 +40,8 @@ import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation 
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
 import { primaryChannelStatusLabel } from "./channelLifecycle";
-import { availableEmbeddingModels, selectedEmbeddingModel } from "./embeddingModels";
+import { embeddingModelItems, selectedEmbeddingModel } from "./embeddingModels";
+import AppDropdown from "../ui/AppDropdown";
 import "./Settings.css";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
@@ -196,6 +197,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [harvisModelOptions, setHarvisModelOptions] = useState<ProviderModelInfo[]>([]);
   const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
   const [embeddingModelsError, setEmbeddingModelsError] = useState<string | null>(null);
+  const [embeddingMenuOpen, setEmbeddingMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
@@ -710,6 +712,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
     ...(form.enabled_models ?? []),
     ...(form.available_models ?? []),
   ]);
+  const embeddingItems = embeddingModelItems(form.memory_embedding_model ?? "", harvisModelOptions);
 
   const handleFetchGlobalModels = async () => {
     setGlobalModelLoading(true);
@@ -1249,19 +1252,19 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                 Base URL: <code>{HARMONY_API_BASE}</code>
                 {" · "}<a href="https://portal.harmonywatch.cn/workspace?tab=console" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.harmonyKeyHelp")}</a>
               </p>
-              <label className="label" htmlFor="memory-embedding-model">记忆向量模型（可选）</label>
-              <select id="memory-embedding-model" className="input" value={form.memory_embedding_model ?? ""}
-                onChange={(e) => update("memory_embedding_model", e.target.value)}>
-                <option value="">不使用向量模型</option>
-                {form.memory_embedding_model && !availableEmbeddingModels(harvisModelOptions).some((m) => m.id === form.memory_embedding_model) && (
-                  <option value={form.memory_embedding_model}>{form.memory_embedding_model}（已保存）</option>
-                )}
-                {availableEmbeddingModels(harvisModelOptions).map((m) => (
-                  <option key={m.id} value={m.id}>{m.label || m.id}</option>
-                ))}
-              </select>
+              <label className="label">记忆向量模型（可选）</label>
+              <AppDropdown
+                menuId="memory-embedding-model"
+                triggerLabel={embeddingItems.find((item) => item.selected)?.label ?? "不使用向量模型"}
+                triggerTitle="记忆向量模型（可选）"
+                items={embeddingItems}
+                open={embeddingMenuOpen}
+                onOpenChange={setEmbeddingMenuOpen}
+                onSelect={(id) => update("memory_embedding_model", id)}
+                variant="form"
+              />
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                {embeddingModelsLoading ? "正在获取可用向量模型…" : embeddingModelsError ? "模型列表暂不可用，请检查 Harmony Key 后重试。" : "自动选择可用模型；留空时使用本地关键词检索。"}
+                {embeddingModelsLoading ? "正在获取可用向量模型…" : embeddingModelsError ? "模型列表暂不可用，请检查 Harmony Key 后重试。" : "留空时使用本地关键词检索。"}
               </p>
             </div>
           )}

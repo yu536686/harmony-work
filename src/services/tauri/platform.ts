@@ -27,7 +27,7 @@ export interface EnvironmentBootstrapItem {
   available: boolean;
   version: string | null;
   local_installer: string | null;
-  source: "system" | "local" | "online" | "missing";
+  source: "bundled" | "system" | "local" | "online" | "missing";
   status: "ready" | "missing";
   details: string;
 }

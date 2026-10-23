@@ -27,6 +27,10 @@ test("Windows and macOS builds keep their native payloads separate", async () =>
   assert.ok(!base.bundle.resources.some((resource) => /mac-use-mcp|resources\/node/.test(resource)));
   assert.ok(mac.bundle.resources.includes("resources/mac-use-mcp"));
   assert.ok(mac.bundle.resources.includes("resources/node"));
+  for (const runtime of ["git", "python", "wecom"]) {
+    assert.ok(mac.bundle.resources.includes(`resources/${runtime}`));
+    assert.ok(!base.bundle.resources.includes(`resources/${runtime}`));
+  }
   assert.ok(!mac.bundle.resources.some((resource) => /flaui-mcp|offline-installers/.test(resource)));
 });
 
@@ -43,6 +47,12 @@ test("native tests exclude staged payloads without changing release bundles", as
   assert.match(workflow, /npm ci/);
   assert.match(workflow, /npm test/);
   assert.match(workflow, /npm run test:native/);
+});
+
+test("Mac upgrade snapshots stay outside Windows production and test builds", async () => {
+  const store = await read("src-tauri/src/store/mod.rs");
+  assert.match(store, /#\[cfg\(target_os = "macos"\)\]\s*mod upgrade;/);
+  assert.doesNotMatch(store, /#\[cfg\(any\(target_os = "macos", test\)\)\]\s*mod upgrade;/);
 });
 
 test("unsafe NSIS data removal is blocked in favor of workspace-safe cleanup", async () => {

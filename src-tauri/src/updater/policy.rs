@@ -59,6 +59,29 @@ mod tests {
         assert!(valid_channel("preview"));
         assert!(!valid_channel("beta"));
     }
+    #[test]
+    fn mac_cdn_accepts_only_unambiguous_signed_bundle_archive_locations() {
+        assert!(allowed_macos_download(
+            "https://download.harmonywatch.cn/releases/macos/Harmony_Work_1.1.2_aarch64.app.tar.gz"
+        ));
+        assert!(allowed_macos_download(
+            "https://download.harmonywatch.cn/releases/macos/Harmony%20Work.app.tar.gz"
+        ));
+        for url in [
+            "http://download.harmonywatch.cn/releases/update.app.tar.gz",
+            "https://download.harmonywatch.cn.evil.com/releases/update.app.tar.gz",
+            "https://download.harmonywatch.cn:444/releases/update.app.tar.gz",
+            "https://user@download.harmonywatch.cn/releases/update.app.tar.gz",
+            "https://download.harmonywatch.cn/updates/update.app.tar.gz",
+            "https://download.harmonywatch.cn/releases/../update.app.tar.gz",
+            "https://download.harmonywatch.cn/releases/%2e%2e/update.app.tar.gz",
+            "https://download.harmonywatch.cn/releases/update%2f.app.tar.gz",
+            "https://download.harmonywatch.cn/releases/update.app.tar.gz?unsigned=1",
+            "https://download.harmonywatch.cn/releases/update.exe",
+        ] {
+            assert!(!allowed_macos_download(url), "{url}");
+        }
+    }
 }
 
 pub fn success_due(now: u64, jitter: u64) -> u64 {
@@ -70,6 +93,7 @@ pub fn failure_due(now: u64, failures: u32) -> u64 {
 pub fn valid_channel(channel: &str) -> bool {
     matches!(channel, "stable" | "preview")
 }
+#[cfg(any(not(target_os = "macos"), test))]
 pub fn allowed_download(url: &str) -> bool {
     let Some(path) = url.strip_prefix("https://download.harmonywatch.cn/releases/") else {
         return false;
@@ -80,6 +104,33 @@ pub fn allowed_download(url: &str) -> bool {
             .split('/')
             .any(|p| p == ".." || p == "." || p.is_empty())
         && path.ends_with(".exe")
+}
+
+pub fn allowed_platform_download(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    return allowed_macos_download(url);
+    #[cfg(not(target_os = "macos"))]
+    allowed_download(url)
+}
+#[cfg(any(target_os = "macos", test))]
+fn allowed_macos_download(url: &str) -> bool {
+    let Some(path) = url.strip_prefix("https://download.harmonywatch.cn/releases/") else {
+        return false;
+    };
+    // Encoded spaces in product names are valid, but separators, dot segments,
+    // double-encoding and control characters must never change the directory.
+    !path.is_empty()
+        && path.ends_with(".app.tar.gz")
+        && !path.contains(['\\', '#', '?'])
+        && path.split('/').all(|part| {
+            urlencoding::decode(part).is_ok_and(|decoded| {
+                !decoded.is_empty()
+                    && decoded != "."
+                    && decoded != ".."
+                    && !decoded.contains(['/', '\\', ':', '%'])
+                    && !decoded.chars().any(char::is_control)
+            })
+        })
 }
 
 #[derive(Default, Debug)]
