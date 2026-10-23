@@ -120,8 +120,13 @@ fn verify_snapshot(path: &Path) -> Result<()> {
     if fs::metadata(path)?.len() == 0 {
         bail!("Empty macOS memory backup at {}", path.display());
     }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let result: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    // FTS5 implements its integrity check using an internal INSERT, even for
+    // PRAGMA quick_check. Permit it only on the private snapshot and roll back
+    // the validation transaction so the pre-upgrade backup stays unchanged.
+    let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let transaction = conn.transaction()?;
+    let result: String = transaction.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    transaction.rollback()?;
     if result != "ok" {
         bail!(
             "Invalid macOS memory backup at {}: {result}",
@@ -368,6 +373,44 @@ mod tests {
     }
 
     #[test]
+    fn existing_fts_database_backup_is_validated_without_changing_source_or_snapshot() {
+        let root = TempRoot::new();
+        let live = Connection::open(root.db()).unwrap();
+        live.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+             CREATE TABLE notes(id INTEGER PRIMARY KEY, content TEXT NOT NULL);
+             CREATE VIRTUAL TABLE notes_fts USING fts5(content, content='notes', content_rowid='id');
+             INSERT INTO notes VALUES(1, 'preserve existing memory');
+             INSERT INTO notes_fts(notes_fts) VALUES('rebuild');"
+        ).unwrap();
+        let source_version: i64 = live
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap();
+        initialize(&root.db(), || Ok(())).unwrap();
+        assert_eq!(
+            live.query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            source_version
+        );
+        let before = fs::read(root.backup()).unwrap();
+        verify_snapshot(&root.backup()).unwrap();
+        assert_eq!(fs::read(root.backup()).unwrap(), before);
+        assert!(!root.backup().with_extension("db-wal").exists());
+        let snapshot =
+            Connection::open_with_flags(root.backup(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(
+            snapshot
+                .query_row(
+                    "SELECT count(*) FROM notes_fts WHERE notes_fts MATCH 'preserve'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
     fn real_database_migrations_preserve_memory_sessions_identity_and_tombstones() {
         let root = TempRoot::new();
         let source = Connection::open(root.db()).unwrap();
@@ -378,8 +421,10 @@ mod tests {
                  confidence REAL NOT NULL, source_session_id TEXT,
                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
              );
+             CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid');
              INSERT INTO memories VALUES ('memory-107', 'keep my preference', 'preference', 0.9,
                  'session-107', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
+             INSERT INTO memories_fts(memories_fts) VALUES('rebuild');
              CREATE TABLE sessions (
                  id TEXT PRIMARY KEY, title TEXT, status TEXT NOT NULL,
                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
