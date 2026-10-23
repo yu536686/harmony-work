@@ -266,7 +266,7 @@ async fn run_im_agent_and_send_reply(
 /// Explorer opens (ShellExecute "open" verb is unreliable for directories).
 /// Files are opened with the `start` command (equivalent to double-clicking).
 #[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
+pub(crate) fn open_path(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let p = std::path::Path::new(&path);
@@ -310,14 +310,6 @@ fn should_register_single_instance(allow_multiple_instances: bool, debug_build: 
 fn run_impl() {
     let _log_guard = init_logging();
     install_crash_reporter();
-    let updater_enabled = std::env::var("WORKBUDDY_ENABLE_UPDATER").ok().as_deref() == Some("1");
-
-    if !updater_enabled {
-        tracing::info!(
-            "Updater plugin disabled at startup. Set WORKBUDDY_ENABLE_UPDATER=1 only after updater pubkey/endpoints are fully configured."
-        );
-    }
-
     let config_path = store::settings::Settings::default_config_path();
     let allow_multiple = store::settings::Settings::load(&config_path)
         .map(|s| s.allow_multiple_instances)
@@ -330,7 +322,10 @@ fn run_impl() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init());
 
-    if updater_enabled {
+    if cfg!(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        target_os = "macos"
+    )) {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
@@ -1191,6 +1186,7 @@ fn run_impl() {
                 }
             }
 
+            crate::updater::setup(app.handle());
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1217,6 +1213,16 @@ fn run_impl() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::updater::update_status,
+            crate::updater::update_check,
+            crate::updater::update_install,
+            crate::updater::update_cancel,
+            crate::updater::update_set_channel,
+            crate::mac_update_panel::show_macos_update,
+            crate::mac_update_panel::close_macos_update,
+            crate::mac_mobile_bridge::show_macos_mobile_bridge,
+            crate::mac_mobile_bridge::update_macos_mobile_bridge,
+            crate::mac_mobile_bridge::close_macos_mobile_bridge,
             open_path,
             crate::mac_native_shell::set_macos_shell_state,
             crate::mac_native_shell::show_macos_dropdown,
@@ -1303,6 +1309,26 @@ fn run_impl() {
             commands::account_settings_sync::account_settings_sync_restore,
             commands::account_settings_sync::account_settings_sync_restore_selected,
             commands::account_settings_sync::account_settings_sync_delete,
+            commands::mobile_bridge::mobile_bridge_start_pairing,
+            commands::mobile_bridge::mobile_bridge_set_device,
+            commands::mobile_bridge::mobile_bridge_sign_out,
+            commands::mobile_bridge::mobile_bridge_pairing_status,
+            commands::mobile_bridge::mobile_bridge_sync,
+            commands::mobile_bridge::mobile_bridge_active_turn,
+            commands::mobile_bridge::mobile_bridge_task_events,
+            commands::mobile_bridge::mobile_bridge_attachments,
+            commands::mobile_attachment::mobile_attachment_open,
+            commands::mobile_attachment::mobile_attachment_authorize,
+            commands::mobile_attachment::mobile_attachment_read_chunk,
+            commands::mobile_attachment::mobile_attachment_cancel,
+            commands::mobile_bridge::mobile_bridge_changes,
+            commands::mobile_bridge::mobile_bridge_tasks,
+            commands::mobile_bridge::mobile_bridge_devices,
+            commands::mobile_bridge::mobile_bridge_unlink,
+            commands::mobile_bridge::mobile_bridge_signals,
+            commands::mobile_bridge::mobile_bridge_send_signal,
+            commands::mobile_bridge::mobile_bridge_start_worker,
+            commands::mobile_bridge::mobile_bridge_stop_worker,
             commands::marketing::marketing_login,
             commands::marketing::marketing_logout,
             commands::marketing::marketing_me,

@@ -792,7 +792,7 @@ async fn download_marketing_asset(
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(600))
-        .user_agent("Harmony-Work/1.0.7 Marketing")
+        .user_agent("Harmony-Work/1.0.9 Marketing")
         .build()
         .map_err(|e| e.to_string())?;
     let req = client.get(source_url.clone());

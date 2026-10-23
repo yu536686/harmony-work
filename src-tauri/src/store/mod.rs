@@ -1,13 +1,14 @@
 pub mod db;
 pub mod secrets;
 pub mod settings;
+#[cfg(any(target_os = "macos", test))]
+mod upgrade;
 mod vector;
 
 pub use db::Database;
 pub use settings::{Settings, SkillEvolutionSettings};
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -15,103 +16,8 @@ use tokio::sync::Mutex;
 
 use crate::lsp::manager::LspManager;
 
-fn copy_missing_tree(source: &Path, target: &Path) -> Result<()> {
-    if !source.is_dir() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let destination = target.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_missing_tree(&entry.path(), &destination)?;
-        } else if file_type.is_file() && !destination.exists() {
-            std::fs::copy(entry.path(), destination)?;
-        }
-    }
-    Ok(())
-}
-
-fn migrate_legacy_app_data_from(legacy_dir: &Path, app_dir: &Path) -> Result<()> {
-    copy_missing_tree(legacy_dir, app_dir)
-}
-
-fn migrate_legacy_app_data(app_dir: &Path) -> Result<()> {
-    let Some(data_root) = app_dir.parent() else {
-        return Ok(());
-    };
-    let legacy_dir = data_root.join("com.piscis.desktop");
-    if legacy_dir == app_dir || !legacy_dir.is_dir() {
-        return Ok(());
-    }
-    migrate_legacy_app_data_from(&legacy_dir, app_dir)
-}
-
-fn database_has_table(path: &Path, table: &str) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    Connection::open(path)
-        .and_then(|connection| {
-            connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
-                params![table],
-                |row| row.get::<_, i64>(0),
-            )
-        })
-        .map(|exists| exists != 0)
-        .unwrap_or(false)
-}
-
-fn migrate_database_file(app_dir: &Path) -> Result<PathBuf> {
-    let target = app_dir.join("workbuddy.db");
-    let previous = app_dir.join("piscis.db");
-    if !previous.is_file() || database_has_table(&target, "sessions") {
-        return Ok(target);
-    }
-
-    let memory_backup = app_dir.join("workbuddy.memory-backup.db");
-    if target.is_file() {
-        let _ = std::fs::remove_file(&memory_backup);
-        std::fs::rename(&target, &memory_backup)?;
-    }
-    std::fs::rename(&previous, &target)?;
-    for suffix in ["-wal", "-shm"] {
-        let source = app_dir.join(format!("piscis.db{suffix}"));
-        let destination = app_dir.join(format!("workbuddy.db{suffix}"));
-        if source.is_file() {
-            let _ = std::fs::rename(source, destination);
-        }
-    }
-
-    if memory_backup.is_file() {
-        let connection = Connection::open(&target)?;
-        connection.execute(
-            "ATTACH DATABASE ?1 AS memory_backup",
-            params![memory_backup.display().to_string()],
-        )?;
-        let has_backup_memories: i64 = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM memory_backup.sqlite_master WHERE type='table' AND name='memories')",
-            [],
-            |row| row.get(0),
-        )?;
-        if has_backup_memories != 0 {
-            let _ = connection.execute(
-                "INSERT OR IGNORE INTO memories (id, content, category, confidence, owner_id, scope_type, scope_id, kind, last_seen_at, created_at, updated_at)
-                 SELECT id, content, category, 0.8,
-                        CASE WHEN owner_id='piscis' THEN 'xiaoheng' ELSE owner_id END,
-                        'private',
-                        CASE WHEN owner_id='piscis' THEN 'xiaoheng' ELSE owner_id END,
-                        'fact', created_at, created_at, created_at
-                 FROM memory_backup.memories",
-                [],
-            );
-        }
-        let _ = connection.execute_batch("DETACH DATABASE memory_backup");
-        let _ = std::fs::remove_file(memory_backup);
-    }
-    Ok(target)
+fn database_path(app_dir: &Path) -> PathBuf {
+    app_dir.join("workbuddy.db")
 }
 
 /// Global application state managed by Tauri
@@ -170,10 +76,12 @@ impl AppState {
         scheduler: crate::scheduler::CronScheduler,
         app_dir: std::path::PathBuf,
     ) -> Result<Self> {
-        migrate_legacy_app_data(&app_dir)?;
         std::fs::create_dir_all(&app_dir)?;
 
-        let db_path = migrate_database_file(&app_dir)?;
+        let db_path = database_path(&app_dir);
+        #[cfg(target_os = "macos")]
+        let db = upgrade::initialize(&db_path, || Database::open(&db_path))?;
+        #[cfg(not(target_os = "macos"))]
         let db = Database::open(&db_path)?;
 
         let config_path = app_dir.join("config.json");
@@ -209,30 +117,22 @@ impl AppState {
 
 #[cfg(test)]
 mod migration_tests {
-    use super::migrate_legacy_app_data_from;
+    use super::{database_path, Database};
 
     #[test]
-    fn legacy_app_data_is_copied_without_overwriting_current_files() {
-        let root =
-            std::env::temp_dir().join(format!("workbuddy-migration-{}", uuid::Uuid::new_v4()));
-        let legacy = root.join("legacy");
+    fn database_path_stays_within_current_app_data() {
+        let root = std::env::temp_dir().join(format!("workbuddy-isolation-{}", uuid::Uuid::new_v4()));
+        let old_product = root.join("old-product");
         let current = root.join("current");
-        std::fs::create_dir_all(legacy.join("skills")).unwrap();
+        std::fs::create_dir_all(&old_product).unwrap();
         std::fs::create_dir_all(&current).unwrap();
-        std::fs::write(legacy.join("config.json"), "legacy").unwrap();
-        std::fs::write(legacy.join("skills").join("sample.md"), "skill").unwrap();
-        std::fs::write(current.join("config.json"), "current").unwrap();
+        std::fs::write(old_product.join("legacy.db"), "old data").unwrap();
 
-        migrate_legacy_app_data_from(&legacy, &current).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(current.join("config.json")).unwrap(),
-            "current"
-        );
-        assert_eq!(
-            std::fs::read_to_string(current.join("skills").join("sample.md")).unwrap(),
-            "skill"
-        );
+        let path = database_path(&current);
+        Database::open(&path).unwrap();
+        assert!(path.exists());
+        assert!(!current.join("legacy.db").exists());
+        assert_eq!(std::fs::read_to_string(old_product.join("legacy.db")).unwrap(), "old data");
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -43,6 +43,12 @@ export async function stageMacosRuntime() {
   if (staged.status !== 0) {
     throw new Error(`macOS offline runtime staging failed (exit ${staged.status})`);
   }
+  const python = spawnSync(process.execPath, [resolve(root, "scripts", "stage-macos-python.mjs")], { stdio: "inherit" });
+  if (python.status !== 0) throw new Error("macOS Harmony Cut dependencies could not be staged");
+  await mkdir(resolve(resources, "licenses"), { recursive: true });
+  for (const filename of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) {
+    await copyFile(resolve(root, filename), resolve(resources, "licenses", filename));
+  }
   console.log(`Staged mac-use-mcp ${packageJson.version}`);
 }
 

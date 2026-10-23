@@ -88,6 +88,9 @@ pub async fn save_settings(
             settings.harmony_api_key = v.to_string();
         }
     }
+    if let Some(v) = updates["memory_embedding_model"].as_str() {
+        settings.memory_embedding_model = v.trim().to_string();
+    }
     if let Some(v) = updates["harvis_image_model"].as_str() {
         settings.harvis_image_model = v.to_string();
     }
@@ -708,10 +711,15 @@ fn normalize_model_base_url(provider: &str, base_url: Option<&str>) -> Result<St
 }
 
 /// 依据模型 ID 关键字识别模型种类，用于 Harvis 创作模型分类。
-/// 返回 "chat" | "image" | "video" | "music" | "tts"。
+/// 返回 "chat" | "embedding" | "image" | "video" | "music" | "tts"。
 pub fn classify_harvis_model_kind(id: &str) -> &'static str {
     let lower = id.to_ascii_lowercase();
-    if lower.contains("gpt-image")
+    if lower.contains("embedding") || lower.contains("bge-") || lower.contains("gte-")
+        || lower.contains("nomic-embed") || lower.contains("mxbai-embed")
+        || lower.contains("e5-")
+    {
+        "embedding"
+    } else if lower.contains("gpt-image")
         || lower.contains("dall-e")
         || lower.contains("flux")
         || lower.contains("stable-diffusion")
@@ -769,11 +777,23 @@ fn extract_models(value: &Value) -> Vec<ProviderModelInfo> {
                 .or_else(|| item.get("owner"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let declared_kind = item.get("kind")
+                .or_else(|| item.get("type"))
+                .or_else(|| item.get("category"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let kind = if declared_kind.eq_ignore_ascii_case("embedding")
+                || declared_kind.eq_ignore_ascii_case("embeddings")
+            {
+                "embedding"
+            } else {
+                classify_harvis_model_kind(id)
+            };
             out.push(ProviderModelInfo {
                 id: id.to_string(),
                 label,
                 owned_by,
-                kind: classify_harvis_model_kind(id).to_string(),
+                kind: kind.to_string(),
             });
         }
     }
@@ -852,4 +872,22 @@ pub async fn fetch_provider_models(
 pub async fn is_configured(state: State<'_, AppState>) -> Result<bool, String> {
     let settings = state.settings.lock().await;
     Ok(settings.is_configured())
+}
+
+#[cfg(test)]
+mod model_catalog_tests {
+    use super::{classify_harvis_model_kind, extract_models};
+    use serde_json::json;
+
+    #[test]
+    fn embedding_models_are_classified_by_id_or_declared_type() {
+        assert_eq!(classify_harvis_model_kind("Qwen/Qwen3-Embedding-8B"), "embedding");
+        assert_eq!(classify_harvis_model_kind("BAAI/bge-m3"), "embedding");
+        let models = extract_models(&json!({"data": [
+            {"id": "private-vector", "type": "embedding"},
+            {"id": "deepseek-v4-flash", "type": "chat"}
+        ]}));
+        assert_eq!(models[1].kind, "embedding");
+        assert_eq!(models[0].kind, "chat");
+    }
 }

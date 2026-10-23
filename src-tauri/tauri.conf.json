@@ -1,116 +1,126 @@
 {
-    "$schema": "https://schema.tauri.app/config/2",
-    "productName": "Harmony Work",
-    "mainBinaryName": "harmony-work",
-    "version": "1.0.7",
-    "identifier": "com.harmony.xiaoheng-workbuddy",
-    "build": {
-        "beforeDevCommand": "npm run dev",
-        "devUrl": "http://localhost:1420",
-        "beforeBuildCommand": "npm run build",
-        "frontendDist": "../dist"
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Harmony Work",
+  "mainBinaryName": "harmony-work",
+  "version": "1.1.2",
+  "identifier": "com.harmony.xiaoheng-workbuddy",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harmony Work",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 980,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "dragDropEnabled": true,
+        "fullscreen": false
+      },
+      {
+        "label": "overlay",
+        "title": "Harmony Work Overlay",
+        "url": "index.html?overlay=1",
+        "width": 280,
+        "height": 56,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "x": 20,
+        "y": 20
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
     },
-    "app": {
-        "macOSPrivateApi": true,
-        "windows": [
-            {
-                "label": "main",
-                "title": "Harmony Work",
-                "width": 1380,
-                "height": 880,
-                "minWidth": 980,
-                "minHeight": 680,
-                "center": true,
-                "resizable": true,
-                "dragDropEnabled": true,
-                "fullscreen": false
-            },
-            {
-                "label": "overlay",
-                "title": "Harmony Work Overlay",
-                "url": "index.html?overlay=1",
-                "width": 280,
-                "height": 56,
-                "transparent": true,
-                "decorations": false,
-                "alwaysOnTop": true,
-                "visible": false,
-                "resizable": false,
-                "maximizable": false,
-                "minimizable": false,
-                "closable": false,
-                "skipTaskbar": true,
-                "shadow": false,
-                "x": 20,
-                "y": 20
-            }
-        ],
-        "security": {
-            "csp": null,
-            "assetProtocol": {
-                "enable": true,
-                "scope": [
-                    "**"
-                ]
-            }
-        },
-        "withGlobalTauri": true,
-        "trayIcon": {
-            "id": "main",
-            "iconPath": "icons/icon.png",
-            "iconAsTemplate": false
-        }
-    },
-    "bundle": {
-        "active": true,
-        "targets": [
-            "nsis"
-        ],
-        "icon": [
-            "icons/32x32.png",
-            "icons/128x128.png",
-            "icons/128x128@2x.png",
-            "icons/icon.icns",
-            "icons/icon.ico"
-        ],
-        "resources": [
-            "resources/offline-installers",
-            "resources/harmony-cut",
-            "resources/codex",
-            "resources/workbuddy-mcp-host",
-            "resources/playwright-mcp",
-            "resources/flaui-mcp",
-            "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
-        ],
-        "category": "Productivity",
-        "publisher": "Harmony",
-        "copyright": "Copyright 2026 Harmony",
-        "shortDescription": "Harmony AI desktop work assistant",
-        "longDescription": "Harmony Work is a desktop AI workbench for conversations, projects, skills, tools, IM channels, and multi-agent collaboration.",
-        "windows": {
-            "digestAlgorithm": "sha256",
-            "webviewInstallMode": {
-                "type": "offlineInstaller",
-                "silent": true
-            },
-            "nsis": {
-                "installMode": "currentUser",
-                "languages": [
-                    "SimpChinese",
-                    "English"
-                ],
-                "displayLanguageSelector": true,
-                "installerIcon": "icons/icon.ico",
-                "compression": "lzma"
-            }
-        }
-    },
-    "plugins": {
-        "shell": {
-            "open": true
-        },
-        "fs": {
-            "requireLiteralLeadingDot": false
-        }
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/offline-installers",
+      "resources/harmony-cut",
+      "resources/codex",
+      "resources/workbuddy-mcp-host",
+      "resources/playwright-mcp",
+      "resources/flaui-mcp",
+      "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
+    ],
+    "category": "Productivity",
+    "publisher": "Harmony",
+    "copyright": "Copyright 2026 Harmony",
+    "shortDescription": "Harmony AI desktop work assistant",
+    "longDescription": "Harmony Work is a desktop AI workbench for conversations, projects, skills, tools, IM channels, and multi-agent collaboration.",
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/hooks.nsh",
+        "compression": "lzma"
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "fs": {
+      "requireLiteralLeadingDot": false
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZGQkVEQTcxNTA4Q0NBOTcKUldTWHlveFFjZHErLzU3MjdGcG9ZS1hld3ByTVFQM21VUU9yR080UWk3R3phZEQrYXlYbjNUa1kK",
+      "endpoints": [
+        "https://download.harmonywatch.cn/updates/windows/x86_64/stable.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
+  }
 }

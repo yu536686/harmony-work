@@ -1,0 +1,65 @@
+<Window x:Class="HarmonyWorkUninstaller.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="卸载 Harmony Work" Height="660" Width="560" MinHeight="660" MinWidth="560"
+        WindowStyle="None" ResizeMode="NoResize" Background="#F7F6FC" FontFamily="Microsoft YaHei UI">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="44" CornerRadius="16" GlassFrameThickness="0" ResizeBorderThickness="0" />
+  </shell:WindowChrome.WindowChrome>
+  <Border Margin="1" Background="#FCFBFF" CornerRadius="15" BorderBrush="#E1DDF1" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="44" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+      <Grid Grid.Row="0" Margin="20,0,14,0">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <Image Width="19" Height="19" Source="pack://application:,,,/Assets/brand.png" Stretch="Uniform" />
+          <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Foreground="#6A6478" FontSize="12" Text="Harmony Work 卸载器" />
+        </StackPanel>
+        <Button HorizontalAlignment="Right" Width="28" Height="28" BorderThickness="0" Background="Transparent"
+                shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="关闭卸载器"
+                Foreground="#9992AB" FontSize="18" Content="×" Click="Close_Click" />
+      </Grid>
+      <Grid Grid.Row="1" Margin="40,24,40,34">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center">
+          <Border Width="82" Height="82" CornerRadius="22" Background="#F0ECFF" BorderBrush="#DED5FF" BorderThickness="1" HorizontalAlignment="Center">
+            <Image Source="pack://application:,,,/Assets/brand.png" Stretch="Uniform" Margin="12" />
+          </Border>
+          <TextBlock Margin="0,15,0,0" HorizontalAlignment="Center" FontSize="27" FontWeight="SemiBold">
+            <Run Foreground="#272334" Text="Harmony " /><Run Foreground="#7A57EB" Text="Work" />
+          </TextBlock>
+          <TextBlock Margin="0,7,0,0" HorizontalAlignment="Center" FontSize="13" Foreground="#79728B" Text="卸载程序与清理本机数据" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="0,25,0,0">
+          <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#302B40" Text="将清理" />
+          <TextBlock Margin="0,7,0,0" FontSize="12" Foreground="#706981" TextWrapping="Wrap"
+                     Text="主程序、快捷方式、开机启动项，以及下方勾选的应用数据。云端配置不受影响。" />
+          <CheckBox x:Name="DeleteDataCheckBox" Margin="0,16,0,0" FontSize="13" Foreground="#302B40" IsChecked="True"
+                    Content="删除本机应用数据、会话、记忆、已安装技能和缓存" />
+          <Border Margin="0,14,0,0" Padding="12" Background="#F4F1FF" BorderBrush="#E6E0FA" BorderThickness="1" CornerRadius="8">
+            <StackPanel>
+              <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#534481" Text="始终保留" />
+              <TextBlock Margin="0,5,0,0" FontSize="12" Foreground="#665F79" TextWrapping="Wrap"
+                         Text="用户工作区及其中的素材、生成文件；已安装的共享运行环境。卸载器不会扫描其他项目或任意磁盘目录。" />
+            </StackPanel>
+          </Border>
+          <TextBlock Margin="0,17,0,6" FontSize="12" FontWeight="SemiBold" Foreground="#302B40" Text="发现的应用数据位置" />
+          <Border Height="96" BorderBrush="#E6E2EF" BorderThickness="1" CornerRadius="6" Background="#FFFFFF">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="9">
+              <TextBlock x:Name="LocationsText" FontSize="11" Foreground="#6C657A" TextWrapping="Wrap" />
+            </ScrollViewer>
+          </Border>
+          <TextBlock x:Name="ProtectedWorkspaceText" Margin="0,10,0,0" FontSize="11" Foreground="#706981" TextWrapping="Wrap" />
+          <TextBlock x:Name="StatusText" Margin="0,16,0,0" FontSize="12" Foreground="#514A62" Text="准备就绪" />
+          <ProgressBar x:Name="UninstallProgress" Height="6" Margin="0,9,0,0" Minimum="0" Maximum="100" Value="0"
+                       Foreground="#7654E8" Background="#DDD7F1" />
+          <TextBlock x:Name="ErrorText" Margin="0,10,0,0" FontSize="11" Foreground="#B5382D" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Button x:Name="UninstallButton" Grid.Row="2" Height="46" Background="#7654E8" Foreground="White"
+                BorderThickness="0" FontSize="14" FontWeight="SemiBold" Content="卸载 Harmony Work" Click="Uninstall_Click" />
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

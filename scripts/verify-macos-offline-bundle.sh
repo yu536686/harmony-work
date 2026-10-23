@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP="${1:?Pass the built Harmony Work.app path}"
+APP="${APP:A}"
 ROOT="$APP/Contents/Resources/resources"
 for relative in node/bin/node node/bin/npm node/bin/npx git/bin/git \
   git/libexec/git-core/git-remote-http git/source/git-2.54.0.tar.xz \
@@ -21,6 +22,9 @@ npx --version
 [[ "$(git --version)" == "git version 2.54.0" ]]
 [[ "$(git --exec-path)" == "$ROOT/git/libexec/git-core" ]]
 python3 -c 'import ssl, sqlite3, pip; print("Python", __import__("sys").version.split()[0])'
+python3 -I -c 'import starlette, uvicorn, pydantic, cv2, numpy, imageio_ffmpeg; import subprocess; subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-version"], check=True, stdout=subprocess.DEVNULL); print("Harmony Cut offline dependencies verified")'
+[[ -f "$ROOT/harmony-cut/server.py" ]]
+[[ -f "$ROOT/licenses/LICENSE" ]]
 pip --version
 [[ "$(wecom-cli --version)" == "wecom-cli 0.1.9" ]]
 

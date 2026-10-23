@@ -159,7 +159,21 @@ test("full installer reuses managed runtimes and reports generic user-facing pro
   assert.match(engine, /ExtractPayloadArchiveAsync/);
 });
 
-test("Harmony Work 1.0.7 release metadata, payload manifest, and installer naming stay aligned", async () => {
+test("full installer bundles the deep uninstaller and exposes an installed entry", async () => {
+  const [build, stage, engine, cleanup] = await Promise.all([
+    readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+    readFile(new URL("./stage-full-installer-payload.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
+    readFile(new URL("../installer/HarmonyWorkUninstaller/UninstallEngine.cs", import.meta.url), "utf8"),
+  ]);
+  assert.ok(build.indexOf("build-uninstaller.ps1") < build.indexOf("stage-full-installer-payload.ps1"));
+  assert.match(stage, /Harmony-Work-Uninstaller\.exe/);
+  assert.match(engine, /InstallDeepUninstaller\(payloadRoot\)/);
+  assert.match(engine, /卸载 Harmony Work\.lnk/);
+  assert.match(cleanup, /卸载 Harmony Work\.lnk/);
+});
+
+test("Harmony Work 1.1.2 release metadata, payload manifest, and installer naming stay aligned", async () => {
   const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
@@ -173,7 +187,7 @@ test("Harmony Work 1.0.7 release metadata, payload manifest, and installer namin
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.0.7");
+  assert.equal(packageJson.version, "1.1.2");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");
@@ -181,10 +195,10 @@ test("Harmony Work 1.0.7 release metadata, payload manifest, and installer namin
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(tauriConfig.identifier, "com.harmony.xiaoheng-workbuddy");
   assert.match(cargoToml, /name = "harmony-work"/);
-  assert.match(cargoToml, /version = "1\.0\.7"/);
+  assert.match(cargoToml, /version = "1\.1\.2"/);
   assert.match(cargoToml, /default-run = "harmony-work"/);
   assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
-  assert.match(project, /<Version>1\.0\.7<\/Version>/);
+  assert.match(project, /<Version>1\.1\.2<\/Version>/);
   assert.match(engine, /private const string ProductName = "Harmony Work"/);
   assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
   assert.match(stageScript, /app\\harmony-work-setup\.exe/);
@@ -193,11 +207,11 @@ test("Harmony Work 1.0.7 release metadata, payload manifest, and installer namin
     /\[PSCustomObject\]@\{ version = \$Version; files = @\(\$Files\) \}/,
     "the staged payload manifest must inherit the formal release version",
   );
-  assert.match(buildScript, /\[string\]\$Version = "1\.0\.7"/);
+  assert.match(buildScript, /\[string\]\$Version = "1\.1\.2"/);
   assert.match(buildScript, /Harmony-Work-\$Version-x64-setup\.exe/);
 });
 
-test("the 1.0.7 installer refreshes the alpha payload without removing user state", async () => {
+test("the formal installer refreshes the alpha payload without removing user state", async () => {
   const [engine, buildScript] = await Promise.all([
     readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
     readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
@@ -216,7 +230,7 @@ test("the 1.0.7 installer refreshes the alpha payload without removing user stat
   assert.match(
     engine,
     /manifest\.Version\.Equals\(InstallerVersion, StringComparison\.Ordinal\)/,
-    "1.3.0-alpha.2 must not be treated as newer than the formal 1.0.7 manifest",
+    "1.3.0-alpha.2 must not be treated as newer than the formal 1.0.9 manifest",
   );
   assert.doesNotMatch(
     engine,
@@ -235,7 +249,7 @@ test("the 1.0.7 installer refreshes the alpha payload without removing user stat
   );
   assert.match(
     buildScript,
-    /\[string\]\$Version = "1\.0\.7"/,
+    /\[string\]\$Version = "1\.1\.2"/,
     "the release build must emit the formal installer filename by default",
   );
 });

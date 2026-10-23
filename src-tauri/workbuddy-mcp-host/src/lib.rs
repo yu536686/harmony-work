@@ -1,20 +1,24 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 mod harvis;
+mod embedding;
 #[path = "../../shared/harvis_responses.rs"]
 mod harvis_responses;
 mod im;
+mod mobile_share;
 mod office;
 mod process;
 mod skills;
 mod staffdeck;
+#[path = "../../src/store/vector.rs"]
+mod vector;
 #[path = "../../src/store/secrets.rs"]
 mod secrets;
 #[path = "../../shared/service_urls.rs"]
@@ -27,6 +31,7 @@ pub struct HostContext {
     pub legacy_database_path: Option<PathBuf>,
     pub skills_roots: Vec<PathBuf>,
     pub marketing_base_url: String,
+    pub mobile_share_capability: Option<String>,
 }
 
 impl HostContext {
@@ -43,6 +48,7 @@ impl HostContext {
             legacy_database_path,
             skills_roots,
             marketing_base_url,
+            mobile_share_capability: None,
         }
     }
 
@@ -87,7 +93,7 @@ pub async fn handle_request(context: &HostContext, request: &Value) -> Option<Va
     let result = match method {
         "initialize" => Ok(initialize_result(request)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools": tool_definitions()})),
+        "tools/list" => Ok(json!({"tools": tool_definitions(context)})),
         "tools/call" => call_tool(context, request.get("params").unwrap_or(&Value::Null)).await,
         _ => {
             return Some(json!({
@@ -122,7 +128,7 @@ fn initialize_result(request: &Value) -> Value {
     })
 }
 
-fn tool_definitions() -> Vec<Value> {
+fn tool_definitions(_context: &HostContext) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "memory_search",
@@ -173,6 +179,9 @@ fn tool_definitions() -> Vec<Value> {
     tools.extend(im::tool_definitions());
     tools.extend(skills::tool_definitions());
     tools.extend(staffdeck::tool_definitions());
+    // Codex can cache this catalog before a mobile task injects its capability.
+    // Keep discovery stable; call_tool still gates execution to the active task.
+    tools.push(mobile_share::tool_definition());
     tools
 }
 
@@ -191,7 +200,15 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
                 .and_then(Value::as_i64)
                 .unwrap_or(10)
                 .clamp(1, 50);
-            tool_success(&search_memories(context, &owner_id, &query, limit)?)
+            let (records, warning) = search_memories(context, &owner_id, &query, limit).await?;
+            let mut response = tool_success(&records)?;
+            if let Some(warning) = warning {
+                response["content"] = json!([
+                    {"type":"text","text":serde_json::to_string_pretty(&records)?},
+                    {"type":"text","text":format!("向量索引不可用，已回退关键词检索：{warning}")}
+                ]);
+            }
+            Ok(response)
         }
         "memory_append" => {
             let content = required_string(arguments, "content")?;
@@ -200,7 +217,13 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
             }
             let owner_id = optional_string(arguments, "owner_id", "xiaoheng");
             let category = optional_string(arguments, "category", "general");
-            tool_success(&append_memory(context, &owner_id, &category, &content)?)
+            let record = append_memory(context, &owner_id, &category, &content)?;
+            if let Some(model) = embedding::configured_model() {
+                if let Err(error) = index_new_memory(context, &record, &model).await {
+                    eprintln!("memory index deferred: {error}");
+                }
+            }
+            tool_success(&record)
         }
         "skill_list" => tool_success(&list_skills(context)?),
         "skill_search" => {
@@ -219,6 +242,7 @@ async fn call_tool(context: &HostContext, params: &Value) -> Result<Value> {
         _ if im::handles(name) => im::call(context, name, arguments).await,
         _ if skills::handles(name) => skills::call(context, name, arguments).await,
         _ if staffdeck::handles(name) => staffdeck::call(context, name, arguments),
+        "share_file" => mobile_share::call(context, arguments).await,
         _ => Err(anyhow!("Unknown WorkBuddy tool: {name}")),
     }
 }
@@ -272,69 +296,35 @@ fn open_database(context: &HostContext) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_memories_owner_created
             ON memories(owner_id, created_at DESC);",
     )?;
-    migrate_legacy_memories(context, &connection)?;
     Ok(connection)
 }
 
-fn migrate_legacy_memories(context: &HostContext, target: &Connection) -> Result<()> {
-    let Some(path) = context
-        .legacy_database_path
-        .as_ref()
-        .filter(|path| path.is_file())
-    else {
-        return Ok(());
-    };
-    if path == &context.database_path {
-        return Ok(());
-    }
-    let legacy = Connection::open(path)?;
-    let has_memories = legacy
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories')",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or_default()
-        != 0;
-    if !has_memories {
-        return Ok(());
-    }
-    let columns = table_columns(&legacy, "memories")?;
-    if !["id", "content", "category", "created_at"]
-        .iter()
-        .all(|column| columns.contains(*column))
-    {
-        return Ok(());
-    }
-    let owner_expression = if columns.contains("owner_id") {
-        "COALESCE(owner_id, 'piscis')"
-    } else {
-        "'piscis'"
-    };
-    let mut statement = legacy.prepare(&format!(
-        "SELECT id, content, category, {owner_expression}, created_at FROM memories"
-    ))?;
-    let records = statement.query_map([], |row| {
-        let owner: String = row.get(3)?;
-        Ok(MemoryRecord {
-            id: row.get(0)?,
-            content: row.get(1)?,
-            category: row.get(2)?,
-            owner_id: if owner == "piscis" {
-                "xiaoheng".to_string()
-            } else {
-                owner
-            },
-            created_at: row.get(4)?,
-        })
-    })?;
-    for record in records {
-        let record = record?;
-        target.execute(
-            "INSERT OR IGNORE INTO memories (id, owner_id, content, category, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![record.id, record.owner_id, record.content, record.category, record.created_at],
-        )?;
-    }
+fn insert_memory(connection: &Connection, record: &MemoryRecord, ignore_duplicate: bool) -> Result<()> {
+    let columns = table_columns(connection, "memories")?;
+    let candidates = [
+        ("id", SqlValue::Text(record.id.clone())),
+        ("owner_id", SqlValue::Text(record.owner_id.clone())),
+        ("content", SqlValue::Text(record.content.clone())),
+        ("category", SqlValue::Text(record.category.clone())),
+        ("confidence", SqlValue::Real(0.8)),
+        ("scope_type", SqlValue::Text("private".to_string())),
+        ("scope_id", SqlValue::Text(record.owner_id.clone())),
+        ("kind", SqlValue::Text("fact".to_string())),
+        ("last_seen_at", SqlValue::Text(record.created_at.clone())),
+        ("created_at", SqlValue::Text(record.created_at.clone())),
+        ("updated_at", SqlValue::Text(record.created_at.clone())),
+    ];
+    let selected = candidates
+        .into_iter()
+        .filter(|(column, _)| columns.contains(*column))
+        .collect::<Vec<_>>();
+    let names = selected.iter().map(|(column, _)| *column).collect::<Vec<_>>().join(", ");
+    let placeholders = (1..=selected.len()).map(|index| format!("?{index}")).collect::<Vec<_>>().join(", ");
+    let verb = if ignore_duplicate { "INSERT OR IGNORE" } else { "INSERT" };
+    connection.execute(
+        &format!("{verb} INTO memories ({names}) VALUES ({placeholders})"),
+        params_from_iter(selected.into_iter().map(|(_, value)| value)),
+    )?;
     Ok(())
 }
 
@@ -351,62 +341,8 @@ fn append_memory(
         category: category.to_string(),
         created_at: Utc::now().to_rfc3339(),
     };
-    open_database(context)?.execute(
-        "INSERT INTO memories (id, owner_id, content, category, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![record.id, record.owner_id, record.content, record.category, record.created_at],
-    )?;
-    append_legacy_memory(context, &record)?;
+    insert_memory(&open_database(context)?, &record, false)?;
     Ok(record)
-}
-
-fn append_legacy_memory(context: &HostContext, record: &MemoryRecord) -> Result<()> {
-    let Some(path) = context
-        .legacy_database_path
-        .as_ref()
-        .filter(|path| path.is_file())
-    else {
-        return Ok(());
-    };
-    let legacy = Connection::open(path)?;
-    let columns = table_columns(&legacy, "memories")?;
-    if columns.is_empty()
-        || !["id", "content", "category", "created_at"]
-            .iter()
-            .all(|column| columns.contains(*column))
-    {
-        return Ok(());
-    }
-    let candidates = [
-        ("id", SqlValue::Text(record.id.clone())),
-        ("content", SqlValue::Text(record.content.clone())),
-        ("category", SqlValue::Text(record.category.clone())),
-        ("confidence", SqlValue::Real(0.8)),
-        ("owner_id", SqlValue::Text(record.owner_id.clone())),
-        ("scope_type", SqlValue::Text("private".to_string())),
-        ("scope_id", SqlValue::Text(record.owner_id.clone())),
-        ("kind", SqlValue::Text("fact".to_string())),
-        ("last_seen_at", SqlValue::Text(record.created_at.clone())),
-        ("created_at", SqlValue::Text(record.created_at.clone())),
-        ("updated_at", SqlValue::Text(record.created_at.clone())),
-    ];
-    let selected = candidates
-        .into_iter()
-        .filter(|(column, _)| columns.contains(*column))
-        .collect::<Vec<_>>();
-    let names = selected
-        .iter()
-        .map(|(column, _)| *column)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let placeholders = (1..=selected.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    legacy.execute(
-        &format!("INSERT OR IGNORE INTO memories ({names}) VALUES ({placeholders})"),
-        params_from_iter(selected.into_iter().map(|(_, value)| value)),
-    )?;
-    Ok(())
 }
 
 fn table_columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>> {
@@ -417,13 +353,54 @@ fn table_columns(connection: &Connection, table: &str) -> Result<BTreeSet<String
         .map_err(Into::into)
 }
 
-fn search_memories(
+fn prepare_embedding_index(connection: &Connection, model: &str) -> Result<bool> {
+    if !table_columns(connection, "memories")?.contains("embedding") {
+        return Ok(false);
+    }
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workbuddy_memory_index_meta (model TEXT NOT NULL);",
+    )?;
+    let previous = connection
+        .query_row("SELECT model FROM workbuddy_memory_index_meta LIMIT 1", [], |row| row.get::<_, String>(0))
+        .optional()?;
+    if previous.as_deref() != Some(model) {
+        connection.execute("UPDATE memories SET embedding = NULL", [])?;
+        connection.execute("DELETE FROM workbuddy_memory_index_meta", [])?;
+        connection.execute("INSERT INTO workbuddy_memory_index_meta (model) VALUES (?1)", params![model])?;
+    }
+    Ok(true)
+}
+
+async fn index_new_memory(context: &HostContext, record: &MemoryRecord, model: &str) -> Result<()> {
+    let connection = open_database(context)?;
+    if !prepare_embedding_index(&connection, model)? {
+        return Ok(());
+    }
+    let vectors = embedding::embed_many(model, std::slice::from_ref(&record.content)).await?;
+    connection.execute(
+        "UPDATE memories SET embedding = ?1 WHERE id = ?2 AND content = ?3",
+        params![vector::embedding_to_bytes(&vectors[0]), record.id, record.content],
+    )?;
+    Ok(())
+}
+
+async fn search_memories(
     context: &HostContext,
     owner_id: &str,
     query: &str,
     limit: i64,
-) -> Result<Vec<MemoryRecord>> {
+) -> Result<(Vec<MemoryRecord>, Option<String>)> {
     let connection = open_database(context)?;
+    let mut warning = None;
+    if let Some(model) = embedding::configured_model() {
+        match semantic_memory_search(&connection, owner_id, query, limit, &model).await {
+            Ok(records) => return Ok((records, None)),
+            Err(error) => {
+                eprintln!("memory semantic search unavailable: {error}");
+                warning = Some(error.to_string());
+            }
+        }
+    }
     let mut statement = connection.prepare(
         "SELECT id, owner_id, content, category, created_at FROM memories
          WHERE owner_id = ?1 AND (content LIKE ?2 OR category LIKE ?2)
@@ -439,9 +416,76 @@ fn search_memories(
             created_at: row.get(4)?,
         })
     })?;
-    records
+    let records = records
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .map_err(anyhow::Error::from)?;
+    Ok((records, warning))
+}
+
+async fn semantic_memory_search(
+    connection: &Connection,
+    owner_id: &str,
+    query: &str,
+    limit: i64,
+    model: &str,
+) -> Result<Vec<MemoryRecord>> {
+    if !prepare_embedding_index(connection, model)? {
+        return Err(anyhow!("memory schema has no embedding column"));
+    }
+    let missing = {
+        let mut statement = connection.prepare(
+            "SELECT id, content FROM memories WHERE owner_id = ?1 AND embedding IS NULL ORDER BY updated_at DESC LIMIT 16",
+        )?;
+        let records = statement
+            .query_map(params![owner_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        records
+    };
+    if !missing.is_empty() {
+        let contents = missing.iter().map(|(_, content)| content.clone()).collect::<Vec<_>>();
+        let vectors = embedding::embed_many(model, &contents).await?;
+        for ((id, content), vector) in missing.iter().zip(vectors.iter()) {
+            connection.execute(
+                "UPDATE memories SET embedding = ?1 WHERE id = ?2 AND content = ?3",
+                params![vector::embedding_to_bytes(vector), id, content],
+            )?;
+        }
+    }
+    let query_vector = embedding::embed_many(model, &[query.to_string()]).await?.remove(0);
+    let mut statement = connection.prepare(
+        "SELECT id, owner_id, content, category, created_at, embedding FROM memories WHERE owner_id = ?1 AND embedding IS NOT NULL",
+    )?;
+    let mut ranked = statement
+        .query_map(params![owner_id], |row| {
+            Ok((MemoryRecord {
+                id: row.get(0)?, owner_id: row.get(1)?, content: row.get(2)?,
+                category: row.get(3)?, created_at: row.get(4)?,
+            }, row.get::<_, Vec<u8>>(5)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|(record, bytes)| {
+            let embedding = vector::bytes_to_embedding(&bytes);
+            let lexical = if record.content.contains(query) || record.category.contains(query) { 0.3 } else { 0.0 };
+            let score = vector::cosine_similarity(&query_vector, &embedding) * 0.7 + lexical;
+            (record, score)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut records = ranked.into_iter().take(limit as usize).map(|(record, _)| record).collect::<Vec<_>>();
+    // Keep new records searchable while a large historical collection is still indexing.
+    let pattern = format!("%{query}%");
+    let mut fallback = connection.prepare(
+        "SELECT id, owner_id, content, category, created_at FROM memories WHERE owner_id = ?1 AND embedding IS NULL AND (content LIKE ?2 OR category LIKE ?2) ORDER BY created_at DESC LIMIT ?3",
+    )?;
+    let pending = fallback.query_map(params![owner_id, pattern, limit], |row| {
+        Ok(MemoryRecord { id: row.get(0)?, owner_id: row.get(1)?, content: row.get(2)?, category: row.get(3)?, created_at: row.get(4)? })
+    })?;
+    for record in pending {
+        if records.len() >= limit as usize { break; }
+        records.push(record?);
+    }
+    Ok(records)
 }
 
 fn list_skills(context: &HostContext) -> Result<Vec<SkillRecord>> {
@@ -516,13 +560,17 @@ pub fn context_from_environment() -> HostContext {
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_else(|| vec![app_data.join("skills")]);
     let marketing_base_url = service_urls::marketing_base_url();
-    HostContext::new(
+    let mut context = HostContext::new(
         app_data,
         database_path,
         legacy_database_path,
         skills_roots,
         marketing_base_url,
-    )
+    );
+    context.mobile_share_capability = std::env::var("WORKBUDDY_MOBILE_TASK_CAPABILITY")
+        .ok().filter(|value| value.len() == 43 &&
+            value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'));
+    context
 }
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -599,6 +647,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mobile_share_is_discoverable_before_a_mobile_task_but_requires_its_capability() {
+        let (mut context, root) = test_context();
+        let ordinary = handle_request(&context, &request(1, "tools/list", json!({})))
+            .await.expect("ordinary tool list");
+        assert!(ordinary["result"]["tools"].as_array().unwrap().iter()
+            .any(|tool| tool["name"] == "share_file"));
+        let unauthorized = handle_request(&context, &request(2, "tools/call", json!({
+            "name": "share_file", "arguments": {"path": "C:\\Users\\owner\\report.pdf"}
+        }))).await.expect("ordinary share response");
+        assert_eq!(unauthorized["result"]["isError"], true);
+        context.mobile_share_capability = Some("A".repeat(43));
+        let mobile = handle_request(&context, &request(1, "tools/list", json!({})))
+            .await.expect("mobile tool list");
+        assert!(mobile["result"]["tools"].as_array().unwrap().iter()
+            .any(|tool| tool["name"] == "share_file"));
+        let forged = handle_request(&context, &request(2, "tools/call", json!({
+            "name": "share_file",
+            "arguments": {
+                "path": "C:\\Users\\owner\\report.pdf", "displayName": "report.pdf",
+                "taskId": uuid::Uuid::new_v4().to_string()
+            }
+        }))).await.expect("forged share response");
+        assert_eq!(forged["result"]["isError"], true);
+        assert!(forged["result"]["content"][0]["text"].as_str().unwrap().contains("taskId"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn mobile_share_forwards_only_file_details_to_the_active_desktop_task() {
+        let (context, root) = test_context();
+        let capability = "B".repeat(43);
+        let directory = root.join("mobile_share_requests").join(capability);
+        std::fs::create_dir_all(&directory).expect("create request directory");
+        std::fs::write(root.join("mobile_share_requests").join("active"), "B".repeat(43))
+            .expect("activate mobile task");
+        let file = root.join("report.txt");
+        std::fs::write(&file, "report").expect("create file");
+        let worker = tokio::spawn(async move {
+            for _ in 0..50 {
+                let request = std::fs::read_dir(&directory).unwrap().flatten()
+                    .map(|entry| entry.path())
+                    .find(|path| path.to_string_lossy().ends_with(".request.json"));
+                if let Some(request) = request {
+                    let value: Value = serde_json::from_slice(&std::fs::read(&request).unwrap()).unwrap();
+                    assert_eq!(value.as_object().unwrap().len(), 2);
+                    assert_eq!(value["displayName"], "report.txt");
+                    assert!(value.get("taskId").is_none());
+                    let response = request.to_string_lossy().replace(".request.json", ".response.json");
+                    std::fs::write(response, json!({
+                        "attachmentId": uuid::Uuid::new_v4().to_string(), "name": "report.txt"
+                    }).to_string()).unwrap();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("desktop did not receive file request");
+        });
+        let result = handle_request(&context, &request(3, "tools/call", json!({
+            "name":"share_file", "arguments":{"path":file.to_string_lossy(),"displayName":"report.txt"}
+        }))).await.expect("share response");
+        worker.await.expect("desktop worker");
+        assert_eq!(result["result"]["isError"], false);
+        assert_eq!(result["result"]["structuredContent"]["name"], "report.txt");
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
     async fn appends_and_searches_memory_without_piscis_store() {
         let (context, root) = test_context();
         let appended = handle_request(&context, &request(1, "tools/call", json!({"name":"memory_append","arguments":{"content":"用户偏好简洁汇报","category":"preference"}}))).await.expect("append response");
@@ -617,6 +732,41 @@ mod tests {
             .as_str()
             .expect("text")
             .contains("用户偏好简洁汇报"));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[tokio::test]
+    async fn appends_memory_into_the_desktop_schema() {
+        let (context, root) = test_context();
+        let database = Connection::open(&context.database_path).expect("desktop database");
+        database.execute_batch(
+            "CREATE TABLE memories (
+                id TEXT PRIMARY KEY, content TEXT NOT NULL,
+                category TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.7,
+                source_session_id TEXT, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                owner_id TEXT NOT NULL DEFAULT 'xiaoheng',
+                scope_type TEXT NOT NULL DEFAULT 'private',
+                scope_id TEXT NOT NULL DEFAULT 'xiaoheng'
+            );",
+        ).expect("desktop schema");
+        drop(database);
+
+        let appended = handle_request(&context, &request(
+            1, "tools/call", json!({"name":"memory_append","arguments":{
+                "content":"偏好中文简洁汇报", "category":"preference"
+            }}),
+        )).await.expect("append response");
+        assert_eq!(appended["result"]["isError"], false, "{appended}");
+
+        let database = Connection::open(&context.database_path).expect("reopen database");
+        let (updated_at, scope_type): (String, String) = database.query_row(
+            "SELECT updated_at, scope_type FROM memories WHERE content='偏好中文简洁汇报'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).expect("memory visible in desktop table");
+        assert!(!updated_at.is_empty());
+        assert_eq!(scope_type, "private");
+        drop(database);
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
@@ -644,7 +794,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrates_legacy_memories_and_preserves_xiaoheng_identity() {
+    async fn ignores_other_product_memories() {
         let (mut context, root) = test_context();
         let legacy_path = root.join("piscis.db");
         let legacy = Connection::open(&legacy_path).expect("legacy database");
@@ -677,7 +827,7 @@ mod tests {
         )
         .await
         .expect("search response");
-        assert!(searched["result"]["content"][0]["text"]
+        assert!(!searched["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("用户偏好简洁汇报"));
@@ -685,7 +835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrates_and_dual_writes_minimal_legacy_memory_schema() {
+    async fn ignores_other_product_after_reopen() {
         let (mut context, root) = test_context();
         let legacy_path = root.join("piscis.db");
         let legacy = Connection::open(&legacy_path).expect("legacy database");
@@ -715,7 +865,7 @@ mod tests {
         )
         .await
         .expect("search response");
-        assert!(searched["result"]["content"][0]["text"]
+        assert!(!searched["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("早期版本记忆"));
@@ -731,16 +881,29 @@ mod tests {
         .await
         .expect("append response");
         assert_eq!(appended["result"]["isError"], false);
-        let legacy = Connection::open(legacy_path).expect("reopen legacy database");
+        let legacy = Connection::open(&legacy_path).expect("reopen legacy database");
         let count: i64 = legacy
             .query_row(
                 "SELECT COUNT(*) FROM memories WHERE content='升级后记忆'",
                 [],
                 |row| row.get(0),
             )
-            .expect("dual write count");
-        assert_eq!(count, 1);
+            .expect("legacy write count");
+        assert_eq!(count, 0);
         drop(legacy);
+
+        let database = Connection::open(&context.database_path).expect("reopen current database");
+        let imported: i64 = database.query_row(
+            "SELECT COUNT(*) FROM memories WHERE id='legacy-minimal'", [], |row| row.get(0)
+        ).expect("imported record count");
+        assert_eq!(imported, 0);
+        drop(database);
+        let searched = handle_request(&context, &request(
+            3, "tools/call", json!({"name":"memory_search","arguments":{
+                "query":"早期版本", "owner_id":"xiaoheng"
+            }}),
+        )).await.expect("search after delete");
+        assert!(!searched["result"]["content"][0]["text"].as_str().unwrap().contains("早期版本记忆"));
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 }

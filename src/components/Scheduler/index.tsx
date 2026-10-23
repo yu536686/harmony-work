@@ -177,12 +177,15 @@ export default function Scheduler() {
                         <span className={`badge ${
                           task.last_run_status === "running" ? "badge-info" :
                           task.last_run_status === "success" ? "badge-success" :
+                          task.last_run_status === "no_change" ? "badge-info" :
                           "badge-danger"
                         }`} style={{ fontSize: 11 }}>
                           {task.last_run_status === "running"
                             ? `⟳ ${t("scheduler.lastRunRunning")}`
                             : task.last_run_status === "success"
                             ? `✓ ${t("scheduler.lastRunSuccess")}`
+                            : task.last_run_status === "no_change"
+                            ? t("memory.dreamNoChange")
                             : `✗ ${t("scheduler.lastRunFailed")}`}
                         </span>
                       )}

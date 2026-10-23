@@ -2,9 +2,69 @@ pub const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PINNED_CODEX_VERSION: &str = "0.156.1";
 pub const MANAGED_MCP_BEGIN: &str = "# BEGIN WORKBUDDY MCP";
 pub const MANAGED_MCP_END: &str = "# END WORKBUDDY MCP";
+const WORKBUDDY_MODEL_CATALOG: &[u8] = include_bytes!("../../resources/workbuddy-models.json");
 
 use crate::platform_profile::DesktopPlatform;
 use std::path::{Path, PathBuf};
+
+fn managed_model_catalog() -> std::io::Result<Vec<u8>> {
+    let mut catalog: serde_json::Value = serde_json::from_slice(WORKBUDDY_MODEL_CATALOG)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    if let Some(models) = catalog["models"].as_array_mut() {
+        for model in models {
+            let Some(template) = model["model_messages"]["instructions_template"].as_str() else {
+                continue;
+            };
+            if template.starts_with("You are Codex") {
+                let rest = template.split_once("\n\n").map_or("", |(_, rest)| rest);
+                model["model_messages"]["instructions_template"] = format!(
+                    "You are 小亨, the desktop AI work partner in Harmony Work. The current turn supplies the configured model and provider. Do not infer your model from this template.\n\n{}",
+                    rest.replace("As Codex,", "As 小亨,")
+                )
+                .into();
+            }
+        }
+    }
+    serde_json::to_vec(&catalog)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// Give Codex auto-review a model actually served by the Harmony gateway.
+/// A user's explicit model catalog always takes precedence.
+pub fn ensure_managed_auto_review_catalog(
+    codex_home: &Path,
+    existing_config: &str,
+) -> std::io::Result<String> {
+    let catalog_path = codex_home.join("workbuddy-models.json");
+    let managed_path = catalog_path.to_string_lossy().replace('\\', "/");
+    let configured_path = existing_config
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|config| {
+            config
+                .get("model_catalog_json")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        });
+    if configured_path.as_deref().is_some_and(|path| {
+        !path.replace('\\', "/").eq_ignore_ascii_case(&managed_path)
+    }) {
+        return Ok(existing_config.to_string());
+    }
+
+    let catalog_bytes = managed_model_catalog()?;
+    let catalog_is_current = std::fs::read(&catalog_path)
+        .map(|existing| existing == catalog_bytes)
+        .unwrap_or(false);
+    if !catalog_is_current {
+        std::fs::write(&catalog_path, catalog_bytes)?;
+    }
+    if configured_path.is_some() {
+        return Ok(existing_config.to_string());
+    }
+    let value = toml::Value::String(managed_path);
+    Ok(format!("model_catalog_json = {value}\n{existing_config}"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexRuntimeConfig {
@@ -290,6 +350,102 @@ pub fn merge_managed_mcp_config(existing: &str, managed: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn managed_auto_review_catalog_uses_a_real_gateway_model_and_is_idempotent() {
+        let codex_home = std::env::temp_dir().join(format!(
+            "harmony-review-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let original = "model = \"deepseek-v4-flash\"\n[model_providers.harmony]\nbase_url = \"https://api.harmonywatch.cn/v1\"\n";
+
+        let configured = ensure_managed_auto_review_catalog(&codex_home, original).unwrap();
+        let parsed: toml::Value = configured.parse().unwrap();
+        let catalog_path = parsed["model_catalog_json"].as_str().unwrap();
+        assert!(catalog_path.ends_with("/workbuddy-models.json"));
+        assert_eq!(
+            parsed["model_providers"]["harmony"]["base_url"].as_str(),
+            Some("https://api.harmonywatch.cn/v1")
+        );
+        let catalog: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(codex_home.join("workbuddy-models.json")).unwrap(),
+        )
+        .unwrap();
+        let flash = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "deepseek-v4-flash")
+            .unwrap();
+        assert_eq!(flash["auto_review_model_override"], "deepseek-v4-pro");
+        for model in catalog["models"].as_array().unwrap() {
+            let instructions = model["model_messages"]["instructions_template"]
+                .as_str()
+                .unwrap();
+            assert!(!instructions.starts_with("You are Codex"), "{}", model["slug"]);
+            assert!(!instructions.contains("As Codex,"), "{}", model["slug"]);
+        }
+        assert!(flash["model_messages"]["instructions_template"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are 小亨"));
+        assert_eq!(
+            ensure_managed_auto_review_catalog(&codex_home, &configured).unwrap(),
+            configured
+        );
+
+        std::fs::remove_dir_all(codex_home).unwrap();
+    }
+
+    #[test]
+    fn managed_auto_review_catalog_respects_an_existing_custom_catalog() {
+        let codex_home = std::env::temp_dir().join(format!(
+            "harmony-custom-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let custom = "model_catalog_json = \"C:/custom/models.json\"\n[model_providers.harmony]\nbase_url = \"https://api.harmonywatch.cn/v1\"\n";
+
+        assert_eq!(
+            ensure_managed_auto_review_catalog(&codex_home, custom).unwrap(),
+            custom
+        );
+        assert!(!codex_home.join("workbuddy-models.json").exists());
+
+        std::fs::remove_dir_all(codex_home).unwrap();
+    }
+
+    #[test]
+    fn managed_catalog_refreshes_existing_installations_without_changing_config() {
+        let codex_home = std::env::temp_dir().join(format!(
+            "harmony-managed-catalog-upgrade-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let path = codex_home.join("workbuddy-models.json");
+        std::fs::write(&path, WORKBUDDY_MODEL_CATALOG).unwrap();
+        let config = format!(
+            "model_catalog_json = {}\nmodel = \"deepseek-v4-flash\"\n",
+            toml::Value::String(path.to_string_lossy().replace('\\', "/"))
+        );
+
+        assert_eq!(ensure_managed_auto_review_catalog(&codex_home, &config).unwrap(), config);
+        let updated: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let flash = updated["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "deepseek-v4-flash")
+            .unwrap();
+        assert!(flash["model_messages"]["instructions_template"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are 小亨"));
+
+        std::fs::remove_dir_all(codex_home).unwrap();
+    }
 
     #[test]
     fn public_service_migration_preserves_user_config_and_managed_markers() {

@@ -162,7 +162,7 @@ export default function Memory() {
                 </span>
                 {dreamTask?.last_run_status && (
                   <span>
-                    {t("memory.dreamLastStatus")}: {dreamTask.last_run_status}
+                    {t("memory.dreamLastStatus")}: {dreamTask.last_run_status === "no_change" ? t("memory.dreamNoChange") : dreamTask.last_run_status}
                   </span>
                 )}
               </div>

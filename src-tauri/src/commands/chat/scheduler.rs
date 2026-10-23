@@ -1,5 +1,6 @@
 use crate::codex_runtime::background::{run_codex_background, CodexBackgroundOptions};
 use crate::store::{db::ScheduledTask, AppState, Database};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -9,6 +10,12 @@ use tracing::{info, warn};
 const MEMORY_CONSOLIDATION_TASK_NAME: &str = "Memory Consolidation";
 const MEMORY_CONSOLIDATION_MARKER: &str = "[template:memory_consolidation]";
 const MEMORY_CONSOLIDATION_DEFAULT_CRON: &str = "0 4 * * *";
+const CONSOLIDATION_MAX_AGE_DAYS: i64 = 30;
+
+fn recent_for_consolidation(updated_at: DateTime<Utc>) -> bool {
+    let age = Utc::now().signed_duration_since(updated_at);
+    age >= Duration::zero() && age <= Duration::days(CONSOLIDATION_MAX_AGE_DAYS)
+}
 
 #[derive(Debug, Serialize)]
 pub struct TaskList {
@@ -45,9 +52,11 @@ fn build_memory_consolidation_template() -> String {
          Rules:\n\
          1. Prefer facts, decisions, procedures, user preferences, and durable project context.\n\
          2. Do not restate routine chatter or ephemeral intermediate steps.\n\
-         3. Before saving new memory, use memory_store(action=\"search\") to check for duplicates.\n\
-         4. Save at most 3-5 high-value memories via memory_store(action=\"save\").\n\
-         5. If there are stale pending tasks worth resurfacing, mention them in the final summary.\n\
+         3. Before saving, call the WorkBuddy MCP memory_search tool to check for duplicates.\n\
+         4. Save at most 3-5 high-value memories with the WorkBuddy MCP memory_append tool.\n\
+            Do not write a separate memory file or claim a save without a successful tool result.\n\
+            Do not store credentials, private tokens, or transient task progress.\n\
+         5. Only discuss tasks tied to recent sessions in the supplied snapshot.\n\
          6. Keep the final reply concise: what you consolidated, what you skipped, and any recall/reminder worth showing.\n",
         marker = MEMORY_CONSOLIDATION_MARKER
     )
@@ -57,42 +66,70 @@ fn is_memory_consolidation_prompt(task_prompt: &str) -> bool {
     task_prompt.contains(MEMORY_CONSOLIDATION_MARKER)
 }
 
+fn memory_revision(db: &Database) -> Vec<(String, String, f64, Option<String>)> {
+    db.list_memories_for_owner("xiaoheng")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|memory| {
+            (
+                memory.id,
+                memory.content,
+                memory.confidence,
+                memory.last_seen_at.map(|time| time.to_rfc3339()),
+            )
+        })
+        .collect()
+}
+
 fn build_memory_consolidation_snapshot(db: &Database) -> String {
-    let sessions = db.list_sessions(8, 0).unwrap_or_default();
-    let task_states = db.list_recent_task_states(8).unwrap_or_default();
+    let sessions = db.list_sessions(200, 0, false).unwrap_or_default();
+    let task_states = db.list_recent_task_states(100).unwrap_or_default();
     let memories = db.list_memories_for_owner("xiaoheng").unwrap_or_default();
 
-    let session_lines = if sessions.is_empty() {
+    let recent_sessions = sessions.iter()
+        .filter(|s| s.source != "scheduled_task" && recent_for_consolidation(s.updated_at))
+        .take(6).collect::<Vec<_>>();
+    let session_lines = if recent_sessions.is_empty() {
         "- No recent sessions".to_string()
     } else {
-        sessions
+        recent_sessions
             .iter()
-            .take(6)
             .map(|s| {
                 let summary = if s.rolling_summary.trim().is_empty() {
                     "no rolling summary".to_string()
                 } else {
                     trim_preview(&s.rolling_summary.replace('\n', " "), 180)
                 };
+                let recent_user_messages = db
+                    .get_messages_latest(&s.id, 8)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|message| message.role == "user")
+                    .rev()
+                    .take(2)
+                    .map(|message| trim_preview(&message.content.replace('\n', " "), 180))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
                 format!(
-                    "- {} [{}] msgs={} status={} summary={}",
+                    "- {} [{}] msgs={} status={} summary={} recent_user={}",
                     s.title.clone().unwrap_or_else(|| s.id.clone()),
                     s.source,
                     s.message_count,
                     s.status,
-                    summary
+                    summary,
+                    recent_user_messages,
                 )
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
 
-    let task_lines = if task_states.is_empty() {
-        "- No persisted task spines".to_string()
-    } else {
-        task_states
+    let task_lines = task_states
             .iter()
-            .filter(|t| t.status == "active" || t.status == "completed")
+            .filter(|t| recent_for_consolidation(t.updated_at)
+                && t.scope_type == "session"
+                && recent_sessions.iter().any(|s| s.id == t.scope_id)
+                && (t.status == "active" || t.status == "completed"))
             .take(6)
             .map(|t| {
                 let spine = t.to_task_spine();
@@ -108,15 +145,15 @@ fn build_memory_consolidation_snapshot(db: &Database) -> String {
                 )
             })
             .collect::<Vec<_>>()
-            .join("\n")
-    };
+            .join("\n");
+    let task_lines = if task_lines.is_empty() { "- No recent task spines".to_string() } else { task_lines };
 
-    let memory_lines = if memories.is_empty() {
-        "- No stored memories".to_string()
-    } else {
-        memories
+    let memory_lines = memories
             .iter()
-            .rev()
+            .filter(|m| recent_sessions.iter().any(|s| {
+                m.evidence_session_id.as_deref() == Some(s.id.as_str())
+                    || m.source_session_id.as_deref() == Some(s.id.as_str())
+            }))
             .take(8)
             .map(|m| {
                 format!(
@@ -126,8 +163,10 @@ fn build_memory_consolidation_snapshot(db: &Database) -> String {
                 )
             })
             .collect::<Vec<_>>()
-            .join("\n")
-    };
+            .join("\n");
+    let memory_lines = if memory_lines.is_empty() {
+        "- No memories linked to recent sessions".to_string()
+    } else { memory_lines };
 
     format!(
         "## Consolidation Snapshot\n\
@@ -157,23 +196,30 @@ fn resolve_memory_consolidation_prompt(task_prompt: &str, db: &Database) -> Stri
 /// snapshot with unrelated sessions.
 fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> String {
     let session = db.get_session(session_id).ok().flatten();
-    let task_states = db.list_recent_task_states(4).unwrap_or_default();
+    let task_states = db.list_recent_task_states(100).unwrap_or_default();
     let memories = db.list_memories_for_owner("xiaoheng").unwrap_or_default();
 
-    let session_line = match session {
+    let session_line = match session.filter(|s| s.source != "scheduled_task" && recent_for_consolidation(s.updated_at)) {
         Some(s) => {
             let summary = if s.rolling_summary.trim().is_empty() {
                 "no rolling summary".to_string()
             } else {
                 trim_preview(&s.rolling_summary.replace('\n', " "), 320)
             };
+            let recent_user = db.get_messages_latest(session_id, 8)
+                .unwrap_or_default().into_iter().rev()
+                .filter(|message| message.role == "user")
+                .take(2)
+                .map(|message| trim_preview(&message.content.replace('\n', " "), 180))
+                .collect::<Vec<_>>().join(" | ");
             format!(
-                "- {} [{}] msgs={} status={} summary={}",
+                "- {} [{}] msgs={} status={} summary={} recent_user={}",
                 s.title.clone().unwrap_or_else(|| s.id.clone()),
                 s.source,
                 s.message_count,
                 s.status,
-                summary
+                summary,
+                recent_user
             )
         }
         None => format!("- session {} not found", session_id),
@@ -184,7 +230,8 @@ fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> Stri
     } else {
         task_states
             .iter()
-            .filter(|t| t.scope_id == session_id || t.status == "active")
+            .filter(|t| t.scope_type == "session" && t.scope_id == session_id
+                && recent_for_consolidation(t.updated_at))
             .take(4)
             .map(|t| {
                 let spine = t.to_task_spine();
@@ -206,19 +253,14 @@ fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> Stri
     let memory_lines = if memories.is_empty() {
         "- No stored memories".to_string()
     } else {
-        // Prefer memories with evidence anchored in THIS session
-        // (Phase 4d) or, failing that, the most recent 5.
-        let mut relevant: Vec<_> = memories
+        let relevant: Vec<_> = memories
             .iter()
             .filter(|m| {
                 m.evidence_session_id.as_deref() == Some(session_id)
                     || m.source_session_id.as_deref() == Some(session_id)
             })
             .collect();
-        if relevant.is_empty() {
-            relevant = memories.iter().rev().take(5).collect();
-        }
-        relevant
+        let lines = relevant
             .iter()
             .take(6)
             .map(|m| {
@@ -230,7 +272,8 @@ fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> Stri
                 )
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        if lines.is_empty() { "- No memories linked to this session".to_string() } else { lines }
     };
 
     format!(
@@ -638,6 +681,12 @@ pub async fn execute_task(
             .unwrap_or_default()
     };
     let scope_id = format!("sched_{task_id}");
+    let previous_memory_revision = if is_memory_consolidation_prompt(&task_prompt) {
+        let db = db.lock().await;
+        Some(memory_revision(&db))
+    } else {
+        None
+    };
     {
         let db = db.lock().await;
         let _ = db.update_task_run_status(&task_id, "running");
@@ -664,7 +713,18 @@ pub async fn execute_task(
         },
     )
     .await;
-    let final_status = if result.is_ok() { "success" } else { "failed" };
+    let final_status = if result.is_err() {
+        "failed"
+    } else if let Some(previous) = previous_memory_revision {
+        let db = db.lock().await;
+        if memory_revision(&db) == previous {
+            "no_change"
+        } else {
+            "success"
+        }
+    } else {
+        "success"
+    };
     {
         let db = db.lock().await;
         let _ = db.update_task_run_status(&task_id, final_status);
@@ -681,4 +741,58 @@ pub async fn execute_task(
         task_id,
         result.is_ok()
     );
+}
+
+#[cfg(test)]
+mod memory_consolidation_tests {
+    use super::{build_memory_consolidation_snapshot, build_memory_consolidation_template};
+    use crate::store::Database;
+
+    #[test]
+    fn consolidation_uses_the_installed_workbuddy_mcp_memory_tools() {
+        let prompt = build_memory_consolidation_template();
+        assert!(prompt.contains("memory_search"));
+        assert!(prompt.contains("memory_append"));
+        assert!(!prompt.contains("memory_store"));
+    }
+
+    #[test]
+    fn consolidation_snapshot_includes_recent_user_content_without_a_rolling_summary() {
+        let db = Database::open_in_memory().expect("database");
+        let session = db.create_session(Some("腕表内容偏好")).expect("session");
+        db.append_message(&session.id, "user", "我以后都希望报告使用简洁的中文结论")
+            .expect("message");
+
+        let snapshot = build_memory_consolidation_snapshot(&db);
+        assert!(snapshot.contains("简洁的中文结论"), "{snapshot}");
+    }
+
+    #[test]
+    fn consolidation_ignores_stale_sessions_and_task_spines() {
+        let root = std::env::temp_dir().join(format!("workbuddy-snapshot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("workbuddy.db");
+        let db = Database::open(&path).unwrap();
+        let stale = db.create_session(Some("旧应用小红书任务")).unwrap();
+        db.append_message(&stale.id, "user", "发布旧版小红书内容").unwrap();
+        let spine = db.get_or_create_task_state("session", &stale.id).unwrap();
+        db.update_task_state(&spine.id, Some("处理旧版小红书任务"), None, None, Some("active")).unwrap();
+        let recent = db.create_session(Some("当前任务")).unwrap();
+        db.append_message(&recent.id, "user", "这次报告采用简洁中文").unwrap();
+        db.save_memory("旧品牌推广偏好", "preference", 0.8, Some(&stale.id), "xiaoheng", "private", "xiaoheng", None).unwrap();
+        for _ in 0..25 {
+            db.create_session_with_source(Some("每日整理"), "scheduled_task").unwrap();
+        }
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute("UPDATE sessions SET updated_at='2026-06-22T00:00:00Z' WHERE id=?1", [&stale.id]).unwrap();
+        connection.execute("UPDATE task_states SET updated_at='2026-06-22T00:00:00Z' WHERE id=?1", [&spine.id]).unwrap();
+
+        let snapshot = build_memory_consolidation_snapshot(&db);
+        assert!(!snapshot.contains("旧应用小红书任务"), "{snapshot}");
+        assert!(!snapshot.contains("处理旧版小红书任务"), "{snapshot}");
+        assert!(!snapshot.contains("旧品牌推广偏好"), "{snapshot}");
+        assert!(snapshot.contains("这次报告采用简洁中文"), "{snapshot}");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -14,6 +14,7 @@ import {
   Minus,
   Square as WindowSquare,
   X,
+  Smartphone,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
@@ -32,7 +33,12 @@ import {
   type WorkspaceNavigationTab,
 } from "./navigation/workspaceNavigation";
 import Chat from "./components/Chat";
+import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from "./components/MobileBridgeWizard";
+import { BridgePeer, type BridgeSignal } from "./bridgePeer";
+import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
+import { NativeUpdateBridge, UpdateBadge } from "./updates/UpdateControls";
+import { nativeUpdateStore } from "./updates/nativeUpdateStore";
 import Toaster from "./components/Toaster";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { useMacNativeMenu } from "./components/ui/useMacNativeMenu";
@@ -61,6 +67,7 @@ type SchoolSubTab = "fish" | "koi";
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const IS_MACOS = navigator.userAgent.includes("Macintosh");
+const HAS_MOBILE_BRIDGE = IS_WINDOWS || IS_MACOS;
 if (IS_MACOS) document.documentElement.dataset.platform = "macos";
 if (IS_MACOS && isTauri()) document.documentElement.dataset.nativeShell = "true";
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
@@ -116,7 +123,107 @@ function AppContent() {
   const [collaborationExpanded, setCollaborationExpanded] = useState(
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
+  const [mobileBridgeOpen, setMobileBridgeOpen] = useState(false);
+  const [mobileBridgeRevision, setMobileBridgeRevision] = useState(0);
+  const [mobilePeerState, setMobilePeerState] = useState<"connecting" | "direct" | "fallback">("fallback");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("workbuddy.sidebarCollapsed") === "true");
+
+  useLayoutEffect(() => {
+    if (!HAS_MOBILE_BRIDGE) return;
+    setMobileBridgeOpen(false);
+    const current = store.getState().sessions;
+    const mobileIds = current.sessions.filter(session => session.source === "mobile").map(session => session.id);
+    const visible = current.sessions.filter(session => session.source !== "mobile");
+    if (mobileIds.includes(current.activeSessionId ?? "")) dispatch(sessionsActions.setActiveSession(null));
+    if (mobileIds.length) dispatch(chatActions.forgetSessions(mobileIds));
+    dispatch(sessionsActions.setSessions(visible));
+  }, [marketingUser?.id, dispatch]);
+
+  useEffect(() => {
+    if (!IS_MACOS) return;
+    const openMobileBridge = () => {
+      if (marketingUser) setMobileBridgeOpen(true);
+      else setActiveTab("account");
+    };
+    window.addEventListener("harmony:native-mobile-bridge", openMobileBridge);
+    return () => window.removeEventListener("harmony:native-mobile-bridge", openMobileBridge);
+  }, [marketingUser?.id]);
+
+  useEffect(() => {
+    if (!HAS_MOBILE_BRIDGE) return;
+    let stopped = false;
+    const reloadSessions = async () => {
+      const { sessions } = await sessionsApi.list(200);
+      if (!stopped) dispatch(sessionsActions.setSessions(sessions));
+    };
+    const desktopId = marketingUser ? localStorage.getItem(mobileBridgeStorageKey(marketingUser.id)) : null;
+    const deviceToken = marketingUser ? localStorage.getItem(mobileBridgeTokenKey(marketingUser.id)) : null;
+    if (!desktopId || !deviceToken) {
+      void invoke("mobile_bridge_sign_out")
+        .then(() => { if (!stopped) return reloadSessions(); })
+        .catch(error => console.warn("Mobile bridge sign out:", error));
+      return () => { stopped = true; };
+    }
+    void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
+      .then(async () => {
+        if (stopped) return;
+        await reloadSessions();
+        if (!stopped) await invoke("mobile_bridge_start_worker", { desktopDeviceId: desktopId });
+      })
+      .catch(error => console.warn("Mobile bridge worker:", error));
+    const unlisten = listen("mobile_bridge_updated", () => {
+      if (!stopped) void reloadSessions().catch(() => undefined);
+    });
+    return () => { stopped = true; void unlisten.then(fn => fn()).catch(() => undefined); void invoke("mobile_bridge_stop_worker").catch(() => undefined); };
+  }, [marketingUser?.id, mobileBridgeOpen, dispatch]);
+
+  useEffect(() => {
+    if (!HAS_MOBILE_BRIDGE || !marketingUser) return;
+    setMobilePeerState("fallback");
+    const desktopId = localStorage.getItem(mobileBridgeStorageKey(marketingUser.id));
+    const deviceToken = localStorage.getItem(mobileBridgeTokenKey(marketingUser.id));
+    if (!desktopId || !deviceToken || typeof RTCPeerConnection === "undefined") return;
+    let stopped = false;
+    const peers = new Map<string, BridgePeer>();
+    const senders = new Map<string, DirectFileSender>();
+    const states = new Map<string, 'connecting' | 'direct' | 'fallback'>();
+    void invoke("mobile_bridge_set_device", { deviceId: desktopId, deviceToken })
+      .then(() => stopped ? null : invoke<{ devices: Array<{ desktopDeviceId: string; mobileDeviceId: string }> }>("mobile_bridge_devices"))
+      .then(async result => {
+        if (stopped || !result) return;
+        const { devices } = result;
+        await Promise.all(devices.filter(item => item.desktopDeviceId === desktopId).map(async link => {
+          if (stopped) return;
+          let sender: DirectFileSender;
+          const peer = new BridgePeer({
+            desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId,
+            localDeviceId: desktopId, remoteDeviceId: link.mobileDeviceId, initiator: false,
+            sendSignal: (kind, payload) => invoke("mobile_bridge_send_signal", { desktopDeviceId: desktopId, mobileDeviceId: link.mobileDeviceId, senderDeviceId: desktopId, recipientDeviceId: link.mobileDeviceId, kind, payload }),
+            pollSignals: after => invoke<{ signals: BridgeSignal[] }>("mobile_bridge_signals", { deviceId: desktopId, after }).then(result => result.signals),
+            onHint: () => { void invoke("mobile_bridge_sync", { desktopDeviceId: desktopId }); },
+            onState: state => {
+              if (stopped) return;
+              states.set(link.mobileDeviceId, state);
+              setMobilePeerState([...states.values()].some(value => value === 'direct') ? 'direct' : state);
+            },
+            onFileFrame: frame => { void sender.onFrame(frame); },
+          });
+          sender = new DirectFileSender(link.mobileDeviceId,
+            frame => peer.sendFileFrame(frame),
+            (attachmentId, ticket, mobileDeviceId, offset) => invoke<{ id: string; size: number; sha256: string }>('mobile_attachment_authorize', { attachmentId, ticket, mobileDeviceId, offset }),
+            (attachmentId, offset, length) => invoke<string>('mobile_attachment_read_chunk', { attachmentId, offset, length }),
+            attachmentId => invoke<void>('mobile_attachment_cancel', { attachmentId }));
+          peers.set(link.mobileDeviceId, peer);
+          senders.set(link.mobileDeviceId, sender);
+          await peer.start();
+        }));
+      }).catch(() => { if (!stopped) setMobilePeerState("fallback"); });
+    return () => {
+      stopped = true;
+      for (const sender of senders.values()) sender.stop();
+      for (const peer of peers.values()) peer.stop();
+    };
+  }, [marketingUser?.id, mobileBridgeOpen, mobileBridgeRevision]);
 
   useEffect(() => {
     localStorage.setItem("harmony-work.session-outcomes", JSON.stringify(sessionOutcomes));
@@ -563,6 +670,7 @@ function AppContent() {
           <div className="sidebar-brand">
             <img src={PRODUCT_BRAND.iconPath} className="logo" alt="" aria-hidden="true" />
             <BrandWordmark className="app-name" />
+            <UpdateBadge />
           </div>
           <button
             type="button"
@@ -628,6 +736,7 @@ function AppContent() {
               )}
             </div>
           )}
+          {IS_WINDOWS && <button className="nav-item mobile-bridge-nav" title={`连接手机 · ${mobilePeerState === "direct" ? "P2P 直连" : "服务器保障"}`} onClick={() => setMobileBridgeOpen(true)}><span className="nav-icon"><Smartphone size={17} strokeWidth={1.8} /></span><span className="nav-label">连接手机</span></button>}
           <button
             className="nav-item minimal-mode-btn"
             title={t("nav.minimalMode")}
@@ -645,6 +754,7 @@ function AppContent() {
           </button>
         </div>
       </aside>
+      {mobileBridgeOpen && marketingUser && <MobileBridgeWizard accountId={marketingUser.id} onClose={() => setMobileBridgeOpen(false)} onBound={() => { setMobileBridgeOpen(false); }} onLinksChanged={() => setMobileBridgeRevision(value => value + 1)} />}
       <main className="main-content">
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{t("common.loadingApp")}</p></div>}>
           {mountedTabs.has("chat") && (
@@ -790,6 +900,9 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    if ((IS_WINDOWS || IS_MACOS) && !IS_OVERLAY) void nativeUpdateStore.connect();
+  }, []);
   if (IS_OVERLAY) {
     return (
       <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>{i18n.t("common.loadingApp")}</p></div>}>
@@ -800,6 +913,7 @@ export default function App() {
   return (
     <Provider store={store}>
       <div className="desktop-window">
+        {IS_MACOS && <NativeUpdateBridge />}
         {IS_WINDOWS && <WindowTitlebar />}
         <div className="desktop-window-content"><AppContent /></div>
       </div>

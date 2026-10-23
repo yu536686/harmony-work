@@ -6,12 +6,13 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/version-1.0.7-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/source-1.1.2-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-18-149ECA?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
 [下载 Windows 版](https://www.harmonywork.com.cn/workbuddy#download) · [下载 macOS 预览版](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg) · [功能概览](#功能概览) · [Windows 安装](#windows-安装) · [macOS 预览版](#macos-预览版) · [源码构建](#从源码构建) · [常见问题](#常见问题)
@@ -34,13 +35,14 @@ Harmony Work 是一款桌面 AI Agent 工作台，提供 Windows 稳定版和 Ap
 | --- | --- |
 | **Agent 对话工作台** | 支持流式回复、附件、模型切换、Todo、工具活动、权限审批、成果卡片和任务中断。 |
 | **项目与会话** | 按项目目录组织会话，保存上下文、工作区、文件引用和 Codex Thread 映射。 |
+| **手机与桌面协作** | 同一账号扫码配对手机与桌面客户端，同步手机会话并承接远程任务。Mac 1.1.2 内部版使用 AppKit 配对窗口。 |
 | **StaffDeck 多 Agent 协作** | 创建不同职责的人员，分派任务，在看板中跟踪执行状态和交付结果。 |
 | **Harvis AI 创作** | 提供图片与音乐创作页面，支持参考图、提示词助手、任务进度、结果预览与下载。 |
 | **Office 成果生成** | 通过 Artifact Runtime 创建并验证 Word、PowerPoint 和 Excel 文件，生成后直接进入成果区。 |
 | **技能与 MCP** | 浏览多个技能市场渠道，查看已安装版本、下载与安装进度，并可更新、打开目录或卸载技能。 |
-| **长期记忆** | 保存用户偏好、项目事实和执行经验，并通过关键词与向量检索按需注入上下文。 |
+| **长期记忆** | 记忆页面、定期整理和 Agent 工具共用本地记忆记录；支持关键词检索及可选的 Harmony 向量检索，向量服务不可用时回退到关键词检索。 |
 | **素材库与数据看板** | 登录后浏览、筛选和预览素材，将文件暂存到会话，或基于看板数据新建分析任务。 |
-| **个人设置云同步** | 登录后可按类别选择恢复或加密备份模型、提供商、API Key 与通用偏好；云端只保存端到端加密密文，本机路径和 IM 凭据不迁移。 |
+| **个人设置云同步** | 登录后可按类别选择加密备份或恢复设置与记忆记录；记忆按逻辑记录同步，不上传本地数据库和向量索引。本机路径和 IM 凭据不迁移。 |
 | **IM 渠道** | 支持企业微信智能机器人长连接和个人微信 iLink，将消息转为可持续执行的 Agent 会话。 |
 | **自动化与桌面工具** | 支持定时任务、文件操作、Shell、浏览器控制和 Windows UI 自动化。 |
 
@@ -82,14 +84,17 @@ flowchart LR
 
 ### 全量离线安装包
 
-当前 Windows x64 全量安装包为 `Harmony-Work-1.0.7-x64-setup.exe`。它使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
+
+当前开发源码版本为 `1.1.2`，官网公开版本以发布信息为准；构建产物与独立深度卸载器保存在 Windows 构建机的 `release/full/`，不纳入 Git 仓库。
 
 ### 1. 下载安装包
 
-从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN：
+从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN，当前文件为：
 
 ```text
-Harmony-Work-<version>-x64-setup.exe
+Harmony-Work-1.1.0-x64-setup.exe
+SHA-256: 53f18da7253a817d74b1e773ea97c2ea245cd058a58bb426d55cb47994e19116
 ```
 
 需要核对文件完整性时，在安装包所在目录运行：
@@ -98,7 +103,7 @@ Harmony-Work-<version>-x64-setup.exe
 Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 ```
 
-1.0.7 安装包的 SHA-256 为 `c7fb40788a89e49acb09bbefdb5c74e3d931ab5d6fa1e9d3d6cd8910b54d8bd1`。其他版本应以官网发布信息中的摘要为准。
+文件摘要以官网对应版本的发布信息为准，不要用源码版本号推断官网安装包版本。
 
 ### 2. 运行安装程序
 
@@ -121,7 +126,7 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 - **注册**：打开线上注册页面。新账号需要管理员审批后才能登录高阶模块。
 - **跳过**：直接进入基础对话功能，之后可以从左下角账户菜单再次登录。
 
-首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。之后可在“设置 → 我的云端配置”中按类别选择 AI 提供商与模型、视觉模型、Agent 运行偏好、工具偏好或交互与安全策略进行上传与恢复。工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
+首次成功登录后，若账号已有个人设置备份，应用会询问是否恢复；没有备份时可选择加密备份当前设置。之后可在“设置 → 我的云端配置”中按类别选择 AI 提供商与模型、视觉模型、Agent 运行偏好、工具偏好、交互与安全策略，以及长期记忆进行上传与恢复。记忆同步传输加密的逻辑记录，不上传整个本地数据库；工作区、会话、MCP、SSH 与 IM 渠道凭据始终保留在当前设备。
 
 ### 5. 配置模型
 
@@ -147,6 +152,8 @@ Get-FileHash .\Harmony-Work-<version>-x64-setup.exe -Algorithm SHA256
 4. 选择启动/默认模型。
 5. 勾选允许在会话底部切换的模型。
 6. 选择工作区目录和会话权限策略。
+
+在“设置 → 渠道与 API”配置 Harmony 时，可获取可用模型列表，并从下拉框选择向量模型；也可以不指定模型，仅使用关键词检索。原选择已不可用时会提示重新选择。向量服务故障不会阻止记忆写入，检索会回退到关键词匹配。
 
 API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。模型请求会发送到用户选择的模型服务，请根据业务的数据安全要求配置供应商和权限模式。
 
@@ -181,11 +188,17 @@ API Key 和 IM 密钥在写入本地设置前使用 ChaCha20-Poly1305 加密。�
 
 绑定完成后，微信消息会关联到 WorkBuddy 的 IM 项目会话。
 
+### 长期记忆与卸载
+
+长期记忆以 Harmony Work 本地数据库为准。记忆页面、手动或定期整理、Agent 的记忆工具使用同一批记录；`self-improvement-codex` 技能也按这套记录读写，不另建记忆文件。该技能可从 Harmony 技能市场安装，但技能包不等同于自动触发机制；安装后仍需在客户端验证调用。
+
+普通卸载会保留用户数据。全量安装包内置深度卸载器，可从开始菜单的“卸载 Harmony Work”启动；构建机 `release/full/` 也提供独立卸载器。选择深度清理后会删除应用数据和已安装技能，但保留用户选定的工作区及共享运行环境。已有数据库中无法可靠区分来源的旧记录不会在升级时被自动删除；如需验证全新安装，应先完成深度卸载，并在重装登录时不要恢复云端数据。
+
 ## 从源码构建
 
 ### 获取源码
 
-仓库当前为私有项目，拉取前需要具有访问权限并完成 GitHub 登录：
+本仓库公开提供源码，项目原创代码采用 [MIT 许可证](LICENSE)。可以直接克隆后按以下步骤构建：
 
 ```powershell
 git clone https://github.com/yu536686/harmony-work.git
@@ -242,6 +255,16 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 ## macOS 预览版
 
+### 1.1.2 内部开发版
+
+`feat/macos-1.1.2` 在独立 Mac 检出目录中整合 Windows 1.1.2 的共享业务能力，不改 Windows 构建目录。新增手机协作原生配对窗口、统一记忆与升级前 SQLite 快照、原生更新窗口及应用包失败回滚；保留现有 AppKit 外壳、980px 最小宽度和 Mac 桌面工具。
+
+离线载荷包含 Node.js、Git、Python、WeCom CLI、FFmpeg 和 Harmony Cut 所需的锁定 Python 依赖，不覆盖系统环境。手机配对、模型服务和企业微信仍需要用户账号或官方授权，不代表这些云服务可离线使用。
+
+此版本仅用于内部验收，尚未替换下方公开预览包，也未发布 Mac 在线更新清单。更新流程在本地校验应用归档、可信下载域名与 minisign 签名；无可用发布清单时应明确报错，不会显示虚假的“已是最新版本”。完整实现与验证记录见 [Mac 1.1.2 实施记录](docs/superpowers/plans/2026-10-23-macos-1.1.2-upgrade.md)。
+
+### 公开预览包
+
 macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13.5。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
 
 从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64-offline.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64-offline.dmg`，SHA-256：
@@ -278,6 +301,18 @@ harmony-work/
 ├─ scripts/                          环境准备、Sidecar 暂存与构建脚本
 └─ docs/                             设计与实施记录
 ```
+
+## 开源与贡献
+
+欢迎通过 [GitHub Issues](https://github.com/yu536686/harmony-work/issues) 报告问题、提出改进建议，或提交 Pull Request。报告问题时请提供系统与客户端版本、复现步骤、预期和实际行为，以及脱敏后的日志；请勿提交 API Key、账号凭据或用户业务数据。
+
+提交 Pull Request 前，请说明改动目的和验证结果，并根据改动范围运行下方“开发验证”中的检查。Windows 与 macOS 的适配状态不同，涉及平台功能时请注明实际验证的平台。贡献者应确保有权提交相关内容；提交贡献即表示同意按本项目 MIT 许可证许可该贡献，第三方内容须保留原有许可与来源说明。
+
+## 许可证与第三方组件
+
+本项目原创代码与文档采用 [MIT 许可证](LICENSE)，允许使用、复制、修改和商业分发，分发时须保留版权与许可声明。
+
+第三方源码、依赖和随安装包分发的运行环境保留各自的版权与许可，不因本项目采用 MIT 而改变。已知组件与现有声明入口见 [第三方说明](THIRD_PARTY_NOTICES.md)。Harmony Work 的名称、Logo 和商标不因代码许可而获得商标使用授权。在线服务、第三方 API 和账号访问仍须遵守相应服务条款。
 
 ## 开发验证
 
@@ -339,7 +374,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前版本：`1.0.6`，从 [官网](https://www.harmonywork.com.cn/) 下载。
+- 当前源码版本：`1.1.2`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---

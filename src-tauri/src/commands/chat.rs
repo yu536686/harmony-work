@@ -70,7 +70,7 @@ pub async fn list_sessions(
 ) -> Result<SessionList, String> {
     let db = state.db.lock().await;
     let sessions = db
-        .list_sessions(limit.unwrap_or(20), offset.unwrap_or(0))
+        .list_sessions(limit.unwrap_or(20), offset.unwrap_or(0), crate::commands::mobile_bridge::has_device_auth())
         .map_err(|error| error.to_string())?;
     let total = sessions.len();
     Ok(SessionList { sessions, total })
@@ -78,6 +78,14 @@ pub async fn list_sessions(
 
 #[tauri::command]
 pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let shared = {
+        let db = state.db.lock().await;
+        db.get_session(&session_id).map_err(|error| error.to_string())?
+            .is_some_and(|session| session.source == "mobile")
+    };
+    if shared {
+        crate::commands::mobile_bridge::delete_shared_session(&session_id).await?;
+    }
     let db = state.db.lock().await;
     db.delete_session(&session_id)
         .map_err(|error| error.to_string())
@@ -113,6 +121,11 @@ pub async fn get_messages(
     offset: Option<i64>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = state.db.lock().await;
+    if db.get_session(&session_id).map_err(|error| error.to_string())?
+        .is_some_and(|session| session.source == "mobile") &&
+        !crate::commands::mobile_bridge::has_device_auth() {
+        return Err("手机会话需要登录对应账户".into());
+    }
     let limit = limit.unwrap_or(100);
     let offset = offset.unwrap_or(0);
     if offset == 0 {

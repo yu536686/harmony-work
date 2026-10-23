@@ -48,3 +48,23 @@ test("native tests exclude staged payloads without changing release bundles", as
   assert.match(workflow, /npm test/);
   assert.match(workflow, /npm run test:native/);
 });
+
+test("unsafe NSIS data removal is blocked in favor of workspace-safe cleanup", async () => {
+  const config = await json("src-tauri/tauri.conf.json");
+  const [hooks, policy, engine] = await Promise.all([
+    read("src-tauri/windows/hooks.nsh"),
+    read("installer/HarmonyWorkUninstaller/CleanupPolicy.cs"),
+    read("installer/HarmonyWorkUninstaller/UninstallEngine.cs"),
+  ]);
+  assert.equal(config.bundle.windows.nsis.installerHooks, "windows/hooks.nsh");
+  assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /DeleteAppDataCheckboxState = 1/);
+  assert.match(hooks, /UpdateMode <> 1/);
+  assert.match(hooks, /SetErrorLevel 2\s+Abort/);
+  assert.doesNotMatch(hooks, /RMDir/);
+  assert.match(policy, /ProtectedPaths/);
+  assert.match(policy, /DataRoots/);
+  assert.match(policy, /"WorkBuddy", "runtime"/);
+  assert.match(engine, /CleanupPolicy\.CleanOwnedRoot/);
+  assert.match(engine, /\.full-uninstall-cleaned/);
+});

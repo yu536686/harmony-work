@@ -19,6 +19,8 @@ mod harvis_prompt;
 pub mod headless_cli;
 pub mod lsp;
 mod mac_native_shell;
+mod mac_mobile_bridge;
+mod mac_update_panel;
 pub mod notify;
 pub mod pool;
 pub mod process;
@@ -29,6 +31,7 @@ pub mod store;
 #[path = "../shared/service_urls.rs"]
 pub mod service_urls;
 mod tools;
+pub mod updater;
 
 pub use app::run;
 pub use store::AppState;

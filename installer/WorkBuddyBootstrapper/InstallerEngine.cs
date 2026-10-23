@@ -30,6 +30,7 @@ public sealed class InstallerEngine
     private const string LegacyRunValueName = "Harmony WorkBuddy";
     private const string LegacyApplicationExecutable = "xiaoheng-workbuddy.exe";
     private const string InnerInstallerName = "harmony-work-setup.exe";
+    private const string DeepUninstallerName = "Harmony-Work-Uninstaller.exe";
     private readonly string _runtimeRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Harmony",
@@ -84,8 +85,10 @@ public sealed class InstallerEngine
             throw new InvalidOperationException($"主程序安装完成后未找到：{applicationPath}");
         }
 
-        progress.Report(new(92, "正在创建快捷方式", ""));
-        ConfigureShortcuts(applicationPath, options);
+        progress.Report(new(90, "正在配置卸载工具", ""));
+        var uninstallerPath = InstallDeepUninstaller(payloadRoot);
+        progress.Report(new(94, "正在创建快捷方式", ""));
+        ConfigureShortcuts(applicationPath, uninstallerPath, options);
         WriteRuntimeMarker();
 
         progress.Report(new(100, "安装完成", ""));
@@ -286,7 +289,22 @@ public sealed class InstallerEngine
         await RunProcessAsync(installer, $"/S /D={installDirectory}", cancellationToken);
     }
 
-    private static void ConfigureShortcuts(string appPath, InstallerOptions options)
+    private string InstallDeepUninstaller(string payloadRoot)
+    {
+        var source = PayloadPath(payloadRoot, "app", DeepUninstallerName);
+        var destination = Path.Combine(_runtimeRoot, "tools", DeepUninstallerName);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary = destination + ".tmp-" + Guid.NewGuid().ToString("N");
+        try {
+            File.Copy(source, temporary);
+            File.Move(temporary, destination, overwrite: true);
+        } finally {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+        return destination;
+    }
+
+    private static void ConfigureShortcuts(string appPath, string uninstallerPath, InstallerOptions options)
     {
         RemoveLegacyShortcuts();
         if (options.CreateDesktopShortcut) {
@@ -299,6 +317,10 @@ public sealed class InstallerEngine
                 Environment.GetFolderPath(Environment.SpecialFolder.Programs),
                 ProductName,
                 $"{ProductName}.lnk"), appPath);
+            CreateShortcut(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                ProductName,
+                "卸载 Harmony Work.lnk"), uninstallerPath);
         }
 
         using var run = Registry.CurrentUser.OpenSubKey(

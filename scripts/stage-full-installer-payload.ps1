@@ -1,5 +1,6 @@
 param(
   [Parameter(Mandatory = $true)][string]$InnerInstaller,
+  [Parameter(Mandatory = $true)][string]$Uninstaller,
   [string]$PayloadCache = (Join-Path $PSScriptRoot "..\installer\payload-cache"),
   [string]$Destination = (Join-Path $PSScriptRoot "..\installer\.build\payload")
 )
@@ -10,6 +11,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Lock = Get-Content -Raw (Join-Path $ProjectRoot "installer\runtime-lock.json") | ConvertFrom-Json
 
 if (-not (Test-Path -LiteralPath $InnerInstaller)) { throw "Inner NSIS installer not found: $InnerInstaller" }
+if (-not (Test-Path -LiteralPath $Uninstaller)) { throw "Standalone uninstaller not found: $Uninstaller" }
 if (-not (Test-Path -LiteralPath $PayloadCache)) { throw "Offline runtime cache not found: $PayloadCache" }
 
 Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
@@ -17,6 +19,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Destination "app"), (Join-
 $Destination = [System.IO.Path]::GetFullPath($Destination)
 
 Copy-Item -LiteralPath $InnerInstaller -Destination (Join-Path $Destination "app\harmony-work-setup.exe")
+Copy-Item -LiteralPath $Uninstaller -Destination (Join-Path $Destination "app\Harmony-Work-Uninstaller.exe")
 foreach ($Property in $Lock.components.PSObject.Properties) {
   if ($Property.Name -eq "python") { continue }
   $Source = Join-Path $PayloadCache "runtime\$($Property.Value.fileName)"

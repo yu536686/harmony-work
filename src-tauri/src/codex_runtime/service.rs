@@ -5,7 +5,7 @@ use crate::codex_runtime::config::{
 };
 use crate::codex_runtime::event_adapter::{CodexEventAdapter, WorkBuddyEvent, WorkBuddyPlanItem};
 use crate::codex_runtime::headless::{
-    build_exec_command, run_codex_exec, CodexExecError, CodexExecOptions, CodexExecResult,
+    build_exec_command, run_codex_exec_observed, CodexExecError, CodexExecOptions, CodexExecResult,
 };
 use crate::codex_runtime::process::{
     resolve_codex_executable, AppServerIdentity, CodexLaunchConfig, CodexProcess, CodexProcessError,
@@ -31,8 +31,9 @@ use std::time::SystemTime;
 use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ActiveCodexTurn {
+    _update_permit: crate::updater::WorkPermit,
     thread_id: String,
     turn_id: String,
 }
@@ -537,6 +538,8 @@ pub enum CodexRuntimeStateError {
     ApprovalNotFound,
     #[error("session already has an active Codex turn")]
     TurnAlreadyActive,
+    #[error("waiting for updater installation")]
+    UpdatePending,
 }
 
 impl CodexRuntimeState {
@@ -560,6 +563,13 @@ impl CodexRuntimeState {
             existing_config
                 .push_str(&crate::codex_runtime::config::render_harmony_provider_section());
         }
+        let catalog_config = crate::codex_runtime::config::ensure_managed_auto_review_catalog(
+            &codex_home,
+            &existing_config,
+        )
+        .map_err(CodexRuntimeStateError::PrepareConfig)?;
+        let catalog_added = catalog_config != existing_config;
+        existing_config = catalog_config;
         let mcp_host = resolve_workbuddy_mcp_host();
         let skill_root = app_data_dir.join("skills");
         let installed_skill_root = app_data_dir.join("installed-skills");
@@ -573,7 +583,11 @@ impl CodexRuntimeState {
         let automation = automation_mcp_profile(app_data_dir);
         let managed_mcp = format!("{}{}", mcp_profile.render_toml(), automation.render_toml());
         let merged_config = merge_managed_mcp_config(&existing_config, &managed_mcp);
-        if public_url_changed || harmony_missing || merged_config != existing_config {
+        if public_url_changed
+            || harmony_missing
+            || catalog_added
+            || merged_config != existing_config
+        {
             std::fs::write(&config_path, merged_config)
                 .map_err(CodexRuntimeStateError::PrepareConfig)?;
         }
@@ -615,6 +629,12 @@ impl CodexRuntimeState {
                 settings.harmony_api_key.clone(),
             );
         }
+        if !settings.memory_embedding_model.trim().is_empty() {
+            next_environment.insert(
+                "WORKBUDDY_MEMORY_EMBEDDING_MODEL".to_string(),
+                settings.memory_embedding_model.trim().to_string(),
+            );
+        }
         let changed = {
             let mut environment = self.environment.lock().await;
             if *environment == next_environment {
@@ -638,8 +658,18 @@ impl CodexRuntimeState {
     pub async fn execute_headless(
         &self,
         workbuddy_session_id: &str,
-        mut options: CodexExecOptions,
+        options: CodexExecOptions,
     ) -> Result<CodexExecResult, CodexRuntimeStateError> {
+        self.execute_headless_observed(workbuddy_session_id, options, None).await
+    }
+
+    pub async fn execute_headless_observed(
+        &self,
+        workbuddy_session_id: &str,
+        mut options: CodexExecOptions,
+        observer: Option<mpsc::Sender<Value>>,
+    ) -> Result<CodexExecResult, CodexRuntimeStateError> {
+        let _update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
         if options.thread_id.is_none() {
             options.thread_id = self
                 .sessions
@@ -648,7 +678,8 @@ impl CodexRuntimeState {
         }
         let executable = resolve_codex_executable(self.executable_override.clone())?;
         let command = build_exec_command(&executable, &options);
-        let environment = self.environment.lock().await.clone();
+        let mut environment = self.environment.lock().await.clone();
+        environment.extend(options.extra_environment.clone());
         let cancellation = Arc::new(AtomicBool::new(false));
         if let Some(previous) = self
             .active_execs
@@ -659,7 +690,7 @@ impl CodexRuntimeState {
             previous.store(true, Ordering::Relaxed);
         }
         let result =
-            run_codex_exec(command, &self.codex_home, &environment, Some(cancellation)).await;
+            run_codex_exec_observed(command, &self.codex_home, &environment, Some(cancellation), observer).await;
         self.active_execs.lock().await.remove(workbuddy_session_id);
         let result = result?;
         if let Some(thread_id) = result.thread_id.as_deref() {
@@ -718,6 +749,7 @@ impl CodexRuntimeState {
         workbuddy_session_id: &str,
         options: CodexTurnOptions,
     ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
+        let update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
         if self
             .active_turns
             .lock()
@@ -795,6 +827,7 @@ impl CodexRuntimeState {
         self.active_turns.lock().await.insert(
             workbuddy_session_id.to_string(),
             ActiveCodexTurn {
+                _update_permit: update_permit,
                 thread_id: thread_id.clone(),
                 turn_id: turn_id.clone(),
             },
@@ -1834,11 +1867,11 @@ pub async fn codex_chat_send(
 ) -> Result<CodexTurnStarted, String> {
     let settings = app_state.settings.lock().await.clone();
     codex_state.configure_credentials(&settings).await;
-    let session_workspace = {
+    let (session_workspace, is_mobile_shared) = {
         let db = app_state.db.lock().await;
-        db.get_session(&session_id)
-            .map_err(|error| error.to_string())?
-            .and_then(|session| session.workspace_root)
+        let session = db.get_session(&session_id).map_err(|error| error.to_string())?;
+        let is_mobile_shared = session.as_ref().is_some_and(|session| session.source == "mobile");
+        (session.and_then(|session| session.workspace_root), is_mobile_shared)
     };
     let workspace_root = workspace_root
         .filter(|value| !value.trim().is_empty())
@@ -1870,8 +1903,17 @@ pub async fn codex_chat_send(
         &attachments,
     );
     let mut developer_instructions =
-        "你是小亨，运行于 Harmony Work。始终使用名称“小亨”，作为用户的桌面 AI 工作伙伴直接完成任务。当前唯一运行时是 Codex app-server；使用 Codex 原生工具和 WorkBuddy MCP 能力。"
-            .to_string();
+        crate::codex_runtime::runner::harmony_identity_instructions(&provider, &model);
+    let self_improvement_enabled = {
+        let db = app_state.db.lock().await;
+        db.get_skill("self-improvement-codex")
+            .ok().flatten().is_some_and(|skill| skill.enabled)
+    };
+    if self_improvement_enabled {
+        developer_instructions.push_str(
+            "\n已启用 self-improvement-codex：用户纠正了长期偏好，或非显而易见的问题已修复并验证时，先调用 WorkBuddy MCP memory_search 去重；仅在确有新且持久的教训时调用 memory_append。不要建立 .learnings 等第二记忆库，不要保存密钥或一次性任务进度。只有工具确认写入后才向用户报告已记住。",
+        );
+    }
     if let Some(persona) = persona_koi_id.filter(|value| !value.trim().is_empty()) {
         developer_instructions.push_str(&format!(
             "\n当前用户选择的人员/角色 ID 是 {persona}。在 WorkBuddy MCP 人员能力可用时读取其职责并按该角色执行。"
@@ -1897,23 +1939,32 @@ pub async fn codex_chat_send(
     };
     let workspace_artifacts_before = snapshot_workspace_artifacts(&options.workspace_root);
     let workspace_root_for_artifact_discovery = options.workspace_root.clone();
+    if is_mobile_shared {
+        crate::commands::mobile_bridge::prepare_desktop_send(&app_state, &session_id, &visible_content).await?;
+    }
     {
         let db = app_state.db.lock().await;
-        db.append_message_with_context(
-            &session_id,
-            "user",
-            &visible_content,
-            message_context_json.as_deref(),
-        )
-        .map_err(|error| error.to_string())?;
+        if !is_mobile_shared {
+            db.append_message_with_context(
+                &session_id,
+                "user",
+                &visible_content,
+                message_context_json.as_deref(),
+            ).map_err(|error| error.to_string())?;
+        }
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
     }
     let execution = match codex_state.start_turn(&session_id, options).await {
         Ok(execution) => execution,
         Err(error) => {
-            let db = app_state.db.lock().await;
-            let _ = db.update_session_status(&session_id, "idle");
+            {
+                let db = app_state.db.lock().await;
+                let _ = db.update_session_status(&session_id, "idle");
+            }
+            if is_mobile_shared {
+                crate::commands::mobile_bridge::abort_desktop_send(&app_state, &session_id).await;
+            }
             return Err(error.to_string());
         }
     };

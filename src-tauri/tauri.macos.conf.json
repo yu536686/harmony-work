@@ -51,11 +51,18 @@
       "resources/workbuddy-mcp-host",
       "resources/playwright-mcp",
       "resources/mac-use-mcp",
+      "resources/harmony-cut",
+      "resources/licenses",
       "resources/node",
       "resources/git",
       "resources/python",
       "resources/wecom",
       "resources/artifact-runtime/THIRD_PARTY_NOTICES.txt"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://download.harmonywatch.cn/updates/macos/aarch64/stable.json"]
+    }
   }
 }

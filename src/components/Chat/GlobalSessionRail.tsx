@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, CircleAlert, Folder, FolderPlus, LoaderCircle, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, Folder, FolderPlus, LoaderCircle, Smartphone, Trash2 } from "lucide-react";
 import type { ChatProject } from "../../utils/chatProjects";
 
 interface GlobalSessionRailProps {
@@ -122,7 +122,7 @@ export default function GlobalSessionRail({
                             <span className="project-session-unread" />
                           ) : null}
                         </span>
-                        <span>{session.title || t("chat.defaultTitle")}</span>
+                        <span>{session.title || t("chat.defaultTitle")}</span>{session.source === "mobile" && <small className="mobile-source-badge"><Smartphone size={10} /> 手机端</small>}
                       </button>
                       <button
                         type="button"

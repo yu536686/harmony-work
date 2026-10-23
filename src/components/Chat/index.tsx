@@ -45,6 +45,8 @@ import {
 } from "./annotation/reducer";
 import type { AnnotationDraftState, WorkbenchAnnotation, WorkbenchCommentContext } from "./annotation/types";
 import GlobalSessionRail from "./GlobalSessionRail";
+import MobileTaskCard, { type MobileSharedAttachment } from "./MobileTaskCard";
+import { mergeMobileTaskEvents, projectMobileTaskCards, type MobileTaskEvent } from "./mobileTaskEvents";
 import ComposerDropdown, { type ComposerMenuItem } from "./ComposerDropdown";
 import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
 import ConfirmDialog from "../ConfirmDialog";
@@ -499,6 +501,10 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     (s: RootState) => s.chat
   );
   const settings = useSelector((s: RootState) => s.settings.settings) as Settings | null;
+  const [mobileTaskEvents, setMobileTaskEvents] = useState<MobileTaskEvent[]>([]);
+  const [mobileAttachments, setMobileAttachments] = useState<MobileSharedAttachment[]>([]);
+  const [mobileTasks, setMobileTasks] = useState<Array<{ id: string; sessionId: string; status: string; result: string | null }>>([]);
+  const mobileTaskEventsSession = useRef<string | null>(null);
 
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
@@ -573,6 +579,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const displaySession = displaySessionId
     ? sessions.find((s) => s.id === displaySessionId)
     : undefined;
+  const mobileTaskCards = useMemo(() => displaySessionId === mobileTaskEventsSession.current
+    ? projectMobileTaskCards(mobileTaskEvents) : [], [displaySessionId, mobileTaskEvents]);
+  const mobileRunningBySession = useMemo(() => {
+    const next = { ...isRunning };
+    for (const task of mobileTasks) {
+      if (task.status === "queued" || task.status === "claimed") next[task.sessionId] = true;
+    }
+    return next;
+  }, [isRunning, mobileTasks]);
 
   const globalWorkspace = settings?.workspace_root || "";
 
@@ -780,6 +795,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   contextUsageRef.current = contextUsage;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const artifactsUnlistenRef = useRef<UnlistenFn | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1128,6 +1144,35 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   }, [running]);
   const activeSessionKind = classifySession(displaySession);
   const isImSession = activeSessionKind === "im";
+  const [sharedTurnBusy, setSharedTurnBusy] = useState(false);
+  const [sharedTurnLabel, setSharedTurnLabel] = useState("");
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) {
+      setSharedTurnBusy(false);
+      setSharedTurnLabel("");
+      return;
+    }
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    setSharedTurnBusy(true);
+    setSharedTurnLabel("正在确认双端会话状态…");
+    const refresh = async () => {
+      try {
+        const result = await invoke<{ turn: { id: string } | null }>("mobile_bridge_active_turn", { sessionId });
+        if (cancelled) return;
+        setSharedTurnBusy(!!result.turn);
+        setSharedTurnLabel(result.turn ? "另一端正在处理这段会话，完成后可继续发送" : "");
+      } catch {
+        if (cancelled) return;
+        setSharedTurnBusy(true);
+        setSharedTurnLabel("双端连接暂不可用，恢复后可继续发送");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    const listener = listen("mobile_bridge_updated", () => void refresh());
+    return () => { cancelled = true; window.clearInterval(timer); void listener.then(unlisten => unlisten()); };
+  }, [displaySession?.source, displaySessionId]);
   isImSessionRef.current = isImSession;
 
   useEffect(() => {
@@ -1198,6 +1243,119 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displaySessionId, dispatch]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) return;
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    let generation = 0;
+    const refresh = async () => {
+      const current = ++generation;
+      try {
+        const messages = await sessionsApi.getMessages(sessionId, CHAT_INITIAL_SIZE, 0);
+        if (!cancelled && current === generation) dispatch(chatActions.setMessagesWithFrozen({ sessionId, messages }));
+      } catch { /* The last local snapshot remains readable while offline. */ }
+    };
+    const listener = listen("mobile_bridge_updated", () => void refresh());
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const onForeground = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+      void listener.then(unlisten => unlisten());
+    };
+  }, [displaySession?.source, displaySessionId, dispatch]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) {
+      mobileTaskEventsSession.current = null;
+      setMobileTaskEvents([]);
+      setMobileAttachments([]);
+      return;
+    }
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    mobileTaskEventsSession.current = sessionId;
+    let events: MobileTaskEvent[] = [];
+    let cursor = 0;
+    let loading = false;
+    setMobileTaskEvents([]);
+    const refresh = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        for (;;) {
+          const page = await invoke<{ events: MobileTaskEvent[] }>("mobile_bridge_task_events", { sessionId, afterSeq: cursor });
+          if (cancelled || !page.events.length) break;
+          const merged = mergeMobileTaskEvents(events, page.events, cursor);
+          events = merged.events;
+          cursor = merged.afterSeq;
+          setMobileTaskEvents(events);
+          if (page.events.length < 100) break;
+        }
+      } catch { /* Retry from the same cursor when the coordinator returns. */ }
+      finally { loading = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const taskListener = listen("mobile_task_changed", () => void refresh());
+    const bridgeListener = listen("mobile_bridge_updated", () => void refresh());
+    const onForeground = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+      void taskListener.then(unlisten => unlisten());
+      void bridgeListener.then(unlisten => unlisten());
+    };
+  }, [displaySession?.source, displaySessionId]);
+
+  useEffect(() => {
+    if (displaySession?.source !== "mobile" || !displaySessionId) return;
+    let cancelled = false;
+    const sessionId = displaySessionId;
+    const refresh = () => {
+      void invoke<{ attachments: MobileSharedAttachment[] }>("mobile_bridge_attachments", { sessionId })
+        .then(result => { if (!cancelled) setMobileAttachments(result.attachments); })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3_000);
+    const listener = listen("mobile_bridge_updated", refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void listener.then(unlisten => unlisten());
+    };
+  }, [displaySession?.source, displaySessionId]);
+
+  useEffect(() => {
+    if (!sessions.some(session => session.source === "mobile")) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = await invoke<{ tasks: Array<{ id: string; sessionId: string; status: string; result: string | null }> }>("mobile_bridge_tasks");
+        if (!cancelled) setMobileTasks(result.tasks);
+      } catch { /* The previous task status remains visible while offline. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    const taskListener = listen("mobile_task_changed", () => void refresh());
+    const bridgeListener = listen("mobile_bridge_updated", () => void refresh());
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void taskListener.then(unlisten => unlisten());
+      void bridgeListener.then(unlisten => unlisten());
+    };
+  }, [sessions.some(session => session.source === "mobile")]);
 
   useEffect(() => {
     if (artifactsUnlistenRef.current) {
@@ -1625,6 +1783,27 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       el.scrollTop = el.scrollHeight;
     }
   }, []);
+
+  useLayoutEffect(() => {
+    const messages = messagesAreaRef.current;
+    const composer = composerRef.current;
+    if (!messages || !composer) return;
+    const main = composer.parentElement;
+    if (!main) return;
+    const updateClearance = () => {
+      const clearance = main.getBoundingClientRect().bottom - composer.getBoundingClientRect().top + 24;
+      messages.style.setProperty("--composer-clearance", `${Math.ceil(clearance)}px`);
+      if (isNearBottomRef.current) messages.scrollTop = messages.scrollHeight;
+    };
+    const observer = new ResizeObserver(updateClearance);
+    observer.observe(composer);
+    observer.observe(main);
+    updateClearance();
+    return () => {
+      observer.disconnect();
+      messages.style.removeProperty("--composer-clearance");
+    };
+  }, [displaySessionId, isImSession, isDraft]);
 
   // Detect real-time appends (tail id changed), apply FIFO trim, auto-scroll or show unread badge
   const prevLastChatIdRef = useRef<string | null>(null);
@@ -2291,7 +2470,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   );
 
   const handleSend = useCallback(async () => {
-    if (!canSend || running) return;
+    if (!canSend || running || sharedTurnBusy) return;
 
     const content = input.trim() || (activeAnnotationDraft.items.length > 0 ? t("chat.annotationDefaultPrompt") : "");
     setInput("");
@@ -2349,7 +2528,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     }
 
     await doSend(content, pending, skills, koi, true, targetSessionId);
-  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t, activeAnnotationDraft.items.length]);
+  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, sharedTurnBusy, activePlan, doSend, clearPendingComposer, draftWorkspace, globalWorkspace, dispatch, t, activeAnnotationDraft.items.length]);
 
   // The event listener for a newly created session is registered by an earlier
   // effect in this component. Sending from this later effect prevents losing
@@ -2567,7 +2746,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
           projects={chatProjects}
           activeProjectId={activeProjectId}
           activeSessionId={displaySessionId}
-          runningBySession={isRunning}
+          runningBySession={mobileRunningBySession}
           outcomesBySession={sessionOutcomes}
           labels={{
             projects: t("chat.projects"),
@@ -2732,9 +2911,22 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                         )}
                       </div>
                     </div>
+                    {msg.role === "user" && mobileTaskCards
+                      .filter(card => card.initiatingMessageId === msg.id)
+                      .map(card => <MobileTaskCard key={card.taskId} card={card}
+                        result={mobileTasks.find(task => task.id === card.taskId)?.result}
+                        attachments={mobileAttachments.filter(item => item.taskId === card.taskId)}
+                        onOpenAttachment={attachmentId => invoke("mobile_attachment_open", { attachmentId })} />)}
                   </Fragment>
                 );
               })}
+
+              {mobileTaskCards.filter(card => !card.initiatingMessageId ||
+                !activeMessages.some(message => message.id === card.initiatingMessageId))
+                .map(card => <MobileTaskCard key={card.taskId} card={card}
+                  result={mobileTasks.find(task => task.id === card.taskId)?.result}
+                  attachments={mobileAttachments.filter(item => item.taskId === card.taskId)}
+                  onOpenAttachment={attachmentId => invoke("mobile_attachment_open", { attachmentId })} />)}
 
               {executionTimelineInsertIndex === activeMessages.length && executionTimelineNode}
 
@@ -2838,6 +3030,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             )}
 
             {!isImSession && <div
+              ref={composerRef}
               className={`input-area${isDragging ? " drag-over" : ""}`}
               onDragEnter={handleComposerDragEnter}
               onDragOver={handleComposerDragOver}
@@ -3042,14 +3235,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                     <span>{t("common.stop")}</span>
                   </button>
                 ) : (
+                  <>{sharedTurnLabel && <span role="status" style={{ fontSize: 12, color: "var(--text-muted)" }}>{sharedTurnLabel}</span>}
                   <button
                     className="btn btn-primary"
                     onClick={handleSend}
-                    disabled={!canSend}
+                    disabled={!canSend || sharedTurnBusy}
                   >
                     <span>{t("common.send")}</span>
                     <SendHorizontal size={15} strokeWidth={2} />
-                  </button>
+                  </button></>
                 )}
               </div>
             </div>}

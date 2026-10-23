@@ -11,6 +11,8 @@ static const void *HWDialogKey = &HWDialogKey;
 static const void *HWInfoKey = &HWInfoKey;
 static NSToolbarItemIdentifier const HWSidebarItem = @"harmony.sidebar";
 static NSToolbarItemIdentifier const HWNewChatItem = @"harmony.new-chat";
+static NSToolbarItemIdentifier const HWMobileItem = @"harmony.mobile";
+static NSToolbarItemIdentifier const HWUpdateItem = @"harmony.update";
 
 @interface HWToolbarController : NSObject <NSToolbarDelegate>
 @property (nonatomic, weak) WKWebView *webView;
@@ -270,11 +272,11 @@ static void HWDispatchDropdownEvent(WKWebView *webView, NSString *name, NSDictio
 @implementation HWToolbarController
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
-    return @[HWSidebarItem, HWNewChatItem, NSToolbarFlexibleSpaceItemIdentifier];
+    return @[HWSidebarItem, HWNewChatItem, NSToolbarFlexibleSpaceItemIdentifier, HWMobileItem, HWUpdateItem];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
-    return @[HWSidebarItem, HWNewChatItem, NSToolbarFlexibleSpaceItemIdentifier];
+    return @[HWSidebarItem, HWNewChatItem, NSToolbarFlexibleSpaceItemIdentifier, HWMobileItem, HWUpdateItem];
 }
 
 - (NSToolbarItem *)toolbar:(NSToolbar *)toolbar
@@ -292,6 +294,17 @@ static void HWDispatchDropdownEvent(WKWebView *webView, NSString *name, NSDictio
         item.toolTip = item.label;
         item.image = [NSImage imageWithSystemSymbolName:@"square.and.pencil" accessibilityDescription:item.label];
         item.action = @selector(newChat:);
+    } else if ([identifier isEqualToString:HWMobileItem]) {
+        item.label = @"连接手机";
+        item.toolTip = item.label;
+        item.image = [NSImage imageWithSystemSymbolName:@"iphone.and.arrow.forward" accessibilityDescription:item.label];
+        if (!item.image) item.image = [NSImage imageWithSystemSymbolName:@"iphone" accessibilityDescription:item.label];
+        item.action = @selector(connectPhone:);
+    } else if ([identifier isEqualToString:HWUpdateItem]) {
+        item.label = @"检查更新";
+        item.toolTip = item.label;
+        item.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle" accessibilityDescription:item.label];
+        item.action = @selector(checkUpdates:);
     }
     return item;
 }
@@ -304,6 +317,14 @@ static void HWDispatchDropdownEvent(WKWebView *webView, NSString *name, NSDictio
 - (void)newChat:(id)sender {
     [self.webView evaluateJavaScript:@"window.dispatchEvent(new Event('harmony:native-new-chat'))"
                 completionHandler:nil];
+}
+
+- (void)connectPhone:(id)sender {
+    [self.webView evaluateJavaScript:@"window.dispatchEvent(new Event('harmony:native-mobile-bridge'))" completionHandler:nil];
+}
+
+- (void)checkUpdates:(id)sender {
+    [self.webView evaluateJavaScript:@"window.dispatchEvent(new Event('harmony:native-check-updates'))" completionHandler:nil];
 }
 
 @end
@@ -325,6 +346,12 @@ void hw_install_native_shell(void *windowPointer, void *webViewPointer) {
     toolbar.allowsUserCustomization = NO;
     window.toolbar = toolbar;
     objc_setAssociatedObject(window, HWToolbarKey, controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSMenu *appMenu = NSApp.mainMenu.itemArray.firstObject.submenu;
+    if (appMenu && ![appMenu itemWithTitle:@"检查更新…"]) {
+        NSMenuItem *update = [[NSMenuItem alloc] initWithTitle:@"检查更新…" action:@selector(checkUpdates:) keyEquivalent:@""];
+        update.target = controller;
+        [appMenu insertItem:update atIndex:MIN((NSInteger)2, appMenu.numberOfItems)];
+    }
 
     NSView *host = webView.superview;
     if (!host) return;

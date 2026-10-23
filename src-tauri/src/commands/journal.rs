@@ -18,13 +18,6 @@ use crate::store::AppState;
 fn open_workspace_journal(workspace_root: &str) -> Result<FileJournal, String> {
     let root = Path::new(workspace_root);
     let db = root.join(".xiaoheng").join("journal.db");
-    let legacy_db = root.join(".piscis").join("journal.db");
-    if !db.exists() && legacy_db.is_file() {
-        if let Some(parent) = db.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::copy(&legacy_db, &db).map_err(|e| e.to_string())?;
-    }
     FileJournal::open(workspace_root, db).map_err(|e| e.to_string())
 }
 

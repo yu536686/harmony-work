@@ -480,7 +480,7 @@ export default function Onboarding({ onComplete }: Props) {
             <section className="onboarding-workspace" aria-labelledby="onboarding-workspace-heading">
               <h3 id="onboarding-workspace-heading"><FolderOpen size={17} aria-hidden="true" /> 工作区文件夹</h3>
               <div className="onboarding-workspace-select">
-                <input className="input" aria-label="工作区文件夹" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={t("onboarding.workspacePlaceholder")} />
+                <input className="input" aria-label="工作区文件夹" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder={t(/Macintosh|Mac OS X/.test(navigator.userAgent) ? "onboarding.workspacePlaceholderMac" : "onboarding.workspacePlaceholder")} />
                 <button type="button" className="btn btn-secondary" onClick={browseWorkspace}>选择文件夹</button>
               </div>
               <p>小亨读取与生成的文件默认保存在此文件夹。桌面上的“小亨工作空间”快捷方式会指向这里。</p>
