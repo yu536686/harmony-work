@@ -15,7 +15,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Codex](https://img.shields.io/badge/Agent-Codex%20Harness-111111?style=flat-square)](https://github.com/openai/codex)
 
-[下载 Windows 版](https://www.harmonywork.com.cn/workbuddy#download) · [下载 macOS 预览版](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64.dmg) · [功能概览](#功能概览) · [Windows 安装](#windows-安装) · [macOS 预览版](#macos-预览版) · [源码构建](#从源码构建) · [常见问题](#常见问题)
+[下载 Windows 版](https://www.harmonywork.com.cn/workbuddy#download) · [下载 macOS 预览版](https://download.harmonywatch.cn/releases/Harmony-Work-1.1.2-macos-arm64-offline-r2.dmg) · [功能概览](#功能概览) · [Windows 安装](#windows-安装) · [macOS 预览版](#macos-预览版) · [源码构建](#从源码构建) · [常见问题](#常见问题)
 
 </div>
 
@@ -255,22 +255,22 @@ target\x86_64-pc-windows-msvc\release\bundle\msi\
 
 ## macOS 预览版
 
-### 1.1.2 内部开发版
+### 1.1.2 R2 预览版
 
 `1.1.2` 在独立 Mac 检出目录中整合 Windows 1.1.2 的共享业务能力，不改 Windows 构建目录。新增手机协作原生配对窗口、统一记忆与升级前 SQLite 快照、原生更新窗口及应用包失败回滚；保留现有 AppKit 外壳、980px 最小宽度和 Mac 桌面工具。
 
 离线载荷包含 Node.js、Git、Python、WeCom CLI、FFmpeg 和 Harmony Cut 所需的锁定 Python 依赖，不覆盖系统环境。手机配对、模型服务和企业微信仍需要用户账号或官方授权，不代表这些云服务可离线使用。
 
-此版本仅用于内部验收，尚未替换下方公开预览包，也未发布 Mac 在线更新清单。更新流程在本地校验应用归档、可信下载域名与 minisign 签名；无可用发布清单时应明确报错，不会显示虚假的“已是最新版本”。完整实现与验证记录见 [Mac 1.1.2 实施记录](docs/superpowers/plans/2026-10-23-macos-1.1.2-upgrade.md)。
+官网和腾讯云 CDN 已于 2026-10-24 更新为 `1.1.2 R2` 离线预览包，修复旧版数据库升级时的启动崩溃；仍仅建议内部测试。Mac 在线更新清单尚未发布，请下载 DMG 手动安装。更新流程在本地校验应用归档、可信下载域名与 minisign 签名；无可用发布清单时应明确报错，不会显示虚假的“已是最新版本”。完整实现与验证记录见 [Mac 1.1.2 实施记录](docs/superpowers/plans/2026-10-23-macos-1.1.2-upgrade.md)。
 
 ### 公开预览包
 
 macOS 版目前提供 Apple Silicon（arm64）预览包，最低系统版本为 macOS 13.5。Intel Mac 暂不支持；macOS 的功能适配和完整回归仍在进行中，与 Windows 版的功能不完全一致。
 
-从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.0.7-macos-arm64-offline.dmg)。当前文件为 `Harmony-Work-1.0.7-macos-arm64-offline.dmg`，SHA-256：
+从 [Harmony Work 官网下载 macOS 预览版](https://www.harmonywork.com.cn/workbuddy#download)，或直接从 [腾讯云 CDN 下载](https://download.harmonywatch.cn/releases/Harmony-Work-1.1.2-macos-arm64-offline-r2.dmg)。当前文件为 `Harmony-Work-1.1.2-macos-arm64-offline-r2.dmg`，大小为 601,997,432 字节（574.1 MB），SHA-256：
 
 ```text
-3dbf1f3a3fdc6153793a50222e113b7bef9ddb8f63def94649ba728d0dcbe2a6
+6f72dd0ae1224c76359fc639f75538aa3647cd686f001052f8522359c14869a8
 ```
 
 该预览包尚未进行 Apple Developer ID 签名和公证。首次打开时，macOS 可能提示无法验证开发者；请先确认文件来自 Harmony Work 官网并核对 SHA-256，再按组织的设备安全策略决定是否运行。不要为安装此预览版关闭 Gatekeeper。
