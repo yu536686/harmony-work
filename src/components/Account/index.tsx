@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
 import ConfirmDialog from "../ConfirmDialog";
 import { isMacNativeUI } from "../ui/useMacNativeMenu";
@@ -54,7 +54,13 @@ function fallbackCopy(text: string): boolean {
 }
 
 export default function AccountPage({ user, onUserChange, onOpenSettings, onOpenLogin }: AccountPageProps) {
+  // Account-scoped state must disappear in the same render as an identity change.
+  return <AccountSession key={user?.id ?? "signed-out"} user={user} onUserChange={onUserChange} onOpenSettings={onOpenSettings} onOpenLogin={onOpenLogin} />;
+}
+
+function AccountSession({ user, onUserChange, onOpenSettings, onOpenLogin }: AccountPageProps) {
   const dispatch = useDispatch();
+  const generation = useRef(0);
   const [overview, setOverview] = useState<MarketingAccountOverview | null>(null);
   const [cloudSettings, setCloudSettings] = useState<AccountSettingsSyncStatus | null>(null);
   const [error, setError] = useState("");
@@ -66,6 +72,7 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
   const [keyMessage, setKeyMessage] = useState("");
 
   const load = useCallback(async () => {
+    const request = ++generation.current;
     if (!user) {
       setLoading(false);
       return;
@@ -76,8 +83,14 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
       marketingApi.accountOverview(),
       accountSettingsSyncApi.status(),
     ]);
+    if (request !== generation.current) return;
     if (overviewResult.status === "fulfilled") {
-      setOverview(overviewResult.value);
+      if (overviewResult.value.user.id === user.id) {
+        setOverview(overviewResult.value);
+      } else {
+        setOverview(null);
+        setError("账户已变更，请重新加载账户数据。");
+      }
     } else {
       const message = String(overviewResult.reason);
       setError(message);
@@ -93,6 +106,7 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
 
   useEffect(() => {
     void load();
+    return () => { generation.current++; };
   }, [load]);
 
   if (!user) {
@@ -128,7 +142,7 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
 
   const balance = overview?.balance ?? null;
   const usage = overview?.usage ?? null;
-  const apiKey = overview?.gatewayApiKey ?? null;
+  const apiKey = overview?.user.id === user.id ? overview.gatewayApiKey : null;
 
   const stats = [
     {
@@ -153,6 +167,7 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
 
   const useHarmonyKey = async () => {
     if (!apiKey) return;
+    const request = generation.current;
     setSavingKey(true);
     setKeyMessage("");
     try {
@@ -162,19 +177,21 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
         enabled_models: ["deepseek-v4-flash"],
         harmony_api_key: apiKey,
       });
+      if (request !== generation.current) return;
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(true));
       setConfirmUseKey(false);
       setKeyMessage("Harmony 已设为本机默认模型服务。");
     } catch (reason) {
-      setKeyMessage(`配置失败：${String(reason)}`);
+      if (request === generation.current) setKeyMessage(`配置失败：${String(reason)}`);
     } finally {
-      setSavingKey(false);
+      if (request === generation.current) setSavingKey(false);
     }
   };
 
   const copyKey = async () => {
     if (!apiKey) return;
+    const request = generation.current;
     let ok = false;
     try {
       if (navigator.clipboard?.writeText) {
@@ -184,11 +201,14 @@ export default function AccountPage({ user, onUserChange, onOpenSettings, onOpen
         ok = fallbackCopy(apiKey);
       }
     } catch {
+      if (request !== generation.current) return;
       ok = fallbackCopy(apiKey);
     }
-    if (ok) {
+    if (ok && request === generation.current) {
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      window.setTimeout(() => {
+        if (request === generation.current) setCopied(false);
+      }, 1500);
     }
   };
 

@@ -1,0 +1,20 @@
+:root[data-platform="windows"] { --font: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+:root[data-platform="windows"] :is(button, input, textarea, select) { font-family: inherit; }
+:root[data-platform="windows"] :is(button, a, input, textarea, select, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:root[data-platform="windows"] :is(.main-content, .tab-panel, .chat-main, .settings-content, .page-body) { min-width: 0; min-height: 0; }
+:root[data-platform="windows"] :is(.workbench-output-row strong, .file-review-path, .task-center-title, .workflow-row-content, .settings-save-notice) { overflow-wrap: anywhere; }
+:root[data-platform="windows"] :is(.workbench-tabs, .workbench-header-actions, .page-header-actions) { flex-wrap: wrap; }
+:root[data-platform="windows"] .workbench-tabs button { min-height: 34px; flex: 1 0 72px; }
+:root[data-platform="windows"] .workbench-icon-button { min-width: 30px; min-height: 30px; }
+:root[data-platform="windows"] .sidebar-nav { overflow-y: auto; overscroll-behavior: contain; }
+:root[data-platform="windows"] :is(.task-center, .workflow-page, .usage-budget) { scrollbar-gutter: stable; }
+:root[data-platform="windows"][data-color-mode="dark"] :is(.main-content, .page-header, .chat-topbar, .feature-topbar) { background: var(--bg-primary); box-shadow: none; }
+@media (forced-colors: active) {
+  :root[data-platform="windows"] :is(button, input, textarea, select, .workbench-panel, [role="dialog"]) { border: 1px solid ButtonText; }
+  :root[data-platform="windows"] :is(button, a, input, textarea, select, [tabindex]):focus-visible { outline-color: Highlight; }
+  :root[data-platform="windows"] :is([aria-selected="true"], [aria-pressed="true"]) { outline: 2px solid Highlight; outline-offset: -2px; }
+  :root[data-platform="windows"] .project-session-spinner { border-color: GrayText; border-top-color: Highlight; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-platform="windows"] *, :root[data-platform="windows"] *::before, :root[data-platform="windows"] *::after { transition: none !important; scroll-behavior: auto !important; }
+}

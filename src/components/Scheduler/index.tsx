@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useDispatch, useSelector, useStore } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { RootState, schedulerActions } from "../../store";
 import { schedulerApi, ScheduledTask } from "../../services/tauri";
 import ConfirmDialog from "../ConfirmDialog";
 
-export default function Scheduler() {
+export interface SchedulerProps {
+  focusedTaskId?: string | null;
+}
+
+export default function Scheduler({ focusedTaskId = null }: SchedulerProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
+  const store = useStore<RootState>();
   const { tasks } = useSelector((s: RootState) => s.scheduler);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const taskNodes = useRef(new Map<string, HTMLDivElement>());
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -23,12 +31,31 @@ export default function Scheduler() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    let active = true;
     schedulerApi.list().then(({ tasks }) => {
+      if (!active) return;
       dispatch(schedulerActions.setTasks(tasks));
+      setLoaded(true);
     }).catch((e: unknown) => {
-      setError(e instanceof Error ? e.message : String(e));
+      if (active) setLoadError(e instanceof Error ? e.message : String(e));
     });
+    return () => { active = false; };
   }, [dispatch]);
+
+  const focusedTask = tasks.find((task) => task.id === focusedTaskId);
+  useEffect(() => {
+    if (!loaded || !focusedTaskId || !focusedTask) return;
+    const node = taskNodes.current.get(focusedTaskId);
+    node?.scrollIntoView?.({ block: "nearest" });
+    node?.focus({ preventScroll: true });
+  }, [loaded, focusedTaskId, focusedTask?.id]);
+
+  const patchTask = useCallback((id: string, changes: Partial<ScheduledTask>) => {
+    // Redux updates synchronously; reading here also handles events batched before React re-renders.
+    const latest = store.getState().scheduler.tasks;
+    if (!latest.some((task) => task.id === id)) return;
+    dispatch(schedulerActions.setTasks(latest.map((task) => task.id === id ? { ...task, ...changes } : task)));
+  }, [dispatch, store]);
 
   const handleCreate = async () => {
     if (!form.name.trim() || !form.task_prompt.trim()) {
@@ -76,9 +103,7 @@ export default function Scheduler() {
     const newStatus = task.status === "active" ? "paused" : "active";
     try {
       await schedulerApi.update({ task_id: task.id, status: newStatus });
-      dispatch(schedulerActions.setTasks(
-        tasks.map((t) => t.id === task.id ? { ...t, status: newStatus } : t)
-      ));
+      patchTask(task.id, { status: newStatus });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -87,9 +112,7 @@ export default function Scheduler() {
   const handleRunNow = async (id: string) => {
     try {
       // Optimistically mark as running
-      dispatch(schedulerActions.setTasks(
-        tasks.map((t) => t.id === id ? { ...t, last_run_status: "running" } : t)
-      ));
+      patchTask(id, { last_run_status: "running" });
       await schedulerApi.runNow(id);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -98,17 +121,23 @@ export default function Scheduler() {
 
   // Listen for real-time status updates from backend
   useEffect(() => {
-    const unlisteners = tasks.map((task) =>
-      listen<{ status: string }>(`task_status_${task.id}`, (e) => {
-        dispatch(schedulerActions.setTasks(
-          tasks.map((t) => t.id === task.id ? { ...t, last_run_status: e.payload.status } : t)
-        ));
-      })
-    );
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+    for (const task of tasks) {
+      void listen<{ status: string }>(`task_status_${task.id}`, (e) => {
+        if (active) patchTask(task.id, { last_run_status: e.payload.status });
+      }).then((unlisten) => {
+        if (active) unlisteners.push(unlisten);
+        else unlisten();
+      }).catch((cause: unknown) => {
+        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    }
     return () => {
-      unlisteners.forEach((p) => p.then((u) => u()));
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [tasks.map((t) => t.id).join(","), dispatch]);
+  }, [JSON.stringify(tasks.map((task) => task.id).sort()), patchTask]);
 
   return (
     <div className="page">
@@ -122,6 +151,8 @@ export default function Scheduler() {
       </div>
 
       <div className="page-body">
+        {(loadError || (!showForm && error)) && <div role="alert" style={{ marginBottom: 12, color: "var(--error)", overflowWrap: "anywhere" }}>{loadError || error}</div>}
+        {loaded && focusedTaskId && !focusedTask && <div role="status" style={{ marginBottom: 12, color: "var(--text-secondary)" }}>目标定时任务不存在或已删除</div>}
         {showForm && (
           <div className="card" style={{ marginBottom: 20 }}>
             <h3 style={{ marginBottom: 16, color: "var(--text-primary)" }}>{t("scheduler.newTaskTitle")}</h3>
@@ -165,7 +196,9 @@ export default function Scheduler() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {tasks.map((task) => (
-              <div key={task.id} className="card">
+              <div key={task.id} className="card" role="article" aria-label={task.name} tabIndex={-1} data-task-id={task.id} data-focused={task.id === focusedTaskId}
+                ref={(node) => { if (node) taskNodes.current.set(task.id, node); else taskNodes.current.delete(task.id); }}
+                style={task.id === focusedTaskId ? { outline: "2px solid var(--accent-color)", outlineOffset: -2 } : undefined}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>

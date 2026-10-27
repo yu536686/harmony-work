@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { migratePublicServiceUrl } from "../serviceUrls";
+import { captureMarketingSession, isCurrentMarketingSession, type MarketingSessionSnapshot } from "./marketing";
 
 export type CreativeKind = "music" | "image";
 export type CreativeStatus = "queued" | "submitting" | "submitted" | "processing" | "partial_success" | "succeeded" | "archiving" | "archived" | "failed" | "expired";
@@ -7,6 +8,7 @@ export type CreativeStatus = "queued" | "submitting" | "submitted" | "processing
 export type HarvisTaskKind = "image" | "video" | "music" | "tts";
 
 export interface HarvisTask {
+  ownerId?: string;
   taskId: string;
   kind: HarvisTaskKind;
   prompt: string;
@@ -14,6 +16,8 @@ export interface HarvisTask {
   progress: number;
   resultUrl?: string;
   errorMessage?: string;
+  /** A failed status/result lookup does not mean generation failed. */
+  queryError?: string;
   adopted?: boolean;
   rating?: number;
   feedbackTags?: string[];
@@ -205,8 +209,13 @@ export const creativeApi = {
         dataBase64: await encodeFile(file)
       }
     }),
-  harvisGenerate: (request: Record<string, unknown>) =>
-    invoke<Record<string, unknown>>("harvis_generate", { request }),
+  harvisGenerate: async (request: Record<string, unknown>) => {
+    const session = captureMarketingSession();
+    if (!session.userId) throw new Error("请先登录创作账户。");
+    const result = await invoke<Record<string, unknown>>("harvis_generate", { request });
+    if (!isCurrentMarketingSession(session)) throw new Error("账户会话已变更，忽略旧创作结果。");
+    return result;
+  },
   harvisQueryTask: (taskId: string, kind: HarvisTaskKind) =>
     invoke<Record<string, unknown>>("harvis_query_task", { taskId, kind }),
   harvisQueryTaskContent: (taskId: string, kind: HarvisTaskKind) =>
@@ -218,27 +227,60 @@ export const creativeApi = {
 };
 
 const HARVIS_TASKS_KEY = "workbuddy.harvis.tasks";
+const HARVIS_TASKS_CHANGED = "workbuddy:harvis-tasks-changed";
 
-export function loadHarvisTasks(): HarvisTask[] {
+export function subscribeHarvisTasks(onChange: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === HARVIS_TASKS_KEY || event.key === null) onChange();
+  };
+  window.addEventListener(HARVIS_TASKS_CHANGED, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(HARVIS_TASKS_CHANGED, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+function storedHarvisTasks(): unknown[] {
   try {
     const raw = localStorage.getItem(HARVIS_TASKS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as HarvisTask[]).map(task => (
-      task && typeof task.resultUrl === "string"
-        ? { ...task, resultUrl: migratePublicServiceUrl(task.resultUrl) }
-        : task
-    )) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-export function saveHarvisTasks(tasks: HarvisTask[], kind?: HarvisTaskKind): void {
+function isOwnedTask(value: unknown, userId: string): value is HarvisTask {
+  return !!value && typeof value === "object" && (value as HarvisTask).ownerId === userId;
+}
+
+export function loadHarvisTasks(session = captureMarketingSession()): HarvisTask[] {
+  if (!session.userId || !isCurrentMarketingSession(session)) return [];
+  return storedHarvisTasks().filter((task): task is HarvisTask => isOwnedTask(task, session.userId!))
+    .map(task => typeof task.resultUrl === "string" ? { ...task, resultUrl: migratePublicServiceUrl(task.resultUrl) } : task);
+}
+
+export function saveHarvisTasks(tasks: HarvisTask[], kind?: HarvisTaskKind, session = captureMarketingSession()): void {
+  if (!session.userId || !isCurrentMarketingSession(session)) return;
   try {
-    const next = kind ? [...tasks.filter((task) => task.kind === kind), ...loadHarvisTasks().filter((task) => task.kind !== kind)] : tasks;
+    // Retain other owners and legacy unowned rows verbatim; never infer their owner.
+    const preserved = storedHarvisTasks().filter(task => !isOwnedTask(task, session.userId!) || (kind && task.kind !== kind));
+    const next = [...tasks.filter(task => task.ownerId === session.userId && (!kind || task.kind === kind)), ...preserved];
     localStorage.setItem(HARVIS_TASKS_KEY, JSON.stringify(next));
+    window.dispatchEvent(new Event(HARVIS_TASKS_CHANGED));
   } catch {
     // ignore quota / serialization errors
   }
+}
+
+export function addHarvisTask(task: HarvisTask, session: MarketingSessionSnapshot = captureMarketingSession()): void {
+  if (!session.userId || !isCurrentMarketingSession(session) || (task.ownerId && task.ownerId !== session.userId)) return;
+  const current = loadHarvisTasks(session);
+  saveHarvisTasks([{ ...task, ownerId: session.userId }, ...current.filter((item) => item.taskId !== task.taskId || item.kind !== task.kind)], task.kind, session);
+}
+
+export function updateHarvisFeedback(taskId: string, kind: HarvisTaskKind, changes: Pick<Partial<HarvisTask>, "adopted" | "rating" | "feedbackTags">, session = captureMarketingSession()): void {
+  saveHarvisTasks(loadHarvisTasks(session).map((task) => task.taskId === taskId && task.kind === kind ? { ...task, ...changes } : task), kind, session);
 }

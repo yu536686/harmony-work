@@ -6,6 +6,10 @@ use serde_json::Value;
 use std::path::Path;
 use uuid::Uuid;
 
+#[path = "usage_policy.rs"]
+mod usage_policy;
+pub use usage_policy::{UsageBudget, UsageOverview};
+
 fn normalize_koi_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {

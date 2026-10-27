@@ -675,9 +675,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mobile_share_forwards_only_file_details_to_the_active_desktop_task() {
-        let (context, root) = test_context();
+    async fn mobile_share_forwards_only_file_details_to_the_capability_bound_desktop_task() {
+        let (mut context, root) = test_context();
         let capability = "B".repeat(43);
+        context.mobile_share_capability = Some(capability.clone());
         let directory = root.join("mobile_share_requests").join(capability);
         std::fs::create_dir_all(&directory).expect("create request directory");
         std::fs::write(root.join("mobile_share_requests").join("active"), "B".repeat(43))

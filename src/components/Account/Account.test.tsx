@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Provider } from "react-redux";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AccountPage from "./index";
@@ -47,6 +47,57 @@ beforeEach(() => {
 });
 
 describe("AccountPage", () => {
+  const otherUser = { ...activeUser, id: "user-2", name: "Other" };
+  function switchTo(view: ReturnType<typeof renderAccount>, user: MarketingUser | null, onUserChange = vi.fn()) {
+    view.rerender(<Provider store={store}><AccountPage user={user} onUserChange={onUserChange} onOpenLogin={vi.fn()} onOpenSettings={vi.fn()} /></Provider>);
+  }
+
+  it("immediately removes revealed secrets and confirmation on account switch, even offline", async () => {
+    const view = renderAccount(activeUser);
+    fireEvent.click(await screen.findByRole("button", { name: "查看 API Key" }));
+    fireEvent.click(screen.getByRole("button", { name: "用于本机" }));
+    api.accountOverview.mockRejectedValue(new Error("offline"));
+    switchTo(view, otherUser);
+    expect(screen.queryByText("sk-harmony-secret")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await screen.findByText(/offline/);
+    expect(screen.getByRole("button", { name: "复制 Key" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "用于本机" })).toBeDisabled();
+  });
+
+  it("discards an old overview after A logout and B login", async () => {
+    let resolve!: (value: unknown) => void;
+    api.accountOverview.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const view = renderAccount(activeUser);
+    switchTo(view, null);
+    api.accountOverview.mockResolvedValueOnce({ user: otherUser, balance: 2, gatewayApiKey: "sk-B" });
+    switchTo(view, otherUser);
+    await screen.findByText("2.00");
+    await act(async () => resolve({ user: activeUser, balance: 999, gatewayApiKey: "sk-A" }));
+    expect(screen.queryByText("999.00")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看 API Key" }));
+    expect(screen.getByText("sk-B")).toBeInTheDocument();
+  });
+
+  it("does not log B out when an old A request rejects with 401", async () => {
+    let reject!: (reason: unknown) => void;
+    api.accountOverview.mockReturnValueOnce(new Promise((_, r) => { reject = r; }));
+    const onUserChange = vi.fn();
+    const view = renderAccount(activeUser, onUserChange);
+    api.accountOverview.mockResolvedValueOnce({ user: otherUser, balance: 2, gatewayApiKey: "sk-B" });
+    switchTo(view, otherUser, onUserChange);
+    await screen.findByText("2.00");
+    await act(async () => reject("HTTP 401"));
+    expect(onUserChange).not.toHaveBeenCalled();
+  });
+
+  it("rejects a response whose account identity does not match", async () => {
+    renderAccount(otherUser);
+    await waitFor(() => expect(screen.queryByText("加载账户数据…")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "复制 Key" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "用于本机" })).toBeDisabled();
+  });
+
   it("shows identity, balance and a masked API key by default", async () => {
     renderAccount(activeUser);
 

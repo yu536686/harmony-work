@@ -1,0 +1,53 @@
+.task-center-page { display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: auto; padding: 20px 24px; color: var(--text-primary); background: var(--bg-primary); font-size: 13px; }
+.task-center-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 16px; }
+.task-center-header > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; min-width: 0; }
+.task-center-header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+.task-center-count, .task-center-meta, .task-center-detail, .task-center-artifacts { color: var(--text-secondary); font-size: 12px; }
+.task-center-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; padding: 0; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-secondary); background: transparent; cursor: pointer; }
+.task-center-icon:hover, .task-center-command:hover { color: var(--accent-color); background: var(--bg-secondary); }
+.task-center-icon:disabled { cursor: default; opacity: .5; }
+.task-center-toolbar { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, 140px) minmax(100px, 140px); gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
+.task-center-search { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 9px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-secondary); background: var(--bg-secondary); }
+.task-center-search input { min-width: 0; width: 100%; height: 32px; padding: 0; border: 0; color: var(--text-primary); background: transparent; font: inherit; }
+.task-center-toolbar select { min-width: 0; height: 34px; padding: 0 8px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-primary); background: var(--bg-secondary); font: inherit; }
+.task-center-page button:focus-visible, .task-center-page select:focus-visible, .task-center-page input:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.task-center-load-error { display: flex; gap: 8px; align-items: flex-start; padding: 9px 0; color: var(--error, #d85b65); font-size: 12px; overflow-wrap: anywhere; }
+.task-center-load-error svg { flex-shrink: 0; margin-top: 1px; }
+.task-center-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 13px 0; border-bottom: 1px solid var(--border-color); }
+.task-center-row-icon { padding-top: 2px; color: var(--text-secondary); }
+.task-center-row-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.task-center-row h2 { min-width: 0; margin: 0; font-size: 13px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+.task-center-state { flex: 0 0 auto; margin-top: 1px; font-size: 11px; line-height: 20px; color: var(--text-secondary); }
+.task-center-state-running, .task-center-state-queued { color: var(--accent-color); }
+.task-center-state-failed { color: var(--error, #d85b65); }
+.task-center-state-succeeded { color: var(--success, #35865e); }
+.task-center-state-partial, .task-center-query-error { color: var(--warning, #aa751f); }
+.task-center-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; overflow-wrap: anywhere; }
+.task-center-detail { margin: 6px 0 0; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.task-center-progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.task-center-progress progress { width: 120px; max-width: 55%; height: 5px; accent-color: var(--accent-color); }
+.task-center-query-error, .task-center-error { margin: 7px 0 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.task-center-error { color: var(--error, #d85b65); }
+.task-center-error summary { width: fit-content; cursor: pointer; }
+.task-center-error p { margin: 4px 0; white-space: pre-wrap; }
+.task-center-row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 12px; margin-top: 8px; }
+.task-center-command { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 26px; padding: 2px 0; border: 0; color: var(--text-secondary); background: transparent; font: inherit; font-size: 12px; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.task-center-command svg { flex-shrink: 0; }
+.task-center-command:disabled { opacity: .5; cursor: default; }
+.task-center-session-results { min-width: 0; max-width: 100%; }
+.task-center-artifacts { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; padding: 6px 0; }
+.task-center-artifacts > div { overflow-wrap: anywhere; }
+.task-center-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 40px 0; color: var(--text-secondary); }
+.task-center-spinning { animation: task-center-spin 1s linear infinite; }
+.task-center-preview-mask { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .48); }
+.task-center-preview { width: min(760px, 100%); max-height: calc(100dvh - 32px); overflow: auto; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); }
+.task-center-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-center-preview h2 { margin: 0; font-size: 15px; }
+.task-center-preview p { margin: 10px 0; overflow-wrap: anywhere; }
+.task-center-preview-prompt { white-space: pre-wrap; max-height: 100px; overflow: auto; font-size: 12px; }
+.task-center-preview video { display: block; width: 100%; max-height: 55dvh; aspect-ratio: 16 / 9; object-fit: contain; background: #111; }
+.task-center-preview audio { display: block; width: 100%; height: 54px; }
+.task-center-preview-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+@keyframes task-center-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) { .task-center-page { padding: 16px 12px; }.task-center-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }.task-center-search { grid-column: 1 / -1; }.task-center-row-heading { gap: 8px; } }
+@media (prefers-reduced-motion: reduce) { .task-center-spinning { animation: none; } }

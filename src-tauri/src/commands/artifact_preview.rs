@@ -7,9 +7,18 @@ use std::{
 };
 use tauri::State;
 
+#[path = "html_preview.rs"]
+mod html_preview;
+
+pub(crate) fn serve_html_preview(
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    html_preview::serve(request)
+}
+
 const MAX_PREVIEW_BYTES: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactPreviewKind {
     Image,
@@ -28,6 +37,9 @@ pub struct ArtifactPreviewPayload {
     pub media_type: Option<String>,
     pub truncated: bool,
     pub size_bytes: u64,
+    pub preview_url: Option<String>,
+    pub preview_base_url: Option<String>,
+    pub is_outside_workspace: bool,
 }
 
 fn local_path_from_uri(uri: &str) -> Result<Option<PathBuf>, String> {
@@ -89,6 +101,15 @@ pub(crate) fn read_artifact_preview(
     workspace_root: &str,
     allow_outside_workspace: bool,
 ) -> Result<ArtifactPreviewPayload, String> {
+    read_artifact_preview_with_directory(uri, workspace_root, allow_outside_workspace, false)
+}
+
+fn read_artifact_preview_with_directory(
+    uri: &str,
+    workspace_root: &str,
+    allow_outside_workspace: bool,
+    allow_directory: bool,
+) -> Result<ArtifactPreviewPayload, String> {
     let Some(source_path) = local_path_from_uri(uri)? else {
         return Ok(ArtifactPreviewPayload {
             kind: ArtifactPreviewKind::External,
@@ -97,6 +118,9 @@ pub(crate) fn read_artifact_preview(
             media_type: None,
             truncated: false,
             size_bytes: 0,
+            preview_url: None,
+            preview_base_url: None,
+            is_outside_workspace: false,
         });
     };
 
@@ -126,12 +150,32 @@ pub(crate) fn read_artifact_preview(
         .metadata()
         .map_err(|error| format!("无法读取成果信息：{error}"))?;
     let (kind, media_type) = classify_path(&canonical_file);
+    let is_outside_workspace = Path::new(workspace_root)
+        .canonicalize()
+        .map(|root| !is_within_workspace(&canonical_file, &root))
+        .unwrap_or(true);
+    if kind == ArtifactPreviewKind::Html {
+        let (content, truncated) = read_bounded_html(&canonical_file)?;
+        let preview_url =
+            html_preview::create(&canonical_file, workspace_root, false, allow_directory)?;
+        let preview_base_url = preview_url
+            .rsplit_once('/')
+            .map(|(base, _)| format!("{base}/"));
+        return Ok(ArtifactPreviewPayload {
+            kind,
+            uri: canonical_file.to_string_lossy().into_owned(),
+            content: Some(content),
+            media_type: media_type.map(str::to_string),
+            truncated,
+            size_bytes: metadata.len(),
+            preview_url: Some(preview_url),
+            preview_base_url,
+            is_outside_workspace,
+        });
+    }
     if matches!(
         kind,
-        ArtifactPreviewKind::Image
-            | ArtifactPreviewKind::Html
-            | ArtifactPreviewKind::Pdf
-            | ArtifactPreviewKind::External
+        ArtifactPreviewKind::Image | ArtifactPreviewKind::Pdf | ArtifactPreviewKind::External
     ) {
         return Ok(ArtifactPreviewPayload {
             kind,
@@ -140,6 +184,9 @@ pub(crate) fn read_artifact_preview(
             media_type: media_type.map(str::to_string),
             truncated: false,
             size_bytes: metadata.len(),
+            preview_url: None,
+            preview_base_url: None,
+            is_outside_workspace,
         });
     }
 
@@ -158,6 +205,9 @@ pub(crate) fn read_artifact_preview(
             media_type: None,
             truncated: false,
             size_bytes: metadata.len(),
+            preview_url: None,
+            preview_base_url: None,
+            is_outside_workspace,
         });
     }
 
@@ -170,7 +220,38 @@ pub(crate) fn read_artifact_preview(
         media_type: media_type.map(str::to_string),
         truncated,
         size_bytes: metadata.len(),
+        preview_url: None,
+        preview_base_url: None,
+        is_outside_workspace,
     })
+}
+
+fn read_bounded_html(path: &Path) -> Result<(String, bool), String> {
+    let mut bytes = Vec::with_capacity(MAX_PREVIEW_BYTES + 1);
+    File::open(path)
+        .map_err(|error| format!("无法打开成果文件：{error}"))?
+        .take((MAX_PREVIEW_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取成果文件：{error}"))?;
+    let mut truncated = bytes.len() > MAX_PREVIEW_BYTES;
+    bytes.truncate(MAX_PREVIEW_BYTES);
+    if truncated {
+        if let Err(error) = std::str::from_utf8(&bytes) {
+            if error.error_len().is_none() {
+                bytes.truncate(error.valid_up_to());
+            }
+        }
+    }
+    let mut content = String::from_utf8_lossy(&bytes).into_owned();
+    if content.len() > MAX_PREVIEW_BYTES {
+        let mut end = MAX_PREVIEW_BYTES;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        content.truncate(end);
+        truncated = true;
+    }
+    Ok((content, truncated))
 }
 
 fn save_artifact_copy_to(
@@ -195,6 +276,8 @@ pub async fn get_artifact_preview(
     state: State<'_, AppState>,
     session_id: String,
     uri: String,
+    allow_network: Option<bool>,
+    allow_directory: Option<bool>,
 ) -> Result<ArtifactPreviewPayload, String> {
     let settings = state.settings.lock().await.clone();
     let session = {
@@ -212,7 +295,24 @@ pub async fn get_artifact_preview(
     let allow_outside_workspace = session
         .allow_outside_workspace
         .unwrap_or(settings.allow_outside_workspace);
-    read_artifact_preview(&uri, workspace_root, allow_outside_workspace)
+    let allow_directory = allow_directory.unwrap_or(false);
+    let mut preview = read_artifact_preview_with_directory(
+        &uri,
+        workspace_root,
+        allow_outside_workspace,
+        allow_directory,
+    )?;
+    if preview.kind == ArtifactPreviewKind::Html && allow_network.unwrap_or(false) {
+        let url = html_preview::create(
+            Path::new(&preview.uri),
+            workspace_root,
+            true,
+            allow_directory,
+        )?;
+        preview.preview_base_url = url.rsplit_once('/').map(|(base, _)| format!("{base}/"));
+        preview.preview_url = Some(url);
+    }
+    Ok(preview)
 }
 
 #[tauri::command]
@@ -244,19 +344,13 @@ pub async fn save_artifact_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
 
     struct TestTree(PathBuf);
 
     impl TestTree {
         fn create() -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos();
+            let nonce = uuid::Uuid::new_v4();
             let root = std::env::temp_dir().join(format!("harmony-artifact-preview-{nonce}"));
             fs::create_dir_all(root.join("workspace")).expect("workspace");
             fs::create_dir_all(root.join("outside")).expect("outside");
@@ -295,6 +389,95 @@ mod tests {
         assert_eq!(preview.kind, ArtifactPreviewKind::Text);
         assert_eq!(preview.content.as_deref(), Some("# result"));
         assert!(!preview.truncated);
+    }
+
+    #[test]
+    fn html_uses_a_scoped_preview_source_instead_of_the_asset_origin() {
+        let tree = TestTree::create();
+        let workspace = tree.0.join("workspace");
+        let file = workspace.join("index.html");
+        fs::write(&file, "<h1>Preview</h1>").unwrap();
+        let preview =
+            read_artifact_preview(file.to_str().unwrap(), workspace.to_str().unwrap(), false)
+                .unwrap();
+        let wire = serde_json::to_value(preview).unwrap();
+        assert!(
+            wire["preview_url"]
+                .as_str()
+                .is_some_and(|url| url.contains("harmony-preview")),
+            "HTML must not run on the unrestricted asset origin"
+        );
+        assert_eq!(wire["content"], "<h1>Preview</h1>");
+        assert!(wire["preview_base_url"]
+            .as_str()
+            .is_some_and(|url| url.ends_with('/')));
+        assert_eq!(wire["is_outside_workspace"], false);
+    }
+
+    #[test]
+    fn html_payload_is_bounded_utf8_and_keeps_raw_scripts_for_explicit_interaction() {
+        let tree = TestTree::create();
+        let workspace = tree.0.join("workspace");
+        let file = workspace.join("index.html");
+        let prefix = "<script>window.ready=true</script>";
+        let mut source = prefix.to_string();
+        source.push_str(&"x".repeat(MAX_PREVIEW_BYTES - prefix.len() - 1));
+        source.push_str("中tail");
+        fs::write(&file, &source).unwrap();
+        let preview =
+            read_artifact_preview(file.to_str().unwrap(), workspace.to_str().unwrap(), false)
+                .unwrap();
+        let content = preview.content.unwrap();
+        assert!(preview.truncated);
+        assert_eq!(content.len(), MAX_PREVIEW_BYTES - 1);
+        assert!(content.starts_with(prefix));
+        assert!(!content.contains('\u{fffd}'));
+        assert_eq!(preview.size_bytes, source.len() as u64);
+
+        fs::write(&file, [0xff; MAX_PREVIEW_BYTES + 1]).unwrap();
+        let preview =
+            read_artifact_preview(file.to_str().unwrap(), workspace.to_str().unwrap(), false)
+                .unwrap();
+        let content = preview.content.unwrap();
+        assert!(preview.truncated);
+        assert!(content.len() <= MAX_PREVIEW_BYTES);
+        assert!(std::str::from_utf8(content.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn outside_file_permission_is_not_a_directory_resource_grant() {
+        let tree = TestTree::create();
+        let workspace = tree.0.join("workspace");
+        let outside = tree.0.join("outside");
+        let file = outside.join("index.html");
+        fs::write(&file, "<img src=photo.png><script src=app.js></script>").unwrap();
+        fs::write(outside.join("private.txt"), "synthetic sentinel").unwrap();
+        for allow_directory in [false, true] {
+            let preview = read_artifact_preview_with_directory(
+                file.to_str().unwrap(),
+                workspace.to_str().unwrap(),
+                true,
+                allow_directory,
+            )
+            .unwrap();
+            assert!(preview.is_outside_workspace);
+            assert!(preview.content.unwrap().contains("<script"));
+            let base: tauri::http::Uri = preview.preview_base_url.unwrap().parse().unwrap();
+            let response = serve_html_preview(
+                tauri::http::Request::builder()
+                    .uri(format!("{}private.txt", base.path()))
+                    .body(Vec::new())
+                    .unwrap(),
+            );
+            assert_eq!(response.status(), if allow_directory { 200 } else { 403 });
+        }
+        assert!(read_artifact_preview_with_directory(
+            file.to_str().unwrap(),
+            workspace.to_str().unwrap(),
+            false,
+            true
+        )
+        .is_err());
     }
 
     #[test]

@@ -29,14 +29,15 @@ mod tests {
     }
     #[test]
     fn quiescence_waits_for_existing_work_and_releases_on_cancel() {
-        let permit = admit_work().unwrap();
-        let waiting = Quiesce::begin();
+        // Runtime tests legitimately own global work permits in parallel.
+        let state = std::sync::Mutex::new(Admission { blocked: false, active: 1 });
+        let waiting = Quiesce::for_state(&state);
         assert!(!waiting.ready());
-        assert!(admit_work().is_err());
-        drop(permit);
+        assert!(state.lock().unwrap().blocked);
+        state.lock().unwrap().active -= 1;
         assert!(waiting.ready());
         drop(waiting);
-        assert!(admit_work().is_ok());
+        assert!(!state.lock().unwrap().blocked);
     }
     #[test]
     fn committed_handoff_never_reopens_admission() {

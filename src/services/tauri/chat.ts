@@ -78,6 +78,9 @@ export interface ArtifactPreviewPayload {
   media_type?: string | null;
   truncated: boolean;
   size_bytes: number;
+  preview_url?: string | null;
+  preview_base_url?: string | null;
+  is_outside_workspace?: boolean;
 }
 
 export const sessionsApi = {
@@ -245,8 +248,8 @@ export const chatApi = {
     invoke<void>("codex_chat_cancel", { sessionId }),
   getExecutionHistory: (sessionId: string, limit = 500) =>
     invoke<TurnExecutionEventRecord[]>("get_turn_execution_history", { sessionId, limit }),
-  getArtifactPreview: (sessionId: string, uri: string) =>
-    invoke<ArtifactPreviewPayload>("get_artifact_preview", { sessionId, uri }),
+  getArtifactPreview: (sessionId: string, uri: string, allowNetwork = false, allowDirectory = false) =>
+    invoke<ArtifactPreviewPayload>("get_artifact_preview", { sessionId, uri, ...(allowNetwork ? { allowNetwork: true } : {}), ...(allowDirectory ? { allowDirectory: true } : {}) }),
   saveArtifactCopy: (sessionId: string, uri: string, destination: string) =>
     invoke<number>("save_artifact_copy", { sessionId, uri, destination }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>

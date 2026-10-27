@@ -551,20 +551,18 @@ async fn install_skill_from_content_sourced(
         );
     }
 
-    let (safe_name, _display_name) = {
+    let safe_name = crate::skills::service::sanitize_skill_id(&skill.name);
+    validate_zip_path(&safe_name)?;
+    let mut stage = new_skill_stage(&skills_dir)?;
+    std::fs::write(stage.dir.join("SKILL.md"), &content).map_err(|e| e.to_string())?;
+    stage.content = content;
+    let installed = crate::skills::provenance::installed_dir(&skills_dir);
+    ensure_plain_directory(&installed)?;
+    let skill_dir = installed.join(&safe_name);
+    {
         let db = state.db.lock().await;
-        crate::skills::service::install_to_installed(
-            &db,
-            &skills_dir,
-            &content,
-            source,
-            source_url,
-            None,
-        )
-        .map_err(|e| format!("Failed to install skill: {}", e))?
-    };
-
-    let skill_dir = crate::skills::provenance::installed_dir(&skills_dir).join(&safe_name);
+        commit_content_stage(&stage, &skill_dir, &db, &skills_dir, source, source_url)?;
+    }
     let skill_file = skill_dir.join("SKILL.md");
     info!("Installed skill '{}' to {:?}", skill.name, skill_dir);
 
@@ -741,205 +739,541 @@ async fn install_skill_from_zip(
                 source
             ));
         }
-        resp.bytes()
-            .await
-            .map_err(|e| format!("Failed to read zip bytes: {}", e))?
-            .to_vec()
+        read_zip_response(resp).await?
     } else {
-        tokio::fs::read(source)
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(source)
             .await
-            .map_err(|e| format!("Failed to read zip file '{}': {}", source, e))?
-    };
-
-    // ── 2. Parse zip and locate SKILL.md ─────────────────────────────────────
-    let cursor = std::io::Cursor::new(&zip_bytes);
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open zip archive: {}", e))?;
-
-    // Find SKILL.md — accept root-level or one directory deep.
-    // Normalise path separators to '/' and do case-insensitive filename match
-    // so zips created on Windows (backslash paths) also work.
-    let skill_md_path: Option<String> = {
-        let mut found = None;
-        for i in 0..archive.len() {
-            let file = archive.by_index(i).map_err(|e| e.to_string())?;
-            // Normalise backslashes → forward slashes
-            let name = file.name().replace('\\', "/");
-            let parts: Vec<&str> = name.trim_end_matches('/').split('/').collect();
-            // Accept: "SKILL.md" or "skill-name/SKILL.md" (case-insensitive)
-            if (parts.len() == 1 || parts.len() == 2)
-                && parts.last().map(|s| s.to_uppercase()) == Some("SKILL.MD".to_string())
-            {
-                found = Some(name);
-                break;
-            }
+            .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(MAX_SKILL_ZIP_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MAX_SKILL_ZIP_BYTES {
+            return Err("Skill ZIP exceeds download size limit".into());
         }
-        found
+        bytes
     };
 
-    let skill_md_path =
-        skill_md_path.ok_or_else(|| "Zip archive does not contain a SKILL.md file".to_string())?;
+    install_skill_archive(state, &zip_bytes, "manual", None, None).await
+}
 
-    // Determine the prefix directory (empty string if SKILL.md is at root)
-    let prefix: String = {
-        let parts: Vec<&str> = skill_md_path.split('/').collect();
-        if parts.len() == 2 {
-            format!("{}/", parts[0])
-        } else {
-            String::new()
-        }
-    };
-
-    // ── 3. Read SKILL.md content (find by index to handle backslash paths) ──────
-    let skill_md_content = {
-        // Re-scan to find the index of the SKILL.md entry (by_name may fail on
-        // backslash paths stored in the zip central directory on Windows)
-        let mut skill_idx: Option<usize> = None;
-        for i in 0..archive.len() {
-            let file = archive.by_index(i).map_err(|e| e.to_string())?;
-            let normalised = file.name().replace('\\', "/");
-            if normalised == skill_md_path {
-                skill_idx = Some(i);
-                break;
-            }
-        }
-        let idx = skill_idx.ok_or_else(|| "Could not re-locate SKILL.md in zip".to_string())?;
-        let mut file = archive
-            .by_index(idx)
-            .map_err(|e| format!("Failed to read SKILL.md from zip: {}", e))?;
-        let mut content = String::new();
-        std::io::Read::read_to_string(&mut file, &mut content)
-            .map_err(|e| format!("Failed to decode SKILL.md: {}", e))?;
-        // Strip BOM if present
-        content.trim_start_matches('\u{FEFF}').to_string()
-    };
-
-    // ── 4. Parse, validate, register in DB ───────────────────────────────────
+/// All ZIP entry points use this path, including market downloads and ClawHub fallback.
+async fn install_skill_archive(
+    state: &State<'_, AppState>,
+    bytes: &[u8],
+    source: &str,
+    source_url: Option<String>,
+    market: Option<(String, String)>,
+) -> Result<SkillCatalogItem, String> {
     let app_dir = state
         .app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from(".xiaoheng"));
-    let skills_dir = app_dir.join("skills");
-
-    let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
-    let skill = loader
-        .parse_skill_from_content(&skill_md_content)
-        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
-
+        .map_err(|e| e.to_string())?;
+    let skills_dir = crate::skills::service::skills_root_from_app_data(&app_dir);
+    let stage = stage_skill_zip(bytes, &skills_dir)?;
+    let skill = crate::skills::loader::SkillLoader::new(&skills_dir)
+        .parse_skill_from_content(&stage.content)
+        .map_err(|e| e.to_string())?;
     if skill.name.is_empty() || skill.name == "unnamed" {
-        return Err("SKILL.md must declare a 'name' field in frontmatter".into());
+        return Err("SKILL.md must declare a name".into());
     }
-
     let compat = check_skill_compatibility(&skill).await;
     if !compat.compatible {
-        return Err(format!(
-            "技能 '{}' 与当前系统不兼容：\n{}",
-            skill.name,
-            compat.issues.join("\n")
-        ));
+        return Err(format!("Incompatible skill: {}", compat.issues.join("\n")));
     }
-
-    let safe_name: String = skill
-        .name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
+    let safe_name = crate::skills::service::sanitize_skill_id(&skill.name);
+    validate_zip_path(&safe_name)?;
+    let skill_dir = skill_install_destination(&skills_dir, &safe_name)?;
+    let (market_id, market_version) = match market {
+        Some((id, version)) => {
+            let version = if version.is_empty() {
+                skill.version.clone()
             } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .to_lowercase();
-
+                version
+            };
+            std::fs::write(
+                stage.dir.join(".harmony-market.json"),
+                serde_json::json!({ "id": id, "version": version }).to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+            (Some(id), Some(version))
+        }
+        None => (None, None),
+    };
     {
         let db = state.db.lock().await;
-        db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦")
-            .map_err(|e| format!("Failed to register skill in database: {}", e))?;
+        commit_skill_stage(
+            &stage,
+            &skill_dir,
+            &db,
+            &safe_name,
+            &skill.name,
+            &skill.description,
+            source,
+            source_url,
+        )?;
     }
-
-    let skill_dir = skills_dir.join(&safe_name);
-    if let Err(e) = tokio::fs::create_dir_all(&skill_dir).await {
-        let db = state.db.lock().await;
-        let _ = db.delete_skill(&safe_name);
-        return Err(format!("Failed to create skill directory: {}", e));
-    }
-
-    // ── 5. Extract all files that share the same prefix ──────────────────────
-    // Re-open archive (cursor consumed above)
-    let cursor2 = std::io::Cursor::new(&zip_bytes);
-    let mut archive2 = zip::ZipArchive::new(cursor2)
-        .map_err(|e| format!("Failed to re-open zip archive: {}", e))?;
-
-    let mut extracted_count = 0usize;
-    for i in 0..archive2.len() {
-        let mut file = archive2.by_index(i).map_err(|e| e.to_string())?;
-        // Normalise separators for consistent prefix matching
-        let raw_name = file.name().replace('\\', "/");
-
-        // Skip directories
-        if raw_name.ends_with('/') {
-            continue;
-        }
-
-        // Only extract files under the same prefix as SKILL.md
-        if !raw_name.starts_with(&prefix) {
-            continue;
-        }
-
-        // Relative path inside the skill directory
-        let rel = &raw_name[prefix.len()..];
-
-        // Security: reject path traversal
-        if rel.contains("..") || rel.starts_with('/') {
-            warn!("Zip install: skipping suspicious path '{}'", raw_name);
-            continue;
-        }
-
-        let dest = skill_dir.join(rel);
-
-        // Create parent directories if needed
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                warn!("Zip install: failed to create dir {:?}: {}", parent, e);
-                continue;
-            }
-        }
-
-        let mut content_bytes = Vec::new();
-        if let Err(e) = std::io::Read::read_to_end(&mut file, &mut content_bytes) {
-            warn!("Zip install: failed to read '{}': {}", raw_name, e);
-            continue;
-        }
-
-        if let Err(e) = std::fs::write(&dest, &content_bytes) {
-            warn!("Zip install: failed to write {:?}: {}", dest, e);
-            continue;
-        }
-
-        extracted_count += 1;
-    }
-
-    info!(
-        "Installed skill '{}' from zip ({} file(s)) to {:?}",
-        skill.name, extracted_count, skill_dir
-    );
-
     notify_skills_changed(state);
     Ok(SkillCatalogItem {
         name: skill.name,
         description: skill.description,
         version: skill.version,
-        source: "installed".to_string(),
+        source: "installed".into(),
         path: skill_dir.to_string_lossy().into_owned(),
-        market_id: None,
-        market_version: None,
+        market_id,
+        market_version,
         tools: skill.tools,
         dependencies: skill.dependencies,
         permissions: skill.permissions,
         platform: skill.platform,
     })
+}
+
+const MAX_SKILL_ZIP_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SKILL_ZIP_ENTRIES: usize = 4096;
+const MAX_SKILL_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SKILL_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_SKILL_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+fn skill_install_destination(
+    root: &std::path::Path,
+    id: &str,
+) -> Result<std::path::PathBuf, String> {
+    validate_zip_path(id)?;
+    let installed = crate::skills::provenance::installed_dir(root);
+    ensure_plain_directory(&installed)?;
+    let current = installed.join(id);
+    let legacy = root.join(id);
+    // The loader migrates flat ZIP installs. Update their actual location rather
+    // than creating a second flat copy that the older installed copy shadows.
+    if std::fs::symlink_metadata(&current).is_ok()
+        || !legacy.join("SKILL.md").is_file()
+        || ["installed", "learned"].contains(&id)
+        || crate::skills::provenance::is_builtin_dir_name(id)
+    {
+        Ok(current)
+    } else {
+        Ok(legacy)
+    }
+}
+
+fn validate_zip_path(name: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, PathBuf};
+    let normalized = name.replace('\\', "/");
+    if normalized.starts_with('/') {
+        return Err(format!("Absolute ZIP path: {name:?}"));
+    }
+    let normalized = normalized.strip_suffix('/').unwrap_or(&normalized);
+    let mut path = PathBuf::new();
+    for part in normalized.split('/') {
+        let stem = part.split('.').next().unwrap_or_default().trim().to_uppercase();
+        let reserved = ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"]
+            .contains(&stem.as_str())
+            || (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"]
+                    .contains(&&stem[3..]);
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.ends_with(['.', ' '])
+            || part
+                .chars()
+                .any(|c| c.is_control() || "<>:\"|?*".contains(c))
+            || reserved
+        {
+            return Err(format!("Unsafe ZIP path component: {name:?}"));
+        }
+        path.push(part);
+    }
+    if path
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(format!("Unsafe ZIP path: {name:?}"));
+    }
+    Ok(path)
+}
+
+struct SkillZipEntry {
+    name: std::path::PathBuf,
+    directory: bool,
+    size: u64,
+}
+
+fn inspect_skill_zip(bytes: &[u8]) -> Result<(Vec<SkillZipEntry>, usize), String> {
+    use std::collections::HashMap;
+    use zip::HasZipMetadata;
+    if bytes.len() as u64 > MAX_SKILL_ZIP_BYTES {
+        return Err("Skill ZIP exceeds download size limit".into());
+    }
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    if archive.len() > MAX_SKILL_ZIP_ENTRIES {
+        return Err("Skill ZIP exceeds entry count limit".into());
+    }
+    let mut entries = Vec::new();
+    let mut names = HashMap::new();
+    let mut manifests = Vec::new();
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).map_err(|e| e.to_string())?;
+        let name = validate_zip_path(file.name())?;
+        let directory = file.is_dir();
+        let kind = file.unix_mode().unwrap_or(0) & 0o170000;
+        let attrs = file.get_metadata().external_attributes;
+        if file.is_symlink()
+            || !matches!(kind, 0 | 0o100000 | 0o040000)
+            || (kind == 0o040000 && !directory)
+            || (kind == 0o100000 && directory)
+            || attrs & 0x408 != 0
+            || file.encrypted()
+        {
+            return Err(format!(
+                "ZIP links, special files and encrypted entries are not allowed: {:?}",
+                file.name()
+            ));
+        }
+        // Legacy Unix/ASi fields can carry link targets; never materialize them.
+        if let Some(mut extra) = file.extra_data() {
+            while extra.len() >= 4 {
+                let tag = u16::from_le_bytes([extra[0], extra[1]]);
+                let len = u16::from_le_bytes([extra[2], extra[3]]) as usize;
+                if matches!(tag, 0x000d | 0x756e) || len + 4 > extra.len() {
+                    return Err("Unsupported ZIP link metadata".into());
+                }
+                extra = &extra[len + 4..];
+            }
+            if !extra.is_empty() {
+                return Err("Truncated ZIP extra metadata".into());
+            }
+        }
+        let key = name.to_string_lossy().replace('\\', "/").to_lowercase();
+        if names.insert(key.clone(), directory).is_some() {
+            return Err(format!("Duplicate/case-colliding ZIP path: {key}"));
+        }
+        let is_manifest = !directory
+            && name.components().count() <= 2
+            && name
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("SKILL.md"));
+        let limit = if is_manifest {
+            MAX_SKILL_MANIFEST_BYTES
+        } else {
+            MAX_SKILL_FILE_BYTES
+        };
+        total = total.checked_add(file.size()).ok_or("ZIP size overflow")?;
+        if file.size() > limit || total > MAX_SKILL_TOTAL_BYTES || directory && file.size() != 0 {
+            return Err("Skill ZIP exceeds expanded size limit".into());
+        }
+        if is_manifest {
+            manifests.push(index);
+        }
+        entries.push(SkillZipEntry {
+            name,
+            directory,
+            size: file.size(),
+        });
+    }
+    for key in names.keys() {
+        let mut parent = std::path::Path::new(key).parent();
+        while let Some(p) = parent {
+            if names.get(p.to_string_lossy().as_ref()) == Some(&false) {
+                return Err("ZIP file/directory path collision".into());
+            }
+            parent = p.parent();
+        }
+    }
+    if manifests.len() != 1 {
+        return Err(
+            "Skill ZIP must contain exactly one root or one-directory-deep SKILL.md".into(),
+        );
+    }
+    Ok((entries, manifests[0]))
+}
+
+fn read_skill_zip(bytes: &[u8], destination: Option<&std::path::Path>) -> Result<String, String> {
+    use std::io::Read;
+    let (entries, manifest_index) = inspect_skill_zip(bytes)?;
+    let prefix = entries[manifest_index]
+        .name
+        .parent()
+        .ok_or("Missing manifest parent")?;
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let mut manifest = Vec::new();
+    let mut actual_total = 0u64;
+    for (index, entry) in entries.iter().enumerate() {
+        let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
+        let relative = entry.name.strip_prefix(prefix).ok();
+        if entry.directory {
+            if let (Some(dest), Some(relative)) = (destination, relative) {
+                std::fs::create_dir_all(dest.join(relative)).map_err(|e| e.to_string())?;
+            }
+            continue;
+        }
+        let mut reader = (&mut file).take(entry.size + 1);
+        let written = if index == manifest_index {
+            let n = std::io::copy(&mut reader, &mut manifest).map_err(|e| e.to_string())?;
+            if let Some(dest) = destination {
+                std::fs::write(dest.join("SKILL.md"), &manifest).map_err(|e| e.to_string())?;
+            }
+            n
+        } else if let (Some(dest), Some(relative)) = (destination, relative) {
+            let target = dest.join(relative);
+            std::fs::create_dir_all(target.parent().ok_or("Missing ZIP parent")?)
+                .map_err(|e| e.to_string())?;
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(|e| e.to_string())?;
+            let n = std::io::copy(&mut reader, &mut output).map_err(|e| e.to_string())?;
+            output.sync_all().map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = if file.unix_mode().unwrap_or(0) & 0o111 != 0 {
+                    0o755
+                } else {
+                    0o644
+                };
+                std::fs::set_permissions(target, std::fs::Permissions::from_mode(mode))
+                    .map_err(|e| e.to_string())?;
+            }
+            n
+        } else {
+            std::io::copy(&mut reader, &mut std::io::sink()).map_err(|e| e.to_string())?
+        };
+        actual_total = actual_total
+            .checked_add(written)
+            .ok_or("ZIP size overflow")?;
+        if written != entry.size || actual_total > MAX_SKILL_TOTAL_BYTES {
+            return Err("ZIP expanded size does not match declared size".into());
+        }
+    }
+    String::from_utf8(manifest)
+        .map(|s| s.trim_start_matches('\u{FEFF}').to_string())
+        .map_err(|e| e.to_string())
+}
+
+struct SkillStage {
+    container: std::path::PathBuf,
+    dir: std::path::PathBuf,
+    content: String,
+}
+
+impl Drop for SkillStage {
+    fn drop(&mut self) {
+        // Never discard a recoverable old tree after a failed rollback/cleanup.
+        if !self.container.join("backup").exists() {
+            let _ = std::fs::remove_dir_all(&self.container);
+        }
+    }
+}
+
+fn ensure_plain_directory(path: &std::path::Path) -> Result<(), String> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Skill directory is a link or not a directory: {}",
+                path.display()
+            ));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("Skill directory is a Windows reparse point".into());
+            }
+        }
+    } else {
+        std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn new_skill_stage(root: &std::path::Path) -> Result<SkillStage, String> {
+    ensure_plain_directory(root)?;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let staging_root = root.join(".skill-installs");
+    ensure_plain_directory(&staging_root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staging_root, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    let container = staging_root.join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir(&container).map_err(|e| e.to_string())?;
+    let stage = SkillStage {
+        dir: container.join("payload"),
+        container,
+        content: String::new(),
+    };
+    std::fs::create_dir(&stage.dir).map_err(|e| e.to_string())?;
+    Ok(stage)
+}
+
+fn stage_skill_zip(bytes: &[u8], root: &std::path::Path) -> Result<SkillStage, String> {
+    inspect_skill_zip(bytes)?;
+    let mut stage = new_skill_stage(root)?;
+    stage.content = read_skill_zip(bytes, Some(&stage.dir))?;
+    Ok(stage)
+}
+
+/// Each rename is same-filesystem and atomic. Keep the old tree until DB commit;
+/// any ordinary error restores it. The backup is retained if rollback itself fails.
+fn publish_skill_stage<F>(
+    stage: &SkillStage,
+    destination: &std::path::Path,
+    register: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    use fs2::FileExt;
+    let parent = destination.parent().ok_or("Missing skill parent")?;
+    ensure_plain_directory(parent)?;
+    let staging_root = stage.container.parent().ok_or("Missing staging parent")?;
+    let root = staging_root.parent().ok_or("Missing skills root")?;
+    let parent = parent.canonicalize().map_err(|e| e.to_string())?;
+    if parent != root && parent != root.join("installed") {
+        return Err("Skill destination escaped the skills directory".into());
+    }
+    let id = destination
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid skill destination")?;
+    validate_zip_path(id)?;
+    if parent == root
+        && (["installed", "learned"].contains(&id)
+            || crate::skills::provenance::is_builtin_dir_name(id))
+    {
+        return Err("Cannot replace a reserved skill directory".into());
+    }
+    let lock_path = staging_root.join("install.lock");
+    if let Ok(meta) = std::fs::symlink_metadata(&lock_path) {
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err("Unsafe skill install lock".into());
+        }
+    }
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(|e| e.to_string())?;
+    lock.lock_exclusive().map_err(|e| e.to_string())?;
+    let exists = match std::fs::symlink_metadata(destination) {
+        Ok(_) => {
+            ensure_plain_directory(destination)?;
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.to_string()),
+    };
+    let backup = stage.container.join("backup");
+    if exists {
+        std::fs::rename(destination, &backup).map_err(|e| e.to_string())?;
+    }
+    let outcome = std::fs::rename(&stage.dir, destination)
+        .map_err(|e| e.to_string())
+        .and_then(|_| register());
+    if let Err(error) = outcome {
+        if destination.exists() {
+            std::fs::rename(destination, &stage.dir).map_err(|e| {
+                format!(
+                    "{error}; cannot withdraw new skill: {e}; old skill retained at {}",
+                    backup.display()
+                )
+            })?;
+        }
+        if exists {
+            std::fs::rename(&backup, destination).map_err(|e| {
+                format!(
+                    "{error}; rollback failed: {e}; old skill retained at {}",
+                    backup.display()
+                )
+            })?;
+        }
+        return Err(error);
+    }
+    if exists {
+        if let Err(e) = std::fs::remove_dir_all(&backup) {
+            warn!(
+                "Skill installed; old backup retained at {}: {e}",
+                backup.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn commit_skill_stage(
+    stage: &SkillStage,
+    destination: &std::path::Path,
+    db: &crate::store::Database,
+    id: &str,
+    name: &str,
+    description: &str,
+    source: &str,
+    source_url: Option<String>,
+) -> Result<(), String> {
+    publish_skill_stage(stage, destination, || {
+        let tx = db.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let meta = crate::skills::provenance::SkillConfigMeta::installed(source, source_url, None);
+        crate::skills::service::register_skill_db(db, id, name, description, &meta, Some(source))
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    })
+}
+
+fn commit_content_stage(
+    stage: &SkillStage,
+    destination: &std::path::Path,
+    db: &crate::store::Database,
+    root: &std::path::Path,
+    source: &str,
+    source_url: Option<String>,
+) -> Result<(), String> {
+    publish_skill_stage(stage, destination, || {
+        let tx = db.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        // The legacy service writes/registers only after the complete staged tree
+        // is published. Its errors now roll back both the DB and filesystem.
+        crate::skills::service::install_to_installed(
+            db,
+            root,
+            &stage.content,
+            source,
+            source_url,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    })
+}
+
+async fn read_zip_response(response: reqwest::Response) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_SKILL_ZIP_BYTES)
+    {
+        return Err("Skill ZIP exceeds download size limit".into());
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_SKILL_ZIP_BYTES {
+            return Err("Skill ZIP exceeds download size limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Remove an installed skill by name. Only skills whose source is "installed" or "workspace"
@@ -1402,6 +1736,400 @@ pub async fn check_skill_compat(
 }
 
 #[cfg(test)]
+mod security_zip_tests {
+    use super::*;
+    use std::fs;
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    const MANIFEST: &str = "---\nname: security-sample\ndescription: test\n---\n# Test";
+
+    fn bundle(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    struct TestRoot(std::path::PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("harmony-zip-security-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn security_zip_staging_keeps_manifest_below_scan_depth() {
+        let root = TestRoot::new();
+        let _stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        assert!(!fs::read_dir(&root.0)
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().join("SKILL.md").exists()));
+    }
+
+    #[test]
+    fn security_zip_staging_is_not_discoverable_as_an_installed_skill() {
+        let root = TestRoot::new();
+        let _stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        let mut loader = crate::skills::loader::SkillLoader::new(&root.0);
+        loader.load_all().unwrap();
+        assert!(!loader
+            .list_skills()
+            .iter()
+            .any(|s| s.name == "security-sample"));
+    }
+
+    #[test]
+    fn security_zip_publish_preserves_helpers_and_replaces_whole_old_tree() {
+        let root = TestRoot::new();
+        let dest = root.0.join("security-sample");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("old-only"), "old").unwrap();
+        let bytes = bundle(&[
+            ("pkg/SKILL.md", MANIFEST.as_bytes()),
+            ("pkg/scripts/helper.txt", b"helper"),
+        ]);
+        let stage = stage_skill_zip(&bytes, &root.0).unwrap();
+        assert!(!dest.join("SKILL.md").exists());
+        let db = crate::store::Database::open_in_memory().unwrap();
+        assert!(db.get_skill("security-sample").unwrap().is_none());
+        commit_skill_stage(
+            &stage,
+            &dest,
+            &db,
+            "security-sample",
+            "security-sample",
+            "new",
+            "harmony-market",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("scripts/helper.txt")).unwrap(),
+            "helper"
+        );
+        assert!(!dest.join("old-only").exists());
+        assert!(db.get_skill("security-sample").unwrap().is_some());
+    }
+
+    #[test]
+    fn security_zip_database_failure_restores_old_tree_and_old_record() {
+        let root = TestRoot::new();
+        let db = crate::store::Database::open_in_memory().unwrap();
+        db.upsert_skill("security-sample", "Old name", "Old description", "old")
+            .unwrap();
+        db.conn.execute_batch("CREATE TRIGGER fail_skill_usage BEFORE INSERT ON skill_usage BEGIN SELECT RAISE(FAIL, 'injected DB failure'); END;").unwrap();
+        let dest = root.0.join("security-sample");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "old bytes").unwrap();
+        let stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        assert!(commit_skill_stage(
+            &stage,
+            &dest,
+            &db,
+            "security-sample",
+            "new",
+            "new",
+            "manual",
+            None
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "old bytes"
+        );
+        let record = db.get_skill("security-sample").unwrap().unwrap();
+        assert_eq!(record.name, "Old name");
+        assert_eq!(record.description, "Old description");
+    }
+
+    #[test]
+    fn security_zip_new_install_db_failure_leaves_no_fake_record_or_directory() {
+        let root = TestRoot::new();
+        let db = crate::store::Database::open_in_memory().unwrap();
+        db.conn.execute_batch("CREATE TRIGGER fail_skill_usage BEFORE INSERT ON skill_usage BEGIN SELECT RAISE(FAIL, 'injected DB failure'); END;").unwrap();
+        let dest = root.0.join("security-sample");
+        let stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        assert!(commit_skill_stage(
+            &stage,
+            &dest,
+            &db,
+            "security-sample",
+            "new",
+            "new",
+            "clawhub",
+            None
+        )
+        .is_err());
+        assert!(!dest.exists());
+        assert!(db.get_skill("security-sample").unwrap().is_none());
+    }
+
+    #[test]
+    fn security_content_install_uses_the_same_rollback_boundary() {
+        let root = TestRoot::new();
+        let db = crate::store::Database::open_in_memory().unwrap();
+        let dest = root.0.join("installed/security-sample");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "old").unwrap();
+        let stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        db.conn.execute_batch("CREATE TRIGGER fail_skill_usage BEFORE INSERT ON skill_usage BEGIN SELECT RAISE(FAIL, 'injected DB failure'); END;").unwrap();
+        assert!(commit_content_stage(&stage, &dest, &db, &root.0, "manual", None).is_err());
+        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "old");
+        assert!(db.get_skill("security-sample").unwrap().is_none());
+        db.conn
+            .execute_batch("DROP TRIGGER fail_skill_usage;")
+            .unwrap();
+        commit_content_stage(&stage, &dest, &db, &root.0, "manual", None).unwrap();
+        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), MANIFEST);
+    }
+
+    #[test]
+    fn security_zip_promotion_failure_does_not_register_or_destroy_old_skill() {
+        let root = TestRoot::new();
+        let dest = root.0.join("security-sample");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "old").unwrap();
+        let stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        fs::remove_dir_all(&stage.dir).unwrap();
+        let called = std::cell::Cell::new(false);
+        assert!(publish_skill_stage(&stage, &dest, || {
+            called.set(true);
+            Ok(())
+        })
+        .is_err());
+        assert!(!called.get());
+        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "old");
+    }
+
+    #[test]
+    fn security_zip_bad_crc_cleans_staging_and_preserves_old_skill() {
+        let root = TestRoot::new();
+        let dest = root.0.join("security-sample");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "old").unwrap();
+        let mut bytes = bundle(&[("SKILL.md", MANIFEST.as_bytes()), ("helper", b"new")]);
+        let archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let offset = archive.central_directory_start() as usize;
+        drop(archive);
+        bytes[offset + 16] ^= 0xff;
+        assert!(stage_skill_zip(&bytes, &root.0).is_err());
+        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "old");
+        assert!(fs::read_dir(root.0.join(".skill-installs"))
+            .unwrap()
+            .next()
+            .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn security_zip_destination_symlink_cannot_touch_outside_sentinel() {
+        let root = TestRoot::new();
+        let outside = TestRoot::new();
+        fs::write(outside.0.join("sentinel"), "untouched").unwrap();
+        let dest = root.0.join("security-sample");
+        std::os::unix::fs::symlink(&outside.0, &dest).unwrap();
+        let stage =
+            stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+        assert!(publish_skill_stage(&stage, &dest, || Ok(())).is_err());
+        assert_eq!(
+            fs::read_to_string(outside.0.join("sentinel")).unwrap(),
+            "untouched"
+        );
+        assert!(!outside.0.join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn security_zip_rejects_windows_and_traversal_paths_even_outside_skill_prefix() {
+        for name in [
+            "C:/escape",
+            "C:escape",
+            "\\\\server\\share\\escape",
+            "//server/share/escape",
+            "\\\\?\\C:\\escape",
+            "\\\\.\\NUL",
+            "/absolute",
+            "../escape",
+            "pkg/../../escape",
+            "pkg\\..\\escape",
+            "pkg/file:stream",
+            "pkg/NUL.txt",
+            "pkg/NUL .txt",
+            "pkg/COM1",
+            "pkg/COM0.txt",
+            "pkg/LPT¹.txt",
+            "pkg/trailing. ",
+        ] {
+            let bytes = bundle(&[("pkg/SKILL.md", MANIFEST.as_bytes()), (name, b"sentinel")]);
+            assert!(
+                extract_skill_md_from_zip(&bytes).is_err(),
+                "accepted {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_zip_rejects_links() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("SKILL.md", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(MANIFEST.as_bytes()).unwrap();
+        writer
+            .add_symlink("link", "../sentinel", SimpleFileOptions::default())
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        assert!(extract_skill_md_from_zip(&bytes).is_err());
+    }
+
+    #[test]
+    fn security_zip_rejects_excessive_entry_count() {
+        let names: Vec<_> = (0..4096).map(|i| format!("files/{i}")).collect();
+        let mut entries = vec![("SKILL.md", MANIFEST.as_bytes())];
+        entries.extend(names.iter().map(|name| (name.as_str(), b"".as_slice())));
+        assert!(extract_skill_md_from_zip(&bundle(&entries)).is_err());
+    }
+
+    #[test]
+    fn security_zip_rejects_oversized_expansion() {
+        let data = vec![b'x'; 64 * 1024 * 1024 + 1];
+        let bytes = bundle(&[("SKILL.md", MANIFEST.as_bytes()), ("huge", &data)]);
+        assert!(extract_skill_md_from_zip(&bytes).is_err());
+    }
+
+    fn patch_entry(bytes: &mut [u8], index: usize, field: usize, value: u32) {
+        let mut archive = zip::ZipArchive::new(Cursor::new(&*bytes)).unwrap();
+        let offset = archive.by_index(index).unwrap().central_header_start() as usize;
+        drop(archive);
+        bytes[offset + field..offset + field + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn security_zip_rejects_total_size_manifest_size_and_forged_size() {
+        let mut bytes = bundle(&[
+            ("SKILL.md", MANIFEST.as_bytes()),
+            ("a", b"a"),
+            ("b", b"b"),
+            ("c", b"c"),
+            ("d", b"d"),
+        ]);
+        for index in 1..5 {
+            patch_entry(&mut bytes, index, 24, MAX_SKILL_FILE_BYTES as u32);
+        }
+        assert!(extract_skill_md_from_zip(&bytes).is_err());
+        let mut bytes = bundle(&[("SKILL.md", MANIFEST.as_bytes())]);
+        patch_entry(&mut bytes, 0, 24, MAX_SKILL_MANIFEST_BYTES as u32 + 1);
+        assert!(extract_skill_md_from_zip(&bytes).is_err());
+        let mut bytes = bundle(&[("SKILL.md", MANIFEST.as_bytes()), ("a", b"actual bytes")]);
+        patch_entry(&mut bytes, 1, 24, 0);
+        assert!(extract_skill_md_from_zip(&bytes).is_err());
+    }
+
+    #[test]
+    fn security_zip_rejects_windows_reparse_and_special_file_metadata() {
+        for attrs in [0x400, 0x08, 0o020644 << 16, 0o010644 << 16] {
+            let mut bytes = bundle(&[("SKILL.md", MANIFEST.as_bytes()), ("special", b"target")]);
+            patch_entry(&mut bytes, 1, 38, attrs);
+            assert!(
+                extract_skill_md_from_zip(&bytes).is_err(),
+                "accepted attributes {attrs:x}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_zip_cannot_replace_reserved_installation_roots() {
+        let root = TestRoot::new();
+        for id in ["installed", "learned", "office-automation"] {
+            let stage =
+                stage_skill_zip(&bundle(&[("SKILL.md", MANIFEST.as_bytes())]), &root.0).unwrap();
+            let dest = root.0.join(id);
+            fs::create_dir(&dest).unwrap();
+            fs::write(dest.join("sentinel"), "untouched").unwrap();
+            assert!(publish_skill_stage(&stage, &dest, || Ok(())).is_err());
+            assert_eq!(
+                fs::read_to_string(dest.join("sentinel")).unwrap(),
+                "untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn security_zip_updates_migrated_or_legacy_location_without_shadow_copy() {
+        let root = TestRoot::new();
+        assert_eq!(
+            skill_install_destination(&root.0, "sample").unwrap(),
+            root.0.join("installed/sample")
+        );
+        let legacy = root.0.join("sample");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("SKILL.md"), MANIFEST).unwrap();
+        assert_eq!(
+            skill_install_destination(&root.0, "sample").unwrap(),
+            legacy
+        );
+        let current = root.0.join("installed/sample");
+        fs::create_dir(&current).unwrap();
+        fs::write(current.join("SKILL.md"), MANIFEST).unwrap();
+        assert_eq!(
+            skill_install_destination(&root.0, "sample").unwrap(),
+            current
+        );
+        assert_eq!(
+            skill_install_destination(&root.0, "installed").unwrap(),
+            root.0.join("installed/installed")
+        );
+    }
+
+    #[test]
+    fn security_zip_rejects_ambiguous_manifests_and_case_collisions() {
+        for entries in [
+            vec![
+                ("SKILL.md", MANIFEST.as_bytes()),
+                ("other/skill.md", MANIFEST.as_bytes()),
+            ],
+            vec![
+                ("SKILL.md", MANIFEST.as_bytes()),
+                ("File", b"a"),
+                ("file", b"b"),
+            ],
+        ] {
+            assert!(extract_skill_md_from_zip(&bundle(&entries)).is_err());
+        }
+    }
+
+    #[test]
+    fn security_zip_accepts_windows_separators_and_literal_metacharacters() {
+        let bytes = bundle(&[
+            ("pkg\\SKILL.md", MANIFEST.as_bytes()),
+            ("pkg\\资料 & (a)..txt", b"ok"),
+        ]);
+        assert_eq!(extract_skill_md_from_zip(&bytes).unwrap(), MANIFEST);
+    }
+}
+
+#[cfg(test)]
 mod runtime_verification_tests {
     use super::{read_market_metadata, verify_skill_runtime_from, SkillRuntimeState};
     use crate::store::db::Skill;
@@ -1613,9 +2341,15 @@ pub async fn clawhub_install(
             };
             return Err(format!("ClawHub：技能 '{}' 安装失败（{}）", slug, hint));
         }
-        let zip_bytes = zip_resp.bytes().await.map_err(|e| e.to_string())?;
-        extract_skill_md_from_zip(&zip_bytes)
-            .map_err(|e| format!("从 zip 中提取 SKILL.md 失败：{}", e))?
+        let zip_bytes = read_zip_response(zip_resp).await?;
+        return install_skill_archive(
+            &state,
+            &zip_bytes,
+            "clawhub",
+            Some(format!("{}/skills/{}", CLAWHUB_API, slug)),
+            None,
+        )
+        .await;
     };
 
     let source_url = Some(format!("{}/skills/{}", CLAWHUB_API, slug));
@@ -1640,9 +2374,11 @@ pub async fn harmony_market_install(
         .ok()
         .and_then(|result| result.items.into_iter().find(|item| item.slug == slug))
         .map(|item| item.version);
-    let app_dir = state.app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     let existing = scan_skill_catalog(state.clone()).await?;
-    if let Some(item) = existing.into_iter().find(|item| item.market_id.as_deref() == Some(slug.as_str())) {
+    if let Some(item) = existing
+        .into_iter()
+        .find(|item| item.market_id.as_deref() == Some(slug.as_str()))
+    {
         if market_version.is_some() && market_version.as_deref() == item.market_version.as_deref() {
             emit_harmony_install_progress(&state, &slug, "complete", 100);
             return Ok(item);
@@ -1669,10 +2405,16 @@ pub async fn harmony_market_install(
         ));
     }
     let total = resp.content_length();
+    if total.is_some_and(|n| n > MAX_SKILL_ZIP_BYTES) {
+        return Err("Skill ZIP exceeds download size limit".into());
+    }
     let mut bytes = Vec::new();
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Failed to read Harmony skill package: {}", e))?;
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_SKILL_ZIP_BYTES {
+            return Err("Skill ZIP exceeds download size limit".into());
+        }
         bytes.extend_from_slice(&chunk);
         let percent = total
             .filter(|total| *total > 0)
@@ -1681,49 +2423,22 @@ pub async fn harmony_market_install(
         emit_harmony_install_progress(&state, &slug, "downloading", percent);
     }
     emit_harmony_install_progress(&state, &slug, "installing", 90);
-    let tmp_path = std::env::temp_dir().join(format!(
-        "harmony-skill-{}-{}.skill.zip",
-        slug.replace(['/', '\\'], "-"),
-        uuid::Uuid::new_v4()
-    ));
-    tokio::fs::write(&tmp_path, &bytes)
-        .await
-        .map_err(|e| format!("Failed to write temporary Harmony skill package: {}", e))?;
-    let tmp_string = tmp_path.to_string_lossy().to_string();
-    let result = install_skill_from_zip(&state, &tmp_string).await;
-    let _ = tokio::fs::remove_file(&tmp_path).await;
-    let mut item = result?;
-    let version = market_version.unwrap_or_else(|| item.version.clone());
-    let metadata = serde_json::json!({ "id": slug, "version": version });
-    let path = std::path::Path::new(&item.path);
-    if !path.starts_with(app_dir.join("skills")) {
-        return Err("Market skill destination escaped the skills directory".into());
-    }
-    tokio::fs::write(path.join(".harmony-market.json"), metadata.to_string())
-        .await
-        .map_err(|e| format!("Failed to save market version: {}", e))?;
-    item.market_id = Some(slug.clone());
-    item.market_version = Some(version);
-    notify_skills_changed(&state);
+    let item = install_skill_archive(
+        &state,
+        &bytes,
+        "harmony-market",
+        Some(url),
+        Some((slug.clone(), market_version.unwrap_or_default())),
+    )
+    .await?;
     emit_harmony_install_progress(&state, &slug, "complete", 100);
     Ok(item)
 }
 
 /// Extract SKILL.md text from a zip archive bytes.
-fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {
-    use std::io::Read;
-    let cursor = std::io::Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(cursor)?;
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let name = file.name().to_lowercase();
-        if name == "skill.md" || name.ends_with("/skill.md") {
-            let mut content = String::new();
-            file.read_to_string(&mut content)?;
-            return Ok(content);
-        }
-    }
-    anyhow::bail!("SKILL.md not found in zip archive")
+#[cfg(test)]
+fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> Result<String, String> {
+    read_skill_zip(zip_bytes, None)
 }
 
 /// Call Codex to generate bilingual (Chinese + English) trigger keywords for a skill,

@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { KeyRound, Settings2 } from "lucide-react";
+import { KeyRound, Settings2, Trash2 } from "lucide-react";
 import { RootState, settingsActions } from "../../store";
 import {
   settingsApi,
@@ -36,11 +36,15 @@ import { SETTINGS_SECTIONS, type SettingsSection } from "./settingsSections";
 import Tools from "../Tools";
 import AuditLog from "../AuditLog";
 import DebugPanel from "../Debug";
+import Diagnostics from "../Diagnostics";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 import { preferEnterpriseCapabilityDiagnostics } from "../../utils/enterpriseCapability";
 import { primaryChannelStatusLabel } from "./channelLifecycle";
 import { embeddingModelItems, selectedEmbeddingModel } from "./embeddingModels";
+import { buildSettingsPatch, changedSettingsFields } from "./settingsPatch";
+import { mainChatCapability } from "../../utils/providerCapabilities";
+import { mainChatSelectionError, mainChatSettingsError } from "./mainChatSettings";
 import AppDropdown from "../ui/AppDropdown";
 import "./Settings.css";
 
@@ -179,6 +183,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   vision_enabled: false,
   enable_streaming: false,
   ssh_servers: [],
+  llm_providers: [],
   allow_multiple_instances: false,
 };
 
@@ -194,6 +199,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const dispatch = useDispatch();
   const { settings } = useSelector((s: RootState) => s.settings);
   const [form, setForm] = useState<SettingsData>({ ...DEFAULT_SETTINGS });
+  const baseline = useRef<SettingsData>({ ...DEFAULT_SETTINGS });
   const [harvisModelOptions, setHarvisModelOptions] = useState<ProviderModelInfo[]>([]);
   const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
   const [embeddingModelsError, setEmbeddingModelsError] = useState<string | null>(null);
@@ -202,6 +208,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [saved, setSaved] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
@@ -236,6 +243,20 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   const [wechatBindState, setWechatBindState] = useState<"idle" | "loading" | "scan" | "scaned" | "success" | "error">("idle");
   const [wechatBindError, setWechatBindError] = useState<string | null>(null);
 
+  const refreshWechatBinding = async () => {
+    const latest = await settingsApi.get();
+    const fields = {
+      wechat_enabled: latest.wechat_enabled,
+      wechat_gateway_token: latest.wechat_gateway_token,
+      wechat_gateway_port: latest.wechat_gateway_port,
+      wechat_bot_token: latest.wechat_bot_token,
+      wechat_base_url: latest.wechat_base_url,
+      wechat_bot_id: latest.wechat_bot_id,
+    };
+    baseline.current = { ...baseline.current, ...fields };
+    setForm(previous => ({ ...previous, ...fields }));
+  };
+
   const handleWechatBind = async () => {
     setWechatBindState("loading");
     setWechatQr(null);
@@ -243,6 +264,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
     try {
       const result = await wechatApi.startLogin();
       if (result.connected) {
+        await refreshWechatBinding();
         setWechatBindState("success");
       } else if (result.qr_data_url && result.qrcode_token) {
         setWechatQr(result.qr_data_url);
@@ -271,11 +293,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
           setWechatQr(null);
           try {
             await initializePrimaryChannel("wechat");
-            setForm((previous) => ({
-              ...previous,
-              wechat_enabled: true,
-              wechat_bot_id: status.bot_id ?? previous.wechat_bot_id,
-            }));
+            await refreshWechatBinding();
           } catch (error) {
             setWechatBindState("error");
             setWechatBindError(error instanceof Error ? error.message : String(error));
@@ -307,6 +325,9 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   // Named LLM Providers
   const EMPTY_LLM_PROVIDER: LlmProviderConfig = { id: "", label: "", provider: "harmony", model: "", enabled_models: [], available_models: [], api_key: "", base_url: "", max_tokens: 0 };
   const [llmProviders, setLlmProviders] = useState<LlmProviderConfig[]>([]);
+  const draft = { ...form, ssh_servers: sshServers, llm_providers: llmProviders };
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [llmEditIdx, setLlmEditIdx] = useState<number | null>(null);
   const [llmEditForm, setLlmEditForm] = useState<LlmProviderConfig>(EMPTY_LLM_PROVIDER);
   const [llmShowKey, setLlmShowKey] = useState(false);
@@ -327,11 +348,18 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
       if (!merged.workspace_root?.trim() && defaultWorkspace) {
         merged.workspace_root = defaultWorkspace;
       }
-      setForm(merged);
-      setSshServers(settings.ssh_servers ?? []);
-      setLlmProviders(settings.llm_providers ?? []);
+      const rebased = { ...merged, ...changedSettingsFields(baseline.current, draftRef.current) };
+      baseline.current = merged;
+      setForm(rebased);
+      setSshServers(rebased.ssh_servers ?? []);
+      setLlmProviders(rebased.llm_providers ?? []);
     }
   }, [settings, defaultWorkspace]);
+
+  useEffect(() => {
+    const unlisten = listen<string>("settings_save_warning", event => setSaveWarning(event.payload));
+    return () => { void unlisten.then(stop => stop()); };
+  }, []);
 
   useEffect(() => {
     const key = (form.harmony_api_key ?? "").trim();
@@ -579,8 +607,9 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   };
 
   const handleSave = async () => {
+    const submitted = draftRef.current;
     // workspace_root is always required — fill with default if blank
-    if (!(form.workspace_root ?? "").trim()) {
+    if (!(submitted.workspace_root ?? "").trim()) {
       if (defaultWorkspace) {
         update("workspace_root", defaultWorkspace);
       } else {
@@ -588,15 +617,21 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
         return;
       }
     }
-    const micro = Number(form.compaction_micro_percent ?? 60);
-    const auto = Number(form.compaction_auto_percent ?? 80);
-    const full = Number(form.compaction_full_percent ?? 95);
+    const micro = Number(submitted.compaction_micro_percent ?? 60);
+    const auto = Number(submitted.compaction_auto_percent ?? 80);
+    const full = Number(submitted.compaction_full_percent ?? 95);
     if (!(micro >= 0 && micro < auto && auto < full && full < 100)) {
       setSaveError(t("settings.compactionThresholdOrderError"));
       return;
     }
+    const capabilityError = mainChatSettingsError(baseline.current, submitted);
+    if (capabilityError) {
+      setSaveError(capabilityError);
+      return;
+    }
     setSaving(true);
     setSaveError(null);
+    setSaveWarning(null);
     try {
       const normalizeModelSelection = (model: string | undefined, enabled: string[] | undefined) => {
         const enabledModels = uniqStrings(enabled ?? []);
@@ -606,18 +641,19 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
           enabled_models: defaultModel ? uniqStrings([defaultModel, ...enabledModels]) : enabledModels,
         };
       };
-      const globalModels = normalizeModelSelection(form.model, form.enabled_models);
-      const updated = await settingsApi.save({
-        ...form,
+      const globalModels = normalizeModelSelection(submitted.model, submitted.enabled_models);
+      const rawPatch = buildSettingsPatch(baseline.current, submitted);
+      const normalized = {
+        ...submitted,
         model: globalModels.model,
         enabled_models: globalModels.enabled_models,
         compaction_micro_percent: micro,
         compaction_auto_percent: auto,
         compaction_full_percent: full,
-        max_tool_result_tokens: Math.max(1000, Number(form.max_tool_result_tokens) || 8000),
-        summary_model: (form.summary_model ?? "").trim() || null,
-        ssh_servers: sshServers,
-        llm_providers: llmProviders.map((p) => {
+        max_tool_result_tokens: Math.max(1000, Number(submitted.max_tool_result_tokens) || 8000),
+        summary_model: (submitted.summary_model ?? "").trim() || null,
+        ssh_servers: submitted.ssh_servers,
+        llm_providers: (submitted.llm_providers ?? []).map((p) => {
           const providerModels = normalizeModelSelection(p.model, p.enabled_models);
           return {
             ...p,
@@ -625,7 +661,26 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
             enabled_models: providerModels.enabled_models,
           };
         }),
-      });
+      };
+      // Normalize changed fields only, so unrelated sections and new credentials stay untouched.
+      const patch = Object.fromEntries(Object.entries(rawPatch).map(([key, value]) => [
+        key, value === null || key === "ssh_servers" || key === "llm_providers"
+          ? value : normalized[key as keyof typeof normalized],
+      ]));
+      if ("model" in rawPatch || "enabled_models" in rawPatch) Object.assign(patch, globalModels);
+      if (Array.isArray(patch.llm_providers)) {
+        patch.llm_providers = patch.llm_providers.map(provider => ({
+          ...provider,
+          ...normalizeModelSelection(provider.model, provider.enabled_models),
+        }));
+      }
+      const updated = await settingsApi.save(patch as Partial<SettingsData>);
+      const pending = changedSettingsFields(submitted, draftRef.current);
+      const nextForm = { ...DEFAULT_SETTINGS, ...updated, ...pending };
+      baseline.current = { ...DEFAULT_SETTINGS, ...updated };
+      setForm(nextForm);
+      setSshServers(nextForm.ssh_servers ?? []);
+      setLlmProviders(nextForm.llm_providers ?? []);
       if (settings && ([
         "workspace_root",
         "allow_outside_workspace",
@@ -681,7 +736,10 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
 
   const reloadSettingsAfterCloudRestore = useCallback(async () => {
     const updated = await settingsApi.get();
+    baseline.current = { ...DEFAULT_SETTINGS, ...updated };
     setForm({ ...DEFAULT_SETTINGS, ...updated });
+    setSshServers(updated.ssh_servers ?? []);
+    setLlmProviders(updated.llm_providers ?? []);
     dispatch(settingsActions.setSettings(updated));
     dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(
       updated.anthropic_api_key
@@ -695,12 +753,21 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
   }, [dispatch]);
 
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => {
+    draftRef.current = { ...draftRef.current, [key]: value };
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const providerOptions = () => LLM_PROVIDER_OPTIONS.map((p) => (
-    <option key={p.id} value={p.id}>{IS_MACOS ? t(p.labelKey) : `${p.icon} ${t(p.labelKey)}`}</option>
-  ));
+  const providerOptions = (selected?: string) => <>
+    {LLM_PROVIDER_OPTIONS.map(p => {
+      const capability = mainChatCapability(p.id);
+      return <option key={p.id} value={p.id} disabled={!capability.selectable} title={capability.message}>
+        {IS_MACOS ? t(p.labelKey) : `${p.icon} ${t(p.labelKey)}`}
+      </option>;
+    })}
+    {selected && !LLM_PROVIDER_OPTIONS.some(p => p.id === selected) && (
+      <option value={selected} disabled title={mainChatCapability(selected).message}>{selected}</option>
+    )}
+  </>;
 
   const globalProviderMeta = providerMeta(form.provider);
   const globalApiKey = String((form as any)[globalProviderMeta.keyField] ?? "");
@@ -944,11 +1011,12 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
         </div>
       </div>
       {saveError && (
-        <div style={{ margin: "0 0 12px 0", padding: "8px 14px", background: "rgba(220,53,69,0.15)", borderLeft: "3px solid #dc3545", color: "#ff6b6b", fontSize: "0.85rem", display: "flex", justifyContent: "space-between" }}>
+        <div role="alert" style={{ margin: "0 0 12px 0", padding: "8px 14px", background: "rgba(220,53,69,0.15)", borderLeft: "3px solid #dc3545", color: "#ff6b6b", fontSize: "0.85rem", display: "flex", justifyContent: "space-between" }}>
           <span>{saveError}</span>
           <button onClick={() => setSaveError(null)} style={{ background: "none", border: "none", color: "#ff6b6b", cursor: "pointer" }}>✕</button>
         </div>
       )}
+      {saveWarning && <div className="settings-error" role="status">{saveWarning}</div>}
 
       <div className="page-body settings-page-body">
         <div className="settings-layout">
@@ -981,7 +1049,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
 
           <div className="form-group">
             <label className="label">{t("settings.provider")}</label>
-            <select className="input" value={form.provider ?? "harmony"} onChange={(e) => {
+            <select className="input" aria-describedby="main-provider-capability" value={form.provider ?? "harmony"} onChange={(e) => {
               const next = e.target.value as LlmProviderId;
               const meta = providerMeta(next);
               setForm((prev) => ({
@@ -993,8 +1061,9 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                 custom_base_url: next === "custom" ? prev.custom_base_url : prev.custom_base_url,
               }));
             }}>
-              {providerOptions()}
+              {providerOptions(form.provider)}
             </select>
+            <p id="main-provider-capability" className="field-hint">{mainChatCapability(form.provider ?? "harmony").message}</p>
           </div>
 
           <div className="form-group">
@@ -1391,13 +1460,14 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="label">{t("settings.namedLlmProviderTypeLabel")}</label>
-                    <select className="input" value={llmEditForm.provider} onChange={e => {
+                    <select className="input" aria-describedby="named-provider-capability" value={llmEditForm.provider} onChange={e => {
                       const next = e.target.value;
                       const meta = providerMeta(next);
                       setLlmEditForm(f => ({ ...f, provider: next, model: f.model || meta.placeholder }));
                     }}>
-                      {providerOptions()}
+                      {providerOptions(llmEditForm.provider)}
                     </select>
+                    <p id="named-provider-capability" className="field-hint">{mainChatCapability(llmEditForm.provider).message}</p>
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="label">{t("settings.defaultModel")}</label>
@@ -1442,7 +1512,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                       >
                         {namedModelLoading ? "..." : t("settings.fetchModels")}
                       </button>
-                      {namedModelError && <span style={{ color: "var(--color-error, #ef4444)", fontSize: 12 }}>{namedModelError}</span>}
+                      {namedModelError && <span role="alert" style={{ color: "var(--color-error, #ef4444)", fontSize: 12 }}>{namedModelError}</span>}
                     </div>
                     {llmModelOptions.length > 0 && (
                       <div style={{ padding: 10, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-primary)", maxHeight: 180, overflow: "auto" }}>
@@ -1482,8 +1552,15 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                       const nextProvider = {
                         ...llmEditForm,
                         id: llmEditForm.id.trim(),
+                        api_key: llmEditForm.api_key || (llmEditIdx >= 0 ? llmProviders[llmEditIdx]?.api_key : "") || "",
                         enabled_models: uniqStrings([...(llmEditForm.enabled_models ?? []), llmEditForm.model]),
                       };
+                      const error = mainChatSelectionError(llmEditIdx >= 0 ? llmProviders[llmEditIdx] : undefined, nextProvider);
+                      if (error) {
+                        setNamedModelError(error);
+                        return;
+                      }
+                      setNamedModelError(null);
                       if (llmEditIdx === -1) {
                         if (llmProviders.some(p => p.id === nextProvider.id)) return;
                         setLlmProviders(prev => [...prev, nextProvider]);
@@ -2042,6 +2119,23 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
                       : t("settings.wechatBindBtn")}
                   </button>
 
+                  {(form.wechat_bot_token || form.wechat_bot_id) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      title="清除微信凭据"
+                      aria-label="清除微信凭据"
+                      disabled={saving || wechatBindState === "loading"}
+                      onClick={() => {
+                        const cleared = { wechat_enabled: false, wechat_bot_token: "", wechat_bot_id: "", wechat_base_url: "" };
+                        draftRef.current = { ...draftRef.current, ...cleared };
+                        setForm(previous => ({ ...previous, ...cleared }));
+                        setWechatBindState("idle");
+                        setWechatQr(null);
+                      }}
+                    ><Trash2 size={16} /></button>
+                  )}
+
                   {(wechatBindState === "scan" || wechatBindState === "scaned") && wechatQr && (
                     <div style={{ marginTop: 12, textAlign: "center" }}>
                       <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
@@ -2326,6 +2420,7 @@ export default function Settings({ theme, setTheme, initialSection, onOpenTools 
 
         {/* ── Runtime Environment ───────────────────────────────────────── */}
         <section id="settings-section-system-diagnostics" className="settings-section settings-section-anchor" aria-labelledby="settings-heading-system-diagnostics" hidden={activeSection !== "system-diagnostics"}>
+          {activeSection === "system-diagnostics" && <Diagnostics />}
           <h3 id="settings-heading-system-diagnostics" className="settings-section-title">{t("settings.runtimeSection")}</h3>
           <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
             {t("settings.runtimeSectionDesc")}

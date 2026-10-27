@@ -7,12 +7,14 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex;
 
 const STDERR_HISTORY_LIMIT: usize = 200;
+static NEXT_PROCESS_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppServerIdentity {
@@ -60,9 +62,12 @@ pub enum CodexProcessError {
 }
 
 pub struct CodexProcess {
+    id: u64,
     client: AppServerClient<ChildStdin>,
     events: Mutex<AppServerEventReceiver>,
     child: Mutex<Child>,
+    pid: u32,
+    stopped: AtomicBool,
     stderr_history: Arc<Mutex<VecDeque<String>>>,
     executable: PathBuf,
     initialization: Value,
@@ -82,8 +87,13 @@ impl CodexProcess {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
 
         let mut child = command.spawn().map_err(CodexProcessError::Start)?;
+        let pid = child
+            .id()
+            .ok_or(CodexProcessError::MissingPipe("process ID"))?;
         let stdin = child
             .stdin
             .take()
@@ -102,9 +112,12 @@ impl CodexProcess {
         let initialization = initialize_app_server(&client, &config.identity).await?;
 
         Ok(Self {
+            id: NEXT_PROCESS_ID.fetch_add(1, Ordering::Relaxed),
             client,
             events: Mutex::new(events),
             child: Mutex::new(child),
+            pid,
+            stopped: AtomicBool::new(false),
             stderr_history,
             executable,
             initialization,
@@ -113,6 +126,10 @@ impl CodexProcess {
 
     pub fn client(&self) -> AppServerClient<ChildStdin> {
         self.client.clone()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub async fn next_event(&self) -> Option<AppServerEvent> {
@@ -142,12 +159,66 @@ impl CodexProcess {
 
     pub async fn shutdown(&self) -> Result<(), CodexProcessError> {
         let mut child = self.child.lock().await;
-        if child.try_wait().map_err(CodexProcessError::Stop)?.is_none() {
-            child.start_kill().map_err(CodexProcessError::Stop)?;
-            child.wait().await.map_err(CodexProcessError::Stop)?;
+        if self.stopped.load(Ordering::Relaxed) {
+            return Ok(());
         }
+        terminate_process_tree(&mut child, self.pid)
+            .await
+            .map_err(CodexProcessError::Stop)?;
+        self.stopped.store(true, Ordering::Relaxed);
         Ok(())
     }
+
+    #[cfg(all(test, unix))]
+    pub(crate) async fn hold_shutdown(&self) -> tokio::sync::MutexGuard<'_, Child> {
+        self.child.lock().await
+    }
+}
+
+pub(crate) async fn terminate_process_tree(child: &mut Child, pid: u32) -> std::io::Result<()> {
+    let exited = child.try_wait()?.is_some();
+    #[cfg(windows)]
+    if exited {
+        return Err(std::io::Error::other(
+            "cannot confirm orphaned Codex writers after the root process exited",
+        ));
+    }
+    #[cfg(unix)]
+    let status = tokio_command("/bin/kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await?;
+    #[cfg(windows)]
+    let status = tokio_command(
+        std::path::PathBuf::from(
+            std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()),
+        )
+        .join("System32/taskkill.exe"),
+    )
+    .args(["/PID", &pid.to_string(), "/T", "/F"])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .status()
+    .await?;
+    #[cfg(unix)]
+    if !status.success() && !exited && child.try_wait()?.is_none() {
+        return Err(std::io::Error::other(
+            "could not terminate Codex process tree",
+        ));
+    }
+    #[cfg(windows)]
+    if !status.success() || exited {
+        // Without a live root PID taskkill cannot certify orphaned writers.
+        return Err(std::io::Error::other(
+            "could not confirm Codex process-tree termination",
+        ));
+    }
+    if child.try_wait()?.is_none() {
+        child.start_kill()?;
+    }
+    child.wait().await?;
+    Ok(())
 }
 
 pub async fn initialize_app_server<W>(
@@ -240,6 +311,7 @@ fn bundled_codex_candidates_from(current_exe: &Path) -> Vec<PathBuf> {
 
 async fn verify_codex_version(executable: &Path) -> Result<(), CodexProcessError> {
     let output = tokio_command(executable)
+        .kill_on_drop(true)
         .arg("--version")
         .output()
         .await
@@ -344,10 +416,7 @@ mod tests {
                 serde_json::from_str(&lines.next_line().await.expect("read").expect("initialize"))
                     .expect("json");
             assert_eq!(request["method"], "initialize");
-            assert_eq!(
-                request["params"]["clientInfo"]["name"],
-                "harmony-work"
-            );
+            assert_eq!(request["params"]["clientInfo"]["name"], "harmony-work");
             server_writer
                 .write_all(
                     format!(
@@ -406,5 +475,149 @@ mod tests {
             Some("0.149.0")
         );
         assert_eq!(parse_codex_version("unexpected output"), None);
+    }
+
+    #[cfg(windows)]
+    mod native_windows {
+        use super::*;
+        use std::time::Duration;
+
+        struct WriterFixture(PathBuf);
+
+        impl Drop for WriterFixture {
+            fn drop(&mut self) {
+                // Also stop an orphan on assertion/timeout failure; keep its stop marker.
+                let _ = std::fs::write(self.0.join("stop"), b"stop");
+            }
+        }
+
+        fn powershell() -> PathBuf {
+            PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"))
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe")
+        }
+
+        #[tokio::test]
+        async fn native_taskkill_stops_root_and_descendant_sentinel_writer() {
+            let fixture = WriterFixture(
+                std::env::temp_dir().join(format!("harmony-taskkill-{}", uuid::Uuid::new_v4())),
+            );
+            std::fs::create_dir_all(&fixture.0).unwrap();
+            std::fs::write(
+                fixture.0.join("writer.ps1"),
+                r#"$ErrorActionPreference = 'Stop'
+$root = $env:HARMONY_NATIVE_TREE_TEST_ROOT
+$stop = Join-Path $root 'stop'
+$sentinel = Join-Path $root 'sentinel.txt'
+while (-not (Test-Path -LiteralPath $stop)) {
+    [System.IO.File]::AppendAllText($sentinel, "tick`n")
+    Start-Sleep -Milliseconds 20
+}
+"#,
+            )
+            .unwrap();
+            std::fs::write(
+                fixture.0.join("root.ps1"),
+                r#"$ErrorActionPreference = 'Stop'
+$root = $env:HARMONY_NATIVE_TREE_TEST_ROOT
+$start = New-Object System.Diagnostics.ProcessStartInfo
+$start.FileName = Join-Path $PSHOME 'powershell.exe'
+$start.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $root 'writer.ps1') + '"'
+$start.UseShellExecute = $false
+$start.CreateNoWindow = $true
+$writer = [System.Diagnostics.Process]::Start($start)
+try {
+    while (-not $writer.HasExited -and -not (Test-Path -LiteralPath (Join-Path $root 'stop'))) {
+        Start-Sleep -Milliseconds 20
+    }
+} finally {
+    if (-not $writer.HasExited) {
+        $writer.Kill()
+        $writer.WaitForExit()
+    }
+    $writer.Dispose()
+}
+"#,
+            )
+            .unwrap();
+            let mut root = tokio_command(powershell())
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(fixture.0.join("root.ps1"))
+                .env("HARMONY_NATIVE_TREE_TEST_ROOT", &fixture.0)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn disposable PowerShell root without a window");
+            let pid = root.id().unwrap();
+            let sentinel = fixture.0.join("sentinel.txt");
+            tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    assert!(
+                        root.try_wait().unwrap().is_none(),
+                        "fixture root exited before termination"
+                    );
+                    if std::fs::metadata(&sentinel).is_ok_and(|metadata| metadata.len() >= 15) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("descendant must demonstrably write before native taskkill");
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                terminate_process_tree(&mut root, pid),
+            )
+            .await
+            .expect("native taskkill deadline")
+            .expect("native taskkill must terminate the owned process tree");
+            assert!(root.try_wait().unwrap().is_some(), "root must be reaped");
+            let after = std::fs::read(&sentinel).unwrap();
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            assert_eq!(
+                std::fs::read(&sentinel).unwrap(),
+                after,
+                "descendant continued writing after successful taskkill /T /F"
+            );
+            std::fs::remove_dir_all(&fixture.0).unwrap();
+        }
+
+        #[tokio::test]
+        async fn native_taskkill_already_exited_root_fails_closed() {
+            let mut root = tokio_command(powershell())
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "exit 0",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn disposable exiting PowerShell root");
+            let pid = root.id().unwrap();
+            assert!(tokio::time::timeout(Duration::from_secs(10), root.wait())
+                .await
+                .expect("root exit deadline")
+                .unwrap()
+                .success());
+            let error = tokio::time::timeout(
+                Duration::from_secs(2),
+                terminate_process_tree(&mut root, pid),
+            )
+            .await
+            .expect("already-exited rejection must not wait for taskkill")
+            .expect_err("an exited root cannot certify orphaned writer termination");
+            assert!(error.to_string().contains("orphaned Codex writers"));
+        }
     }
 }

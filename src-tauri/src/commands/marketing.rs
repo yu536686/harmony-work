@@ -15,11 +15,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use tauri::State;
 use tokio::sync::Mutex;
 
 static MARKETING_COOKIE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SESSION_LOGGED_OUT: AtomicBool = AtomicBool::new(false);
 
 fn cookie_store() -> &'static Mutex<Option<String>> {
     MARKETING_COOKIE.get_or_init(|| Mutex::new(None))
@@ -29,8 +32,7 @@ fn marketing_cookie_path() -> PathBuf {
     crate::app::logging::default_app_data_dir().join("marketing.session.cookie")
 }
 
-async fn load_persisted_cookie() -> Option<String> {
-    let path = marketing_cookie_path();
+async fn load_persisted_cookie(path: &Path) -> Option<String> {
     let value = tokio::fs::read_to_string(path).await.ok()?;
     let value = value.trim().to_string();
     if value.is_empty() {
@@ -39,13 +41,13 @@ async fn load_persisted_cookie() -> Option<String> {
 
     // Older releases stored this session value in plaintext. Prefer the local
     // SecretStore value, but keep that legacy format readable for one upgrade.
-    let app_dir = crate::app::logging::default_app_data_dir();
-    if let Ok(store) = SecretStore::new(&app_dir) {
+    if let Ok(store) = SecretStore::new(path.parent()?) {
         if let Ok(decrypted) = store.decrypt_hex(&value) {
             return Some(decrypted);
         }
     }
-    Some(value)
+    // A legacy plaintext cookie contains a name=value pair; corrupted ciphertext is not a cookie.
+    value.contains('=').then_some(value)
 }
 
 async fn persist_cookie(cookie: &str) {
@@ -54,10 +56,14 @@ async fn persist_cookie(cookie: &str) {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     let app_dir = crate::app::logging::default_app_data_dir();
-    let value = SecretStore::new(&app_dir)
-        .and_then(|store| store.encrypt_hex(cookie))
-        .unwrap_or_else(|_| cookie.to_string());
-    let _ = tokio::fs::write(path, value).await;
+    match SecretStore::new(&app_dir).and_then(|store| store.encrypt_hex(cookie)) {
+        Ok(value) => {
+            if let Err(error) = tokio::fs::write(path, value).await {
+                tracing::warn!("Unable to persist marketing session: {}", error);
+            }
+        }
+        Err(error) => tracing::warn!("Unable to encrypt marketing session: {}", error),
+    }
 }
 
 async fn clear_persisted_cookie() {
@@ -77,16 +83,22 @@ pub(crate) fn marketing_client() -> Result<reqwest::Client, String> {
 }
 
 pub(crate) async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    let cookie = cookie_store().lock().await.clone();
-    let cookie = if cookie.is_some() {
-        cookie
-    } else {
-        let persisted = load_persisted_cookie().await;
-        if persisted.is_some() {
-            *cookie_store().lock().await = persisted.clone();
-        }
-        persisted
-    };
+    let (_, cookie) = cookie_snapshot().await;
+    with_cookie(req, &cookie)
+}
+
+async fn cookie_snapshot() -> (u64, Option<String>) {
+    let mut cookie = cookie_store().lock().await;
+    if SESSION_LOGGED_OUT.load(Ordering::SeqCst) {
+        return (SESSION_GENERATION.load(Ordering::SeqCst), None);
+    }
+    if cookie.is_none() {
+        *cookie = load_persisted_cookie(&marketing_cookie_path()).await;
+    }
+    (SESSION_GENERATION.load(Ordering::SeqCst), cookie.clone())
+}
+
+fn with_cookie(req: reqwest::RequestBuilder, cookie: &Option<String>) -> reqwest::RequestBuilder {
     if let Some(cookie) = cookie {
         req.header(COOKIE, cookie)
     } else {
@@ -94,7 +106,14 @@ pub(crate) async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::Reque
     }
 }
 
-async fn store_response_cookie(resp: &reqwest::Response) {
+fn ensure_current_session(generation: u64) -> Result<(), String> {
+    if generation != SESSION_GENERATION.load(Ordering::SeqCst) {
+        return Err("账户会话已变更，请重试。".into());
+    }
+    Ok(())
+}
+
+async fn store_response_cookie(resp: &reqwest::Response, generation: u64) -> Result<(), String> {
     let cookies = resp
         .headers()
         .get_all(SET_COOKIE)
@@ -105,11 +124,14 @@ async fn store_response_cookie(resp: &reqwest::Response) {
         .map(str::trim)
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if !cookies.is_empty() {
+    let mut stored = cookie_store().lock().await;
+    ensure_current_session(generation)?;
+    if !cookies.is_empty() && !SESSION_LOGGED_OUT.load(Ordering::SeqCst) {
         let cookie = cookies.join("; ");
-        *cookie_store().lock().await = Some(cookie.clone());
+        *stored = Some(cookie.clone());
         persist_cookie(&cookie).await;
     }
+    Ok(())
 }
 
 async fn json_or_error(resp: reqwest::Response, label: &str) -> Result<Value, String> {
@@ -283,6 +305,11 @@ struct DownloadedMarketingAsset {
 
 #[tauri::command]
 pub async fn marketing_login(request: MarketingLoginRequest) -> Result<Value, String> {
+    let generation = {
+        let _cookie = cookie_store().lock().await;
+        SESSION_LOGGED_OUT.store(false, Ordering::SeqCst);
+        SESSION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+    };
     let client = marketing_client()?;
     let resp = client
         .post(format!("{}/api/auth/login", marketing_base_url()))
@@ -290,32 +317,85 @@ pub async fn marketing_login(request: MarketingLoginRequest) -> Result<Value, St
         .send()
         .await
         .map_err(|e| format!("Marketing login request failed: {e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     json_or_error(resp, "Marketing login").await
 }
 
 #[tauri::command]
 pub async fn marketing_logout() -> Result<Value, String> {
-    let client = marketing_client()?;
-    let req = apply_cookie(client.post(format!("{}/api/auth/logout", marketing_base_url()))).await;
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Marketing logout request failed: {e}"))?;
-    *cookie_store().lock().await = None;
-    clear_persisted_cookie().await;
-    json_or_error(resp, "Marketing logout").await
+    logout_with(
+        cookie_store(),
+        &marketing_cookie_path(),
+        |cookie| async move {
+            let client = marketing_client()?;
+            let mut req = client.post(format!("{}/api/auth/logout", marketing_base_url()));
+            if let Some(cookie) = cookie {
+                req = req.header(COOKIE, cookie);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| format!("Marketing logout request failed: {e}"))?;
+            json_or_error(resp, "Marketing logout").await
+        },
+    )
+    .await
+}
+
+async fn logout_with<F, R>(
+    store: &Mutex<Option<String>>,
+    path: &Path,
+    remote: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(Option<String>) -> R,
+    R: std::future::Future<Output = Result<Value, String>>,
+{
+    let mut stored = store.lock().await;
+    let cookie = if stored.is_some() {
+        stored.take()
+    } else if !SESSION_LOGGED_OUT.load(Ordering::SeqCst) {
+        load_persisted_cookie(path).await
+    } else {
+        None
+    };
+    SESSION_GENERATION.fetch_add(1, Ordering::SeqCst);
+    SESSION_LOGGED_OUT.store(true, Ordering::SeqCst);
+    // Clear memory and disk before constructing a client or performing any network work.
+    let removed = tokio::fs::remove_file(path).await;
+    if let Err(error) = removed {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tokio::fs::write(path, "")
+                .await
+                .map_err(|error| format!("无法清除本地登录凭据：{error}"))?;
+        }
+    }
+    drop(stored);
+    match remote(cookie).await {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            tracing::warn!(
+                "Remote logout unavailable; local session cleared: {}",
+                error
+            );
+            Ok(json!({"ok":true, "localSessionCleared":true, "remoteLogout":false}))
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn marketing_me() -> Result<Value, String> {
     let client = marketing_client()?;
-    let req = apply_cookie(client.get(format!("{}/api/auth/me", marketing_base_url()))).await;
+    let (generation, cookie) = cookie_snapshot().await;
+    let req = with_cookie(
+        client.get(format!("{}/api/auth/me", marketing_base_url())),
+        &cookie,
+    );
     let resp = req
         .send()
         .await
         .map_err(|e| format!("Marketing me request failed: {e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     json_or_error(resp, "Marketing me").await
 }
 
@@ -374,7 +454,8 @@ pub async fn marketing_assets(query: MarketingAssetQuery) -> Result<Value, Strin
             let preview_url = transfer
                 .as_ref()
                 .and_then(|ticket| {
-                    asset.get("id")
+                    asset
+                        .get("id")
                         .and_then(Value::as_str)
                         .and_then(|id| direct_asset_url(ticket, id).ok())
                 })
@@ -440,17 +521,22 @@ fn build_account_overview(
         user,
         balance: balance.as_ref().and_then(normalize_account_balance),
         usage: usage.as_ref().and_then(normalize_account_usage),
-        gateway_api_key: credentials
-            .as_ref()
-            .and_then(normalize_account_gateway_key),
+        gateway_api_key: credentials.as_ref().and_then(normalize_account_gateway_key),
     }
 }
 
-async fn fetch_marketing_json_optional(path: &str) -> Option<Value> {
+async fn fetch_marketing_json_optional(
+    path: &str,
+    cookie: &Option<String>,
+    generation: u64,
+) -> Option<Value> {
     let client = marketing_client().ok()?;
-    let req = apply_cookie(client.get(format!("{}{}", marketing_base_url(), path))).await;
+    let req = with_cookie(
+        client.get(format!("{}{}", marketing_base_url(), path)),
+        cookie,
+    );
     let resp = req.send().await.ok()?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -463,17 +549,25 @@ async fn fetch_marketing_json_optional(path: &str) -> Option<Value> {
 #[tauri::command]
 pub async fn marketing_account_overview() -> Result<MarketingAccountOverview, String> {
     let client = marketing_client()?;
-    let req = apply_cookie(client.get(format!("{}/api/auth/me", marketing_base_url()))).await;
+    let (generation, cookie) = cookie_snapshot().await;
+    let req = with_cookie(
+        client.get(format!("{}/api/auth/me", marketing_base_url())),
+        &cookie,
+    );
     let resp = req
         .send()
         .await
         .map_err(|e| format!("账户信息请求失败：{e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        let mut stored = cookie_store().lock().await;
+        ensure_current_session(generation)?;
+        SESSION_GENERATION.fetch_add(1, Ordering::SeqCst);
+        SESSION_LOGGED_OUT.store(true, Ordering::SeqCst);
         clear_persisted_cookie().await;
-        *cookie_store().lock().await = None;
+        *stored = None;
         return Err(format!("登录已过期（HTTP {status}），请重新登录"));
     }
     if !status.is_success() {
@@ -484,35 +578,38 @@ pub async fn marketing_account_overview() -> Result<MarketingAccountOverview, St
     let user = me_value.get("user").cloned().unwrap_or(Value::Null);
 
     let (balance, usage, credentials) = tokio::join!(
-        fetch_marketing_json_optional("/api/gateway/balance"),
-        fetch_marketing_json_optional("/api/gateway/usage"),
-        fetch_marketing_json_optional("/api/gateway/credentials"),
+        fetch_marketing_json_optional("/api/gateway/balance", &cookie, generation),
+        fetch_marketing_json_optional("/api/gateway/usage", &cookie, generation),
+        fetch_marketing_json_optional("/api/gateway/credentials", &cookie, generation),
     );
 
+    ensure_current_session(generation)?;
     Ok(build_account_overview(user, balance, usage, credentials))
 }
 
 async fn marketing_get_json(path: &str, params: Vec<(String, String)>) -> Result<Value, String> {
     let client = marketing_client()?;
     let url = format!("{}{}", marketing_base_url(), path);
-    let req = apply_cookie(client.get(url).query(&params)).await;
+    let (generation, cookie) = cookie_snapshot().await;
+    let req = with_cookie(client.get(url).query(&params), &cookie);
     let resp = req
         .send()
         .await
         .map_err(|e| format!("Marketing request failed: {e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     json_or_error(resp, "Marketing API").await
 }
 
 async fn marketing_post_json(path: &str, body: Value) -> Result<Value, String> {
     let client = marketing_client()?;
     let url = format!("{}{}", marketing_base_url(), path);
-    let req = apply_cookie(client.post(url).json(&body)).await;
+    let (generation, cookie) = cookie_snapshot().await;
+    let req = with_cookie(client.post(url).json(&body), &cookie);
     let resp = req
         .send()
         .await
         .map_err(|e| format!("Marketing request failed: {e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     json_or_error(resp, "Marketing API").await
 }
 
@@ -699,22 +796,20 @@ pub async fn marketing_creative_upload_reference(
     let form = Form::new().part("referenceImage", part);
     let client = marketing_client()?;
     let url = format!("{}/api/creative/reference-images", marketing_base_url());
-    let req = apply_cookie(client.post(url).multipart(form)).await;
+    let (generation, cookie) = cookie_snapshot().await;
+    let req = with_cookie(client.post(url).multipart(form), &cookie);
     let resp = req
         .send()
         .await
         .map_err(|e| format!("Reference image upload failed: {e}"))?;
-    store_response_cookie(&resp).await;
+    store_response_cookie(&resp, generation).await?;
     json_or_error(resp, "Reference image upload").await
 }
 
 async fn marketing_transfer_ticket() -> Result<Value, String> {
     let client = marketing_client()?;
-    let request = apply_cookie(client.get(format!(
-        "{}/api/assets/transfer",
-        marketing_base_url()
-    )))
-    .await;
+    let request =
+        apply_cookie(client.get(format!("{}/api/assets/transfer", marketing_base_url()))).await;
     let response = request
         .send()
         .await
@@ -731,9 +826,7 @@ fn direct_transfer_url(ticket: &Value, path: &str, scope: &str) -> Result<reqwes
         .ok_or_else(|| format!("Marketing {scope} is missing"))?;
     let mut url = reqwest::Url::parse(origin)
         .map_err(|e| format!("Invalid Marketing transfer origin: {e}"))?;
-    if url.scheme() != "https"
-        && !(cfg!(debug_assertions) && url.host_str() == Some("127.0.0.1"))
-    {
+    if url.scheme() != "https" && !(cfg!(debug_assertions) && url.host_str() == Some("127.0.0.1")) {
         return Err("Marketing transfer origin must use HTTPS".to_string());
     }
     url.set_path(path);
@@ -751,7 +844,10 @@ fn direct_asset_url(ticket: &Value, asset_id: &str) -> Result<reqwest::Url, Stri
 }
 
 #[tauri::command]
-pub async fn marketing_upload_assets(file_paths: Vec<String>, folder: Option<String>) -> Result<Value, String> {
+pub async fn marketing_upload_assets(
+    file_paths: Vec<String>,
+    folder: Option<String>,
+) -> Result<Value, String> {
     if file_paths.is_empty() || file_paths.len() > 8 {
         return Err("请选择 1 到 8 个文件上传".to_string());
     }
@@ -766,7 +862,9 @@ pub async fn marketing_upload_assets(file_paths: Vec<String>, folder: Option<Str
         if !metadata.is_file() || metadata.len() > 25 * 1024 * 1024 {
             return Err(format!("文件必须小于 25 MB：{}", file.display()));
         }
-        let name = file.file_name().and_then(|name| name.to_str())
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
             .ok_or("上传文件名无效")?;
         let bytes = tokio::fs::read(file)
             .await
@@ -778,7 +876,11 @@ pub async fn marketing_upload_assets(file_paths: Vec<String>, folder: Option<Str
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client.post(url).multipart(form).send().await
+    let response = client
+        .post(url)
+        .multipart(form)
+        .send()
+        .await
         .map_err(|e| format!("素材上传失败：{e}"))?;
     json_or_error(response, "Marketing asset upload").await
 }
@@ -986,10 +1088,61 @@ pub async fn marketing_creative_save_to_workspace(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_account_overview, direct_asset_url, direct_transfer_url, normalize_account_balance, normalize_account_gateway_key,
-        normalize_account_usage, omit_null_object_fields, save_target_path,
+        build_account_overview, direct_asset_url, direct_transfer_url, normalize_account_balance,
+        normalize_account_gateway_key, normalize_account_usage, omit_null_object_fields,
+        save_target_path,
     };
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn account_settings_old_response_cookie_is_rejected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 2048];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nSet-Cookie: session=old-account\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        });
+        let old = super::SESSION_GENERATION
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .wrapping_sub(1);
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(super::store_response_cookie(&response, old).await.is_err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn account_settings_offline_logout_clears_local_session_first() {
+        let dir = std::env::temp_dir().join(format!("harmony-logout-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("session.cookie");
+        tokio::fs::write(&path, "persisted-session").await.unwrap();
+        let store = tokio::sync::Mutex::new(Some("session-A".to_string()));
+        let result = super::logout_with(&store, &path, |cookie| {
+            let store = &store;
+            let path = &path;
+            async move {
+                assert_eq!(cookie.as_deref(), Some("session-A"));
+                assert!(
+                    store.lock().await.is_none(),
+                    "local memory must clear before network"
+                );
+                assert!(!path.exists(), "persisted cookie must clear before network");
+                Err("offline".into())
+            }
+        })
+        .await;
+        assert!(result.is_ok(), "offline logout must still complete locally");
+        assert!(store.lock().await.is_none());
+        assert!(!path.exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
 
     #[test]
     fn direct_asset_url_keeps_the_scope_and_escapes_the_asset_id() {
@@ -1000,9 +1153,23 @@ mod tests {
         });
         let url = direct_asset_url(&ticket, "a/b").unwrap();
         assert_eq!(url.path(), "/api/assets/direct/a%2Fb/file");
-        assert_eq!(url.query_pairs().find(|(key, _)| key == "ticket").unwrap().1, "read-only");
-        let upload = direct_transfer_url(&ticket, "/api/assets/direct/upload", "uploadTicket").unwrap();
-        assert_eq!(upload.query_pairs().find(|(key, _)| key == "ticket").unwrap().1, "upload-only");
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "ticket")
+                .unwrap()
+                .1,
+            "read-only"
+        );
+        let upload =
+            direct_transfer_url(&ticket, "/api/assets/direct/upload", "uploadTicket").unwrap();
+        assert_eq!(
+            upload
+                .query_pairs()
+                .find(|(key, _)| key == "ticket")
+                .unwrap()
+                .1,
+            "upload-only"
+        );
     }
 
     #[test]
@@ -1109,11 +1276,17 @@ mod tests {
         assert_eq!(overview.balance, Some(8.0));
         assert_eq!(overview.usage, None);
         assert_eq!(overview.gateway_api_key.as_deref(), Some("sk-123"));
-        assert_eq!(overview.user.get("name").and_then(Value::as_str), Some("张三"));
+        assert_eq!(
+            overview.user.get("name").and_then(Value::as_str),
+            Some("张三")
+        );
 
         // 序列化后的账户概览可被前端直接读取，且 key 只存在于内存返回值中。
         let serialized = serde_json::to_value(&overview).unwrap();
-        assert_eq!(serialized.get("gatewayApiKey").and_then(Value::as_str), Some("sk-123"));
+        assert_eq!(
+            serialized.get("gatewayApiKey").and_then(Value::as_str),
+            Some("sk-123")
+        );
         assert_eq!(serialized.get("usage"), Some(&Value::Null));
     }
 }

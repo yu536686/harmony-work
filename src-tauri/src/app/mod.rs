@@ -8,6 +8,7 @@
 //!   loops, and the `invoke_handler!` command registration
 
 pub mod bootstrap;
+mod external_open;
 pub mod headless;
 pub mod logging;
 pub mod markers;

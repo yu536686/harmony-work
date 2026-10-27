@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -15,11 +15,15 @@ import {
   Square as WindowSquare,
   X,
   Smartphone,
+  Search,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
+import { classifyMainChatSession } from "./utils/session";
+import type { TaskCenterTarget, SessionActivity } from "./tasks/taskCenter";
+import type { CommandPaletteTarget } from "./services/tauri/globalSearch";
 import { applyFontScale, getFontScale } from "./utils/fontScale";
 import { PRODUCT_BRAND } from "./branding";
 import i18n, { setLanguage } from "./i18n";
@@ -45,6 +49,7 @@ import { useMacNativeMenu } from "./components/ui/useMacNativeMenu";
 import "./theme.css";
 import "./App.css";
 import "./macos.css";
+import "./windows.css";
 
 const Memory = lazy(() => import("./components/Memory"));
 const SchoolPage = lazy(() => import("./components/School"));
@@ -54,6 +59,9 @@ const Marketing = lazy(() => import("./components/Marketing"));
 const Creative = lazy(() => import("./components/Creative"));
 const HarmonyCut = lazy(() => import("./components/HarmonyCut"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
+const TaskCenter = lazy(() => import("./components/TaskCenter"));
+const WorkflowTemplates = lazy(() => import("./components/WorkflowTemplates"));
+const CommandPalette = lazy(() => import("./components/CommandPalette"));
 const Settings = lazy(() => import("./components/Settings"));
 const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
@@ -69,6 +77,7 @@ const IS_WINDOWS = navigator.userAgent.includes("Windows");
 const IS_MACOS = navigator.userAgent.includes("Macintosh");
 const HAS_MOBILE_BRIDGE = IS_WINDOWS || IS_MACOS;
 if (IS_MACOS) document.documentElement.dataset.platform = "macos";
+if (IS_WINDOWS) document.documentElement.dataset.platform = "windows";
 if (IS_MACOS && isTauri()) document.documentElement.dataset.nativeShell = "true";
 const BOOTSTRAP_STORAGE_KEY = "workbuddy.bootstrapCompleted";
 const ONBOARDING_STORAGE_KEY = "harmony-work.onboardingCompleted";
@@ -116,6 +125,24 @@ function AppContent() {
   const pendingMainChatNav = useSelector((s: RootState) => s.sessions.pendingMainChatNav);
   const activeSessionId = useSelector((s: RootState) => s.sessions.activeSessionId);
   const sessionOutcomes = useSelector((s: RootState) => s.chat.sessionOutcomes);
+  const runningSessions = useSelector((s: RootState) => s.chat.isRunning);
+  const sessionActivity = useMemo<SessionActivity>(() => Object.fromEntries(
+    [...new Set([...Object.keys(runningSessions), ...Object.keys(sessionOutcomes)])]
+      .map(id => [id, { running: runningSessions[id], outcome: sessionOutcomes[id] }]),
+  ), [runningSessions, sessionOutcomes]);
+  const [creativeFocus, setCreativeFocus] = useState<{ id: string; result: boolean } | null>(null);
+  const [schedulerFocus, setSchedulerFocus] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  useEffect(() => {
+    if (showOnboarding || IS_OVERLAY) return;
+    const shortcut = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented && !event.isComposing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault(); setSearchOpen(value => !value);
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [showOnboarding]);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
@@ -556,6 +583,45 @@ function AppContent() {
     setActiveTab(route);
   };
 
+  const navigateTask = (target: TaskCenterTarget) => {
+    if (target.type === "session") {
+      if (target.session) dispatch(sessionsActions.upsertSession(target.session));
+      dispatch(sessionsActions.openMainChatView({ filter: classifyMainChatSession({ source: target.source }), sessionId: target.sessionId, focusArtifacts: target.view === "artifacts", artifactId: target.artifactId }));
+      setActiveTab("chat");
+    } else if (target.type === "harvis") {
+      if (target.kind !== "image" && target.kind !== "music") return;
+      setCreativeFocus({ id: target.taskId, result: target.view === "result" });
+      setActiveTab(target.kind === "image" ? "creative-image" : "creative-music");
+    } else {
+      setSchedulerFocus(target.taskId);
+      setActiveTab("scheduler");
+    }
+  };
+
+  const useDeliveryTemplate = async (draft: string) => {
+      const session = await sessionsApi.create("新流程");
+      dispatch(sessionsActions.addSession(session));
+      dispatch(sessionsActions.openMainChatView({ filter: "chat", sessionId: session.id, composerDraft: draft, autoSend: false }));
+      setActiveTab("chat");
+  };
+
+  const navigateSearch = async (target: CommandPaletteTarget) => {
+    if (target.type === "settings") {
+      setSettingsSection(target.settingsSection); setActiveTab("settings"); return;
+    }
+    let session = target.session;
+    if (!session && target.type === "workspace") {
+      session = await sessionsApi.create("新对话");
+      await sessionsApi.setWorkspace(session.id, target.workspaceRoot);
+      session = { ...session, workspace_root: target.workspaceRoot };
+    }
+    if (!session) throw new Error("未找到此项目的会话");
+    dispatch(sessionsActions.upsertSession(session));
+    dispatch(sessionsActions.openMainChatView({ filter: classifyMainChatSession(session), sessionId: session.id,
+      focusArtifacts: target.type === "session" && Boolean(target.artifactId), artifactId: target.type === "session" ? target.artifactId : undefined }));
+    setActiveTab("chat");
+  };
+
   const openHarmonyCut = (opts?: { projectId?: string | null; sessionId?: string | null }) => {
     setHarmonyCutProjectId(opts?.projectId ?? null);
     setHarmonyCutSessionId(opts?.sessionId ?? null);
@@ -643,9 +709,13 @@ function AppContent() {
     </div>
   );
   const handleMarketingLogout = async () => {
-    await marketingApi.logout().catch(() => {});
+    const logout = marketingApi.logout();
     setMarketingUser(null);
     setUserMenuOpen(false);
+    setAccountSyncPrompt(null);
+    setAccountSyncError("");
+    forgetRememberedMarketingUser();
+    await logout.catch(() => {});
   };
   const handleAccountSettingsSync = async (action: "restore" | "backup") => {
     if (!accountSyncPrompt) return;
@@ -695,6 +765,7 @@ function AppContent() {
           </button>
         </div>
         <div className="sidebar-body">
+        <button type="button" className="sidebar-search" title="搜索与命令" aria-label="搜索与命令" onClick={() => setSearchOpen(true)}><Search size={16} /><span>搜索</span></button>
         <nav className="sidebar-nav" aria-label="功能模块">
           <div className="sidebar-section-label">工作</div>
           {WORKSPACE_NAVIGATION.work.map(renderNavigationItem)}
@@ -808,12 +879,12 @@ function AppContent() {
           )}
           {mountedTabs.has("creative-music") && (
             <div className="tab-panel" hidden={activeTab !== "creative-music"}>
-              {highLevelUnlocked ? <Creative initialKind="music" user={marketingUser} /> : requireLoginPanel("Harvis 音乐创作")}
+              {highLevelUnlocked ? <Creative initialKind="music" user={marketingUser} focusedTaskId={creativeFocus?.id} focusResult={creativeFocus?.result} /> : requireLoginPanel("Harvis 音乐创作")}
             </div>
           )}
           {mountedTabs.has("creative-image") && (
             <div className="tab-panel" hidden={activeTab !== "creative-image"}>
-              {highLevelUnlocked ? <Creative initialKind="image" user={marketingUser} /> : requireLoginPanel("Harvis 图片创作")}
+              {highLevelUnlocked ? <Creative initialKind="image" user={marketingUser} focusedTaskId={creativeFocus?.id} focusResult={creativeFocus?.result} /> : requireLoginPanel("Harvis 图片创作")}
             </div>
           )}
           {mountedTabs.has("memory") && (
@@ -843,8 +914,10 @@ function AppContent() {
             </div>
           )}
           {mountedTabs.has("scheduler") && (
-            <div className="tab-panel" hidden={activeTab !== "scheduler"}>{highLevelUnlocked ? <Scheduler /> : requireLoginPanel(t("nav.scheduler"))}</div>
+            <div className="tab-panel" hidden={activeTab !== "scheduler"}>{highLevelUnlocked ? <Scheduler focusedTaskId={schedulerFocus} /> : requireLoginPanel(t("nav.scheduler"))}</div>
           )}
+          {mountedTabs.has("task-center") && <div className="tab-panel" hidden={activeTab !== "task-center"}><TaskCenter key={marketingUser?.id ?? "local"} sessionActivity={sessionActivity} onNavigate={navigateTask} /></div>}
+          {mountedTabs.has("workflows") && <div className="tab-panel" hidden={activeTab !== "workflows"}><WorkflowTemplates onUse={useDeliveryTemplate} /></div>}
           {mountedTabs.has("settings") && (
             <div className="tab-panel" hidden={activeTab !== "settings"} data-settings-section={settingsSection}>
               <Settings
@@ -860,6 +933,7 @@ function AppContent() {
           )}
         </Suspense>
       </main>
+      {searchOpen && <Suspense fallback={null}><CommandPalette key={marketingUser?.id ?? "local"} open onClose={() => setSearchOpen(false)} onNavigate={navigateSearch} /></Suspense>}
       <Toaster />
       {accountSyncPrompt && IS_MACOS && isTauri() && (
         <ConfirmDialog

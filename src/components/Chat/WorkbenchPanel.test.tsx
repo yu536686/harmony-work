@@ -73,6 +73,20 @@ describe("WorkbenchPanel", () => {
     });
   });
 
+  it("opens persisted file changes and actual usage from dedicated tabs", async () => {
+    vi.mocked(invoke).mockImplementation(async command => {
+      if (command === "journal_review") return { turnKey: null, status: "empty", captureError: null, captureActive: false, turns: [], changes: [], warnings: [] };
+      if (command === "usage_get") return { workspace_root: "E:/workspace", session_input_tokens: 12, session_output_tokens: 8, project_tokens: 20, session_count: 1, budget: { session_tokens: 0, project_tokens: 0 } };
+      return {};
+    });
+    render(<WorkbenchPanel open sessionId="session-1" workspaceRoot="E:/workspace" artifacts={[]} execution={execution} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole("tab", { name: "文件变更" }));
+    expect(await screen.findByText("暂无已捕获的轮次")).toBeVisible();
+    expect(invoke).toHaveBeenCalledWith("journal_review", { sessionId: "session-1", workspaceRoot: "E:/workspace", turnKey: null });
+    await userEvent.click(screen.getByRole("tab", { name: "用量" }));
+    expect(await screen.findByText("12 Token")).toBeVisible();
+  });
+
   it("默认展示成果，并可切换到终端记录", async () => {
     render(
       <WorkbenchPanel

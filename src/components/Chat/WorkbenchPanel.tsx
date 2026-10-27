@@ -5,6 +5,8 @@ import {
   ExternalLink,
   FileOutput,
   FileText,
+  FileDiff,
+  Gauge,
   Globe2,
   ListChecks,
   MessageSquarePlus,
@@ -14,11 +16,13 @@ import {
 import type { SessionArtifact } from "../../services/tauri";
 import type { ExecutionStep, TurnExecutionModel } from "./execution/types";
 import ArtifactPreview from "./ArtifactPreview";
+import FileReview from "../FileReview";
+import UsageBudget from "../UsageBudget";
 import BrowserAnnotationCanvas from "./BrowserAnnotationCanvas";
 import type { WorkbenchAnnotation } from "./annotation/types";
 import "./ConversationExperience.css";
 
-type WorkbenchTab = "artifacts" | "summary" | "browser" | "terminal";
+type WorkbenchTab = "artifacts" | "summary" | "browser" | "terminal" | "changes" | "usage";
 
 export interface WorkbenchBrowserTarget {
   id?: string;
@@ -30,6 +34,8 @@ interface WorkbenchPanelProps {
   open: boolean;
   width?: number;
   sessionId: string;
+  workspaceRoot?: string;
+  focusedArtifactId?: string | null;
   artifacts: SessionArtifact[];
   execution: TurnExecutionModel | null;
   annotations?: WorkbenchAnnotation[];
@@ -41,11 +47,13 @@ interface WorkbenchPanelProps {
   onClose: () => void;
 }
 
-const tabs: Array<{ id: WorkbenchTab; labelKey: string; icon: typeof FileOutput }> = [
+const tabs: Array<{ id: WorkbenchTab; labelKey?: string; label?: string; icon: typeof FileOutput }> = [
   { id: "artifacts", labelKey: "chat.workbenchArtifacts", icon: FileOutput },
   { id: "summary", labelKey: "chat.workbenchSummary", icon: ListChecks },
   { id: "browser", labelKey: "chat.workbenchBrowser", icon: Globe2 },
   { id: "terminal", labelKey: "chat.workbenchTerminal", icon: TerminalSquare },
+  { id: "changes", label: "文件变更", icon: FileDiff },
+  { id: "usage", label: "用量", icon: Gauge },
 ];
 
 function recordValue(input: unknown, key: string): string | null {
@@ -78,6 +86,8 @@ export default function WorkbenchPanel({
   open,
   width,
   sessionId,
+  workspaceRoot = "",
+  focusedArtifactId,
   artifacts,
   execution,
   annotations = [],
@@ -140,6 +150,13 @@ export default function WorkbenchPanel({
   }, [artifacts, focusedArtifactUri]);
 
   useEffect(() => {
+    if (!focusedArtifactId || !artifacts.some(item => item.id === focusedArtifactId)) return;
+    setActiveTab("artifacts");
+    setSelectedArtifactId(focusedArtifactId);
+    setOpenedArtifactIds(opened => opened.includes(focusedArtifactId) ? opened : [...opened, focusedArtifactId]);
+  }, [artifacts, focusedArtifactId]);
+
+  useEffect(() => {
     if (browserTarget?.url) setActiveTab("browser");
   }, [browserTarget?.url]);
 
@@ -185,7 +202,7 @@ export default function WorkbenchPanel({
       </header>
 
       <div className="workbench-tabs" role="tablist" aria-label={t("chat.workbenchViews")}>
-        {tabs.map(({ id, labelKey, icon: Icon }) => (
+        {tabs.map(({ id, labelKey, label, icon: Icon }) => (
           <button
             type="button"
             key={id}
@@ -195,12 +212,14 @@ export default function WorkbenchPanel({
             onClick={() => setActiveTab(id)}
           >
             <Icon size={14} />
-            <span>{t(labelKey)}</span>
+            <span>{label ?? t(labelKey!)}</span>
           </button>
         ))}
       </div>
 
       <div className="workbench-content">
+        {activeTab === "changes" && <FileReview key={sessionId} sessionId={sessionId} workspaceRoot={workspaceRoot} refreshKey={running ? "running" : "idle"} />}
+        {activeTab === "usage" && <UsageBudget key={sessionId} sessionId={sessionId} />}
         {activeTab === "artifacts" && (
           artifacts.length > 0 ? (
             <>

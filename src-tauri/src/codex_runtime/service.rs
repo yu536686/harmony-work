@@ -27,15 +27,53 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
 use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 
+#[path = "turn_capture.rs"]
+pub(crate) mod turn_capture;
+use turn_capture::RuntimeTurnCapture;
+
+#[derive(Debug, Clone)]
+struct PendingTurnCapture {
+    _update_permit: crate::updater::WorkPermit,
+    capture: RuntimeTurnCapture,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    terminal_ids: HashSet<String>,
+    writers_may_run: bool,
+    process_id: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 struct ActiveCodexTurn {
     _update_permit: crate::updater::WorkPermit,
-    thread_id: String,
-    turn_id: String,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    cancellation: Arc<AtomicBool>,
+    capture_key: Option<String>,
+    process_id: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct TurnRoute {
+    process_id: u64,
+    generation: Arc<AtomicBool>,
+}
+
+impl TurnRoute {
+    fn matches(&self, other: &Self) -> bool {
+        self.process_id == other.process_id && Arc::ptr_eq(&self.generation, &other.generation)
+    }
+}
+
+struct TurnSubscriber {
+    route: TurnRoute,
+    turn_id: Option<String>,
+    sender: mpsc::UnboundedSender<WorkBuddyEvent>,
+    buffered: Vec<(Option<String>, Vec<WorkBuddyEvent>)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,6 +93,8 @@ enum PendingApprovalKind {
 struct PendingApproval {
     rpc_id: Value,
     kind: PendingApprovalKind,
+    thread_id: String,
+    route: TurnRoute,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,7 +466,10 @@ fn artifact_referenced_in_turn(
     evidence.push_str(&serde_json::to_string(&transcript.tool_results).unwrap_or_default());
     let evidence = evidence.replace('\\', "/").to_lowercase();
     let path = candidate.uri.replace('\\', "/").to_lowercase();
-    let root = workspace_root.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let root = workspace_root
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase();
     let relative = path.strip_prefix(&(root + "/")).unwrap_or(&path);
     evidence.contains(&path) || evidence.contains(relative)
 }
@@ -450,9 +493,7 @@ fn normalize_artifact_uri_for_platform(uri: &str, platform: DesktopPlatform) -> 
             .strip_prefix("file:///")
             .or_else(|| trimmed.strip_prefix("file://"))
             .unwrap_or(trimmed);
-        let local_path = local_path
-            .strip_prefix("\\\\?\\")
-            .unwrap_or(local_path);
+        let local_path = local_path.strip_prefix("\\\\?\\").unwrap_or(local_path);
         return Path::new(local_path)
             .canonicalize()
             .map(|path| path.to_string_lossy().into_owned())
@@ -484,18 +525,23 @@ pub struct CodexRuntimeState {
     codex_home: PathBuf,
     executable_override: Option<PathBuf>,
     environment: Arc<Mutex<HashMap<String, String>>>,
-    subscribers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkBuddyEvent>>>>,
+    subscribers: Arc<Mutex<HashMap<String, TurnSubscriber>>>,
     pending_approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
-    approval_preferences: Arc<Mutex<HashMap<String, ApprovalPreferences>>>,
+    approval_preferences: Arc<Mutex<HashMap<String, (TurnRoute, ApprovalPreferences)>>>,
     event_adapter: Arc<Mutex<CodexEventAdapter>>,
     active_turns: Arc<Mutex<HashMap<String, ActiveCodexTurn>>>,
     active_execs: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pending_captures: Arc<Mutex<HashMap<String, PendingTurnCapture>>>,
+    usage_database: Arc<Mutex<Option<Arc<Mutex<crate::store::Database>>>>>,
+    usage_owners: Arc<Mutex<HashMap<(u64, String), String>>>,
+    rpc_timeout: Duration,
 }
 
 pub struct CodexTurnExecution {
     pub thread_id: String,
     pub turn_id: String,
     pub events: mpsc::UnboundedReceiver<WorkBuddyEvent>,
+    generation: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -538,8 +584,12 @@ pub enum CodexRuntimeStateError {
     ApprovalNotFound,
     #[error("session already has an active Codex turn")]
     TurnAlreadyActive,
+    #[error("Codex turn was cancelled")]
+    Cancelled,
     #[error("waiting for updater installation")]
     UpdatePending,
+    #[error("Codex startup RPC timed out")]
+    StartupTimeout,
 }
 
 impl CodexRuntimeState {
@@ -605,10 +655,24 @@ impl CodexRuntimeState {
             event_adapter: Arc::new(Mutex::new(CodexEventAdapter::default())),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             active_execs: Arc::new(Mutex::new(HashMap::new())),
+            pending_captures: Arc::new(Mutex::new(HashMap::new())),
+            usage_database: Arc::new(Mutex::new(None)),
+            usage_owners: Arc::new(Mutex::new(HashMap::new())),
+            rpc_timeout: Duration::from_secs(30),
         })
     }
 
     pub async fn configure_credentials(&self, settings: &crate::store::Settings) {
+        if let Err(error) = self.configure_credentials_checked(settings).await {
+            tracing::error!(%error, "Failed to configure Codex Responses providers");
+        }
+    }
+
+    pub(crate) async fn configure_credentials_checked(
+        &self,
+        settings: &crate::store::Settings,
+    ) -> Result<(), CodexRuntimeStateError> {
+        let profiles = configured_responses_profiles(settings);
         let mut next_environment = HashMap::new();
         if !settings.openai_api_key.trim().is_empty() {
             next_environment.insert(
@@ -635,9 +699,31 @@ impl CodexRuntimeState {
                 settings.memory_embedding_model.trim().to_string(),
             );
         }
+        for (profile, api_key) in &profiles {
+            if !api_key.is_empty() {
+                next_environment.insert(profile.env_key.clone(), api_key.clone());
+            }
+        }
         let changed = {
             let mut environment = self.environment.lock().await;
-            if *environment == next_environment {
+            let config_path = self.codex_home.join("config.toml");
+            let existing =
+                fs::read_to_string(&config_path).map_err(CodexRuntimeStateError::PrepareConfig)?;
+            let definitions = profiles
+                .into_iter()
+                .map(|(profile, _)| profile)
+                .collect::<Vec<_>>();
+            let configured = crate::codex_runtime::config::merge_responses_provider_config(
+                &existing,
+                &definitions,
+            )
+            .map_err(CodexRuntimeStateError::PrepareConfig)?;
+            let config_changed = existing != configured;
+            if config_changed {
+                fs::write(&config_path, configured)
+                    .map_err(CodexRuntimeStateError::PrepareConfig)?;
+            }
+            if *environment == next_environment && !config_changed {
                 false
             } else {
                 *environment = next_environment;
@@ -645,10 +731,16 @@ impl CodexRuntimeState {
             }
         };
         if changed {
-            if let Some(process) = self.process.lock().await.take() {
-                let _ = process.shutdown().await;
+            let process = self.process.lock().await.clone();
+            if let Some(process) = process {
+                self.retire_process(
+                    &process,
+                    "Codex configuration changed; running tasks were stopped",
+                )
+                .await?;
             }
         }
+        Ok(())
     }
 
     pub fn sessions(&self) -> Arc<CodexSessionMapStore> {
@@ -660,7 +752,8 @@ impl CodexRuntimeState {
         workbuddy_session_id: &str,
         options: CodexExecOptions,
     ) -> Result<CodexExecResult, CodexRuntimeStateError> {
-        self.execute_headless_observed(workbuddy_session_id, options, None).await
+        self.execute_headless_observed(workbuddy_session_id, options, None)
+            .await
     }
 
     pub async fn execute_headless_observed(
@@ -669,41 +762,138 @@ impl CodexRuntimeState {
         mut options: CodexExecOptions,
         observer: Option<mpsc::Sender<Value>>,
     ) -> Result<CodexExecResult, CodexRuntimeStateError> {
-        let _update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
-        if options.thread_id.is_none() {
-            options.thread_id = self
-                .sessions
-                .get(workbuddy_session_id)?
-                .map(|binding| binding.codex_thread_id);
-        }
-        let executable = resolve_codex_executable(self.executable_override.clone())?;
-        let command = build_exec_command(&executable, &options);
-        let mut environment = self.environment.lock().await.clone();
-        environment.extend(options.extra_environment.clone());
+        let _update_permit =
+            crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
         let cancellation = Arc::new(AtomicBool::new(false));
-        if let Some(previous) = self
-            .active_execs
-            .lock()
-            .await
-            .insert(workbuddy_session_id.to_string(), cancellation.clone())
         {
-            previous.store(true, Ordering::Relaxed);
+            let active_turns = self.active_turns.lock().await;
+            let mut active = self.active_execs.lock().await;
+            if active_turns.contains_key(workbuddy_session_id)
+                || active.contains_key(workbuddy_session_id)
+                || self.pending_captures.lock().await.values().any(|capture| {
+                    capture.capture.session_id == workbuddy_session_id && capture.writers_may_run
+                })
+            {
+                return Err(CodexRuntimeStateError::TurnAlreadyActive);
+            }
+            active.insert(workbuddy_session_id.to_string(), cancellation.clone());
         }
-        let result =
-            run_codex_exec_observed(command, &self.codex_home, &environment, Some(cancellation), observer).await;
+        let capture = RuntimeTurnCapture::begin(
+            &options.workspace_root.display().to_string(),
+            workbuddy_session_id,
+        )
+        .await;
+        let invocation = uuid::Uuid::new_v4().to_string();
+        let result = async {
+            if options.thread_id.is_none() {
+                options.thread_id = self
+                    .sessions
+                    .get(workbuddy_session_id)?
+                    .map(|binding| binding.codex_thread_id);
+            }
+            if let (Some(thread), Some(database)) = (
+                options.thread_id.as_deref(),
+                self.usage_database.lock().await.clone(),
+            ) {
+                let db = database.lock().await;
+                if db
+                    .get_session(workbuddy_session_id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    // Freeze the resumed-thread baseline before exec, not when its result arrives.
+                    if let Err(error) = super::background::record_headless_usage(
+                        &db,
+                        workbuddy_session_id,
+                        thread,
+                        &invocation,
+                        &Default::default(),
+                    ) {
+                        tracing::error!(%error, "Failed to reserve headless usage watermark");
+                    }
+                }
+            }
+            let executable = resolve_codex_executable(self.executable_override.clone())?;
+            let command = build_exec_command(&executable, &options);
+            let mut environment = self.environment.lock().await.clone();
+            environment.extend(options.extra_environment.clone());
+            let result = run_codex_exec_observed(
+                command,
+                &self.codex_home,
+                &environment,
+                Some(cancellation.clone()),
+                observer,
+            )
+            .await;
+            let reported = match &result {
+                Ok(result) => Some(result),
+                Err(error) => error.partial_result(),
+            };
+            if let Some(reported) = reported {
+                let database = self.usage_database.lock().await.clone();
+                if let Some(database) = database {
+                    let db = database.lock().await;
+                    if db
+                        .get_session(workbuddy_session_id)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                    {
+                        let unknown = format!("unknown-exec:{invocation}");
+                        let thread = reported
+                            .thread_id
+                            .as_deref()
+                            .or(options.thread_id.as_deref())
+                            .unwrap_or(&unknown);
+                        if let Err(error) = super::background::record_headless_usage(
+                            &db,
+                            workbuddy_session_id,
+                            thread,
+                            &invocation,
+                            &reported.usage,
+                        ) {
+                            tracing::error!(%error, "Failed to persist known headless usage");
+                        }
+                    }
+                }
+            }
+            let result = result?;
+            check_turn_cancellation(&cancellation)?;
+            if let Some(thread_id) = result.thread_id.as_deref() {
+                let workspace_root = options.workspace_root.display().to_string();
+                self.sessions.bind(NewCodexSessionBinding {
+                    workbuddy_session_id,
+                    codex_thread_id: thread_id,
+                    workspace_root: &workspace_root,
+                    provider: &options.provider,
+                    model: &options.model,
+                })?;
+            }
+            Ok(result)
+        }
+        .await;
+        if matches!(&result, Err(CodexRuntimeStateError::Exec(error)) if !error.writers_stopped()) {
+            capture
+                .mark_unavailable("headless transport ended without confirmed writer termination")
+                .await;
+            self.pending_captures.lock().await.insert(
+                capture.key.clone(),
+                PendingTurnCapture {
+                    _update_permit: _update_permit.clone(),
+                    capture: capture.clone(),
+                    thread_id: None,
+                    turn_id: None,
+                    terminal_ids: HashSet::new(),
+                    writers_may_run: true,
+                    process_id: None,
+                },
+            );
+        } else if let Err(error) = capture.close_after_stop().await {
+            tracing::warn!(%error, workbuddy_session_id, "Background task completed but file review is unavailable");
+        }
         self.active_execs.lock().await.remove(workbuddy_session_id);
-        let result = result?;
-        if let Some(thread_id) = result.thread_id.as_deref() {
-            let workspace_root = options.workspace_root.display().to_string();
-            self.sessions.bind(NewCodexSessionBinding {
-                workbuddy_session_id,
-                codex_thread_id: thread_id,
-                workspace_root: &workspace_root,
-                provider: &options.provider,
-                model: &options.model,
-            })?;
-        }
-        Ok(result)
+        result
     }
 
     pub async fn interrupt_headless(&self, workbuddy_session_id: &str) -> bool {
@@ -722,6 +912,12 @@ impl CodexRuntimeState {
     }
 
     pub async fn ensure_started(&self) -> Result<Arc<CodexProcess>, CodexRuntimeStateError> {
+        tokio::time::timeout(self.rpc_timeout, self.ensure_started_inner())
+            .await
+            .map_err(|_| CodexRuntimeStateError::StartupTimeout)?
+    }
+
+    async fn ensure_started_inner(&self) -> Result<Arc<CodexProcess>, CodexRuntimeStateError> {
         let mut process = self.process.lock().await;
         if let Some(existing) = process.as_ref() {
             if existing.is_running().await? {
@@ -749,47 +945,165 @@ impl CodexRuntimeState {
         workbuddy_session_id: &str,
         options: CodexTurnOptions,
     ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
-        let update_permit = crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
-        if self
-            .active_turns
-            .lock()
+        let cancellation = self.register_turn(workbuddy_session_id).await?;
+        self.start_registered_turn(workbuddy_session_id, options, cancellation)
             .await
-            .contains_key(workbuddy_session_id)
+    }
+
+    async fn register_turn(
+        &self,
+        session_id: &str,
+    ) -> Result<Arc<AtomicBool>, CodexRuntimeStateError> {
+        let update_permit =
+            crate::updater::admit_work().map_err(|_| CodexRuntimeStateError::UpdatePending)?;
+        let mut active = self.active_turns.lock().await;
+        if active.contains_key(session_id)
+            || self.active_execs.lock().await.contains_key(session_id)
+            || self
+                .pending_captures
+                .lock()
+                .await
+                .values()
+                .any(|capture| capture.capture.session_id == session_id && capture.writers_may_run)
         {
             return Err(CodexRuntimeStateError::TurnAlreadyActive);
         }
-        let process = self.ensure_started().await?;
+        let cancellation = Arc::new(AtomicBool::new(false));
+        active.insert(
+            session_id.to_string(),
+            ActiveCodexTurn {
+                _update_permit: update_permit,
+                thread_id: None,
+                turn_id: None,
+                cancellation: cancellation.clone(),
+                capture_key: None,
+                process_id: None,
+            },
+        );
+        Ok(cancellation)
+    }
+
+    async fn start_registered_turn(
+        &self,
+        session_id: &str,
+        options: CodexTurnOptions,
+        cancellation: Arc<AtomicBool>,
+    ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
+        let result = self
+            .start_turn_inner(session_id, options, &cancellation)
+            .await;
+        if result.is_err() {
+            self.finish_session_turn(session_id, &cancellation).await;
+        }
+        result
+    }
+
+    async fn start_turn_inner(
+        &self,
+        workbuddy_session_id: &str,
+        options: CodexTurnOptions,
+        cancellation: &Arc<AtomicBool>,
+    ) -> Result<CodexTurnExecution, CodexRuntimeStateError> {
+        check_turn_cancellation(cancellation)?;
+        let capture =
+            RuntimeTurnCapture::begin(&options.workspace_root, workbuddy_session_id).await;
+        let capture_key = capture.key.clone();
+        let capture_warning = capture.before_error.clone();
+        {
+            let mut active = self.active_turns.lock().await;
+            let Some(active) = active.get_mut(workbuddy_session_id).filter(|active| {
+                Arc::ptr_eq(&active.cancellation, cancellation)
+                    && !cancellation.load(Ordering::Relaxed)
+            }) else {
+                drop(active);
+                let _ = capture.close_after_stop().await;
+                return Err(CodexRuntimeStateError::Cancelled);
+            };
+            self.pending_captures.lock().await.insert(
+                capture_key.clone(),
+                PendingTurnCapture {
+                    _update_permit: active._update_permit.clone(),
+                    capture,
+                    thread_id: None,
+                    turn_id: None,
+                    terminal_ids: HashSet::new(),
+                    writers_may_run: false,
+                    process_id: None,
+                },
+            );
+            active.capture_key = Some(capture_key.clone());
+        }
+        check_turn_cancellation(cancellation)?;
+        let process = self
+            .startup_wait(cancellation, self.ensure_started())
+            .await?;
+        if let Some(active) = self
+            .active_turns
+            .lock()
+            .await
+            .get_mut(workbuddy_session_id)
+            .filter(|active| Arc::ptr_eq(&active.cancellation, cancellation))
+        {
+            active.process_id = Some(process.id());
+        }
+        check_turn_cancellation(cancellation)?;
         let client = process.client();
         let existing = self.sessions.get(workbuddy_session_id)?;
         let thread_id = if let Some(binding) = existing {
-            match client
-                .request(
-                    "thread/resume",
-                    thread_resume_params(&binding.codex_thread_id, &options),
-                )
+            match self
+                .startup_wait(cancellation, async {
+                    client
+                        .request(
+                            "thread/resume",
+                            thread_resume_params(&binding.codex_thread_id, &options),
+                        )
+                        .await
+                        .map_err(CodexRuntimeStateError::from)
+                })
                 .await
             {
                 Ok(response) => extract_thread_id(&response)
                     .unwrap_or(&binding.codex_thread_id)
                     .to_string(),
-                Err(AppServerError::Rpc(_)) => {
-                    let response = client
-                        .request("thread/start", thread_start_params(&options))
+                Err(CodexRuntimeStateError::AppServer(AppServerError::Rpc(_))) => {
+                    check_turn_cancellation(cancellation)?;
+                    let response = self
+                        .startup_wait(cancellation, async {
+                            client
+                                .request("thread/start", thread_start_params(&options))
+                                .await
+                                .map_err(CodexRuntimeStateError::from)
+                        })
                         .await?;
                     extract_thread_id(&response)
                         .ok_or(CodexRuntimeStateError::MissingResponseId("thread.id"))?
                         .to_string()
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
             }
         } else {
-            let response = client
-                .request("thread/start", thread_start_params(&options))
+            let response = self
+                .startup_wait(cancellation, async {
+                    client
+                        .request("thread/start", thread_start_params(&options))
+                        .await
+                        .map_err(CodexRuntimeStateError::from)
+                })
                 .await?;
             extract_thread_id(&response)
                 .ok_or(CodexRuntimeStateError::MissingResponseId("thread.id"))?
                 .to_string()
         };
+
+        check_turn_cancellation(cancellation)?;
+        {
+            let mut active = self.active_turns.lock().await;
+            let active = active
+                .get_mut(workbuddy_session_id)
+                .filter(|active| Arc::ptr_eq(&active.cancellation, cancellation))
+                .ok_or(CodexRuntimeStateError::Cancelled)?;
+            active.thread_id = Some(thread_id.clone());
+        }
 
         self.sessions.bind(NewCodexSessionBinding {
             workbuddy_session_id,
@@ -800,42 +1114,125 @@ impl CodexRuntimeState {
         })?;
         self.approval_preferences.lock().await.insert(
             thread_id.clone(),
-            ApprovalPreferences {
-                confirm_shell_commands: options.confirm_shell_commands,
-                confirm_file_writes: options.confirm_file_writes,
-                confirm_mcp_tool_calls: options.confirm_mcp_tool_calls,
-            },
+            (
+                TurnRoute {
+                    process_id: process.id(),
+                    generation: cancellation.clone(),
+                },
+                ApprovalPreferences {
+                    confirm_shell_commands: options.confirm_shell_commands,
+                    confirm_file_writes: options.confirm_file_writes,
+                    confirm_mcp_tool_calls: options.confirm_mcp_tool_calls,
+                },
+            ),
         );
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.subscribers
-            .lock()
-            .await
-            .insert(thread_id.clone(), sender);
-        let response = match client
-            .request("turn/start", turn_start_params(&thread_id, &options))
+        self.subscribers.lock().await.insert(
+            thread_id.clone(),
+            TurnSubscriber {
+                route: TurnRoute {
+                    process_id: process.id(),
+                    generation: cancellation.clone(),
+                },
+                turn_id: None,
+                sender,
+                buffered: Vec::new(),
+            },
+        );
+        let route = TurnRoute {
+            process_id: process.id(),
+            generation: cancellation.clone(),
+        };
+        self.usage_owners.lock().await.insert(
+            (process.id(), thread_id.clone()),
+            workbuddy_session_id.to_string(),
+        );
+        if let Some(warning) = capture_warning {
+            self.dispatch_events(&thread_id, &route, vec![capture_warning_event(&warning)])
+                .await;
+        }
+        check_turn_cancellation(cancellation)?;
+        if let Some(capture) = self.pending_captures.lock().await.get_mut(&capture_key) {
+            capture.thread_id = Some(thread_id.clone());
+            capture.writers_may_run = true;
+            capture.process_id = Some(process.id());
+        }
+        let response = match self
+            .startup_wait(cancellation, async {
+                client
+                    .request("turn/start", turn_start_params(&thread_id, &options))
+                    .await
+                    .map_err(CodexRuntimeStateError::from)
+            })
             .await
         {
             Ok(response) => response,
             Err(error) => {
-                self.subscribers.lock().await.remove(&thread_id);
-                return Err(error.into());
+                if matches!(
+                    &error,
+                    CodexRuntimeStateError::AppServer(AppServerError::Rpc(_))
+                ) {
+                    if let Some(capture) = self.pending_captures.lock().await.get_mut(&capture_key)
+                    {
+                        capture.writers_may_run = false;
+                    }
+                } else {
+                    self.retire_process(&process, "Codex turn/start did not settle; the runtime and its running tasks were stopped for safety").await?;
+                }
+                return Err(error);
             }
         };
-        let turn_id = extract_turn_id(&response)
-            .ok_or(CodexRuntimeStateError::MissingResponseId("turn.id"))?
-            .to_string();
-        self.active_turns.lock().await.insert(
-            workbuddy_session_id.to_string(),
-            ActiveCodexTurn {
-                _update_permit: update_permit,
-                thread_id: thread_id.clone(),
-                turn_id: turn_id.clone(),
-            },
-        );
+        let Some(turn_id) = extract_turn_id(&response).map(str::to_string) else {
+            self.retire_process(&process, "Codex accepted turn/start without a turn ID; all tasks on that runtime were stopped for safety").await?;
+            return Err(CodexRuntimeStateError::MissingResponseId("turn.id"));
+        };
+        let buffered = {
+            let mut subscribers = self.subscribers.lock().await;
+            if let Some(subscriber) = subscribers
+                .get_mut(&thread_id)
+                .filter(|subscriber| subscriber.route.matches(&route))
+            {
+                subscriber.turn_id = Some(turn_id.clone());
+                std::mem::take(&mut subscriber.buffered)
+            } else {
+                Vec::new()
+            }
+        };
+        let already_terminal = {
+            let mut pending = self.pending_captures.lock().await;
+            pending.get_mut(&capture_key).is_some_and(|capture| {
+                capture.turn_id = Some(turn_id.clone());
+                capture.terminal_ids.contains(&turn_id)
+            })
+        };
+        if already_terminal {
+            self.finish_capture(&capture_key).await;
+        }
+        let cancelled = {
+            let mut active = self.active_turns.lock().await;
+            if let Some(active) = active
+                .get_mut(workbuddy_session_id)
+                .filter(|active| Arc::ptr_eq(&active.cancellation, cancellation))
+            {
+                active.turn_id = Some(turn_id.clone());
+            }
+            cancellation.load(Ordering::Relaxed)
+        };
+        if cancelled {
+            // The stop arrived before turn/start supplied an ID. Do not publish a live turn.
+            self.interrupt_turn(&thread_id, &turn_id).await?;
+            return Err(CodexRuntimeStateError::Cancelled);
+        }
+        for (remote_turn, events) in buffered {
+            if remote_turn.as_deref().map_or(true, |id| id == turn_id) {
+                self.dispatch_events(&thread_id, &route, events).await;
+            }
+        }
         Ok(CodexTurnExecution {
             thread_id,
             turn_id,
             events: receiver,
+            generation: cancellation.clone(),
         })
     }
 
@@ -851,8 +1248,23 @@ impl CodexRuntimeState {
             .await
             .remove(request_id)
             .ok_or(CodexRuntimeStateError::ApprovalNotFound)?;
-        self.ensure_started()
-            .await?
+        let current = self
+            .subscribers
+            .lock()
+            .await
+            .get(&pending.thread_id)
+            .is_some_and(|subscriber| subscriber.route.matches(&pending.route));
+        let process = self
+            .process
+            .lock()
+            .await
+            .clone()
+            .filter(|process| process.id() == pending.route.process_id);
+        if !current || pending.route.generation.load(Ordering::Relaxed) {
+            return Err(CodexRuntimeStateError::ApprovalNotFound);
+        }
+        process
+            .ok_or(CodexRuntimeStateError::ApprovalNotFound)?
             .client()
             .respond(
                 pending.rpc_id,
@@ -862,19 +1274,80 @@ impl CodexRuntimeState {
         Ok(())
     }
 
+    async fn take_owned_approval(
+        &self,
+        request_id: &str,
+        route: &TurnRoute,
+    ) -> Option<PendingApproval> {
+        let mut pending = self.pending_approvals.lock().await;
+        if pending
+            .get(request_id)
+            .is_some_and(|approval| approval.route.matches(route))
+        {
+            pending.remove(request_id)
+        } else {
+            None
+        }
+    }
+
     pub async fn interrupt_turn(
         &self,
         thread_id: &str,
         turn_id: &str,
     ) -> Result<(), CodexRuntimeStateError> {
-        self.ensure_started()
-            .await?
+        let route = self.active_turns.lock().await.values().find_map(|active| {
+            if active.thread_id.as_deref() == Some(thread_id)
+                && active.turn_id.as_deref() == Some(turn_id)
+            {
+                active.cancellation.store(true, Ordering::Relaxed);
+                active.process_id.map(|process_id| TurnRoute {
+                    process_id,
+                    generation: active.cancellation.clone(),
+                })
+            } else {
+                None
+            }
+        });
+        let Some(route) = route else {
+            return Ok(());
+        };
+        self.interrupt_route(thread_id, turn_id, route).await
+    }
+
+    async fn interrupt_route(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        route: TurnRoute,
+    ) -> Result<(), CodexRuntimeStateError> {
+        let process = self.process.lock().await.clone();
+        let Some(process) = process.filter(|process| process.id() == route.process_id) else {
+            self.dispatch_events(thread_id, &route, vec![WorkBuddyEvent::Cancelled])
+                .await;
+            return Ok(());
+        };
+        let result = process
             .client()
-            .request(
+            .request_with_timeout(
                 "turn/interrupt",
                 serde_json::json!({"threadId": thread_id, "turnId": turn_id}),
+                self.rpc_timeout,
             )
-            .await?;
+            .await;
+        if result.is_err() {
+            let unsettled = self.pending_captures.lock().await.values().any(|capture| {
+                capture.process_id == Some(process.id())
+                    && capture.thread_id.as_deref() == Some(thread_id)
+                    && capture.turn_id.as_deref() == Some(turn_id)
+                    && capture.writers_may_run
+            });
+            if unsettled {
+                self.retire_process(&process, "Codex interrupt did not settle; running tasks on this runtime were stopped for safety").await?;
+            }
+        }
+        self.dispatch_events(thread_id, &route, vec![WorkBuddyEvent::Cancelled])
+            .await;
+        result?;
         Ok(())
     }
 
@@ -882,21 +1355,252 @@ impl CodexRuntimeState {
         &self,
         workbuddy_session_id: &str,
     ) -> Result<(), CodexRuntimeStateError> {
-        let active = self
-            .active_turns
-            .lock()
-            .await
-            .get(workbuddy_session_id)
-            .cloned();
+        let active = {
+            let active = self.active_turns.lock().await;
+            active.get(workbuddy_session_id).map(|active| {
+                active.cancellation.store(true, Ordering::Relaxed);
+                active.clone()
+            })
+        };
         if let Some(active) = active {
-            self.interrupt_turn(&active.thread_id, &active.turn_id)
-                .await?;
+            if let (Some(thread_id), Some(turn_id)) = (active.thread_id, active.turn_id) {
+                if let Some(process_id) = active.process_id {
+                    self.interrupt_route(
+                        &thread_id,
+                        &turn_id,
+                        TurnRoute {
+                            process_id,
+                            generation: active.cancellation,
+                        },
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(())
     }
 
-    async fn finish_session_turn(&self, workbuddy_session_id: &str) {
-        self.active_turns.lock().await.remove(workbuddy_session_id);
+    async fn finish_session_turn(
+        &self,
+        workbuddy_session_id: &str,
+        generation: &Arc<AtomicBool>,
+    ) -> bool {
+        let turn = self
+            .active_turns
+            .lock()
+            .await
+            .get(workbuddy_session_id)
+            .filter(|turn| Arc::ptr_eq(&turn.cancellation, generation))
+            .cloned();
+        if let Some(turn) = turn {
+            if let Some(key) = &turn.capture_key {
+                let capture = self.pending_captures.lock().await.get(key).cloned();
+                if let Some(capture) = capture {
+                    if capture.writers_may_run {
+                        capture.capture.mark_unavailable("local task ended before a matching remote terminal; writers are not confirmed stopped").await;
+                    } else {
+                        self.finish_capture(key).await;
+                    }
+                }
+            }
+            if let Some(thread_id) = &turn.thread_id {
+                self.subscribers.lock().await.retain(|id, subscriber| {
+                    id != thread_id || !Arc::ptr_eq(&subscriber.route.generation, generation)
+                });
+                self.approval_preferences
+                    .lock()
+                    .await
+                    .retain(|id, (route, _)| {
+                        id != thread_id || !Arc::ptr_eq(&route.generation, generation)
+                    });
+                self.pending_approvals
+                    .lock()
+                    .await
+                    .retain(|_, approval| !Arc::ptr_eq(&approval.route.generation, generation));
+            }
+        } else {
+            return false;
+        }
+        let mut active = self.active_turns.lock().await;
+        if active
+            .get(workbuddy_session_id)
+            .is_some_and(|turn| Arc::ptr_eq(&turn.cancellation, generation))
+        {
+            if let Some(database) = self.usage_database.lock().await.clone() {
+                let _ = database
+                    .lock()
+                    .await
+                    .update_session_status(workbuddy_session_id, "idle");
+            }
+            active.remove(workbuddy_session_id);
+            return true;
+        }
+        false
+    }
+
+    async fn startup_wait<T>(
+        &self,
+        cancellation: &AtomicBool,
+        future: impl std::future::Future<Output = Result<T, CodexRuntimeStateError>>,
+    ) -> Result<T, CodexRuntimeStateError> {
+        tokio::select! {
+            biased;
+            _ = wait_turn_cancelled(cancellation) => Err(CodexRuntimeStateError::Cancelled),
+            result = tokio::time::timeout(self.rpc_timeout, future) => result.map_err(|_| CodexRuntimeStateError::StartupTimeout)?,
+        }
+    }
+
+    pub(crate) async fn attach_usage_database(&self, database: Arc<Mutex<crate::store::Database>>) {
+        *self.usage_database.lock().await = Some(database);
+    }
+
+    async fn persist_reported_usage(
+        &self,
+        process_id: u64,
+        thread_id: &str,
+        events: &[WorkBuddyEvent],
+    ) {
+        let database = self.usage_database.lock().await.clone();
+        let session = self
+            .usage_owners
+            .lock()
+            .await
+            .get(&(process_id, thread_id.to_string()))
+            .cloned();
+        if let (Some(database), Some(session)) = (database, session) {
+            let db = database.lock().await;
+            for event in events {
+                let usage = match event {
+                    WorkBuddyEvent::ContextUsage {
+                        cumulative_input_tokens,
+                        cumulative_output_tokens,
+                        ..
+                    } => Some((*cumulative_input_tokens, *cumulative_output_tokens)),
+                    WorkBuddyEvent::Done {
+                        total_input_tokens,
+                        total_output_tokens,
+                    } => Some((*total_input_tokens, *total_output_tokens)),
+                    _ => None,
+                };
+                if let Some((input, output)) = usage {
+                    if let Err(error) = db.record_codex_usage(&session, thread_id, input, output) {
+                        tracing::error!(%error, "Failed to persist service-reported Codex usage");
+                    }
+                }
+            }
+        }
+    }
+
+    async fn retire_process(
+        &self,
+        process: &Arc<CodexProcess>,
+        reason: &str,
+    ) -> Result<(), CodexRuntimeStateError> {
+        // Serialize retirement with launches. Writer guards survive any failed shutdown.
+        let mut slot = self.process.lock().await;
+        let stopped = tokio::time::timeout(self.rpc_timeout, process.shutdown())
+            .await
+            .map_err(|_| CodexRuntimeStateError::StartupTimeout)
+            .and_then(|result| result.map_err(CodexRuntimeStateError::from));
+        if let Err(error) = stopped {
+            self.broadcast_error(
+                process.id(),
+                format!(
+                    "Codex runtime interruption failed; writer termination is unconfirmed: {error}"
+                ),
+            )
+            .await;
+            for active in self.active_turns.lock().await.values() {
+                if active.process_id == Some(process.id()) {
+                    active.cancellation.store(true, Ordering::Relaxed);
+                }
+            }
+            return Err(error);
+        }
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, process))
+        {
+            *slot = None;
+        }
+        let captures = self
+            .pending_captures
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, capture)| capture.process_id == Some(process.id()))
+            .map(|(key, capture)| (key.clone(), capture.capture.clone()))
+            .collect::<Vec<_>>();
+        for (key, capture) in captures {
+            capture.mark_unavailable(reason).await;
+            capture.abandon().await;
+            self.pending_captures.lock().await.remove(&key);
+        }
+        self.broadcast_error(process.id(), reason.to_string()).await;
+        self.approval_preferences
+            .lock()
+            .await
+            .retain(|_, (route, _)| route.process_id != process.id());
+        self.pending_approvals
+            .lock()
+            .await
+            .retain(|_, approval| approval.route.process_id != process.id());
+        for active in self.active_turns.lock().await.values() {
+            if active.process_id == Some(process.id()) {
+                active.cancellation.store(true, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
+    async fn finish_capture(&self, key: &str) -> Option<String> {
+        let capture = self
+            .pending_captures
+            .lock()
+            .await
+            .get(key)
+            .map(|pending| pending.capture.clone())?;
+        let result = capture.close_after_stop().await;
+        if capture.settled().await {
+            self.pending_captures.lock().await.remove(key);
+        }
+        if let Err(error) = &result {
+            tracing::warn!(%error, session_id = %capture.session_id, "Task finished but file review capture is unavailable");
+        }
+        result.err()
+    }
+
+    async fn observe_capture_terminal(
+        &self,
+        process_id: u64,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Vec<WorkBuddyEvent> {
+        let ready = {
+            let mut pending = self.pending_captures.lock().await;
+            pending
+                .iter_mut()
+                .filter_map(|(key, capture)| {
+                    if capture.process_id != Some(process_id)
+                        || capture.thread_id.as_deref() != Some(thread_id)
+                    {
+                        return None;
+                    }
+                    capture.terminal_ids.insert(turn_id.to_string());
+                    if capture.turn_id.as_deref() == Some(turn_id) {
+                        capture.writers_may_run = false;
+                    }
+                    (capture.turn_id.as_deref() == Some(turn_id)).then(|| key.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut warnings = Vec::new();
+        for key in ready {
+            if let Some(error) = self.finish_capture(&key).await {
+                warnings.push(capture_warning_event(&error));
+            }
+        }
+        warnings
     }
 
     fn spawn_event_dispatcher(&self, process: Arc<CodexProcess>) {
@@ -907,7 +1611,13 @@ impl CodexRuntimeState {
                     AppServerEvent::Notification(notification) => {
                         if notification.method == "serverRequest/resolved" {
                             if let Some(id) = notification.params.get("requestId") {
-                                state.pending_approvals.lock().await.remove(&rpc_id_key(id));
+                                let key = rpc_id_key(id);
+                                let mut pending = state.pending_approvals.lock().await;
+                                if pending.get(&key).is_some_and(|approval| {
+                                    approval.route.process_id == process.id()
+                                }) {
+                                    pending.remove(&key);
+                                }
                             }
                         }
                         let thread_id = notification
@@ -915,13 +1625,58 @@ impl CodexRuntimeState {
                             .get("threadId")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        let events = state
+                        let mut events = state
                             .event_adapter
                             .lock()
                             .await
                             .adapt_notification(&notification);
                         if let Some(thread_id) = thread_id {
-                            state.dispatch_events(&thread_id, events).await;
+                            let turn_id = notification
+                                .params
+                                .get("turnId")
+                                .or_else(|| {
+                                    notification
+                                        .params
+                                        .get("turn")
+                                        .and_then(|turn| turn.get("id"))
+                                })
+                                .and_then(Value::as_str);
+                            // Snapshot generation before persistence/after-snapshot awaits.
+                            let route = state
+                                .notification_route(process.id(), &thread_id, turn_id, &events)
+                                .await;
+                            state
+                                .persist_reported_usage(process.id(), &thread_id, &events)
+                                .await;
+                            if notification.method == "turn/completed" {
+                                if let Some(turn_id) = notification
+                                    .params
+                                    .get("turn")
+                                    .and_then(|turn| turn.get("id"))
+                                    .and_then(Value::as_str)
+                                {
+                                    let terminal_state = state.clone();
+                                    let process_id = process.id();
+                                    let turn_id = turn_id.to_string();
+                                    tokio::spawn(async move {
+                                        let warnings = terminal_state
+                                            .observe_capture_terminal(
+                                                process_id, &thread_id, &turn_id,
+                                            )
+                                            .await;
+                                        events.splice(0..0, warnings);
+                                        if let Some(route) = route {
+                                            terminal_state
+                                                .dispatch_events(&thread_id, &route, events)
+                                                .await;
+                                        }
+                                    });
+                                    continue;
+                                }
+                            }
+                            if let Some(route) = route {
+                                state.dispatch_events(&thread_id, &route, events).await;
+                            }
                         }
                     }
                     AppServerEvent::ServerRequest(request) => {
@@ -956,12 +1711,43 @@ impl CodexRuntimeState {
                             continue;
                         }
                         if let (Some(thread_id), Some(event)) = (thread_id, adapted) {
+                            let route = state
+                                .subscribers
+                                .lock()
+                                .await
+                                .get(&thread_id)
+                                .filter(|subscriber| {
+                                    subscriber.route.process_id == process.id()
+                                        && request
+                                            .params
+                                            .get("turnId")
+                                            .and_then(Value::as_str)
+                                            .map_or(true, |turn| {
+                                                subscriber.turn_id.as_deref() == Some(turn)
+                                            })
+                                })
+                                .map(|subscriber| subscriber.route.clone());
+                            let Some(route) = route else {
+                                let _ = process
+                                    .client()
+                                    .respond(
+                                        request.id,
+                                        pending_approval_result(
+                                            PendingApprovalKind::Standard,
+                                            false,
+                                            false,
+                                        ),
+                                    )
+                                    .await;
+                                continue;
+                            };
                             let preferences = state
                                 .approval_preferences
                                 .lock()
                                 .await
                                 .get(&thread_id)
-                                .copied()
+                                .filter(|(owner, _)| owner.matches(&route))
+                                .map(|(_, preferences)| *preferences)
                                 .unwrap_or(ApprovalPreferences {
                                     confirm_shell_commands: true,
                                     confirm_file_writes: true,
@@ -980,6 +1766,16 @@ impl CodexRuntimeState {
                             } else {
                                 PendingApprovalKind::Standard
                             };
+                            if route.generation.load(Ordering::Relaxed) {
+                                let _ = process
+                                    .client()
+                                    .respond(
+                                        request.id,
+                                        pending_approval_result(kind, false, false),
+                                    )
+                                    .await;
+                                continue;
+                            }
                             if should_auto_approve(&request.method, preferences) {
                                 if let Err(error) = process
                                     .client()
@@ -999,19 +1795,19 @@ impl CodexRuntimeState {
                                 PendingApproval {
                                     rpc_id: request.id,
                                     kind,
+                                    thread_id: thread_id.clone(),
+                                    route: route.clone(),
                                 },
                             );
-                            state.dispatch_events(&thread_id, vec![event]).await;
+                            state.dispatch_events(&thread_id, &route, vec![event]).await;
                             if is_mcp_elicitation {
                                 let timeout_state = state.clone();
                                 let timeout_process = Arc::clone(&process);
                                 tokio::spawn(async move {
                                     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                                     let pending = timeout_state
-                                        .pending_approvals
-                                        .lock()
-                                        .await
-                                        .remove(&request_id);
+                                        .take_owned_approval(&request_id, &route)
+                                        .await;
                                     if let Some(pending) = pending {
                                         tracing::warn!(
                                             "MCP tool approval expired without a response"
@@ -1030,20 +1826,10 @@ impl CodexRuntimeState {
                     }
                     AppServerEvent::ProtocolError(error)
                     | AppServerEvent::TransportError(error) => {
-                        state.broadcast_error(error).await;
+                        let _ = state.retire_process(&process, &error).await;
                     }
                     AppServerEvent::Closed => {
-                        state
-                            .broadcast_error("Codex app-server 连接已关闭".to_string())
-                            .await;
-                        state.pending_approvals.lock().await.clear();
-                        let mut active = state.process.lock().await;
-                        if active
-                            .as_ref()
-                            .is_some_and(|current| Arc::ptr_eq(current, &process))
-                        {
-                            *active = None;
-                        }
+                        let _ = state.retire_process(&process, "Codex app-server connection closed; tasks on that runtime were stopped").await;
                         break;
                     }
                 }
@@ -1051,33 +1837,72 @@ impl CodexRuntimeState {
         });
     }
 
-    async fn dispatch_events(&self, thread_id: &str, events: Vec<WorkBuddyEvent>) {
+    async fn notification_route(
+        &self,
+        process_id: u64,
+        thread_id: &str,
+        turn_id: Option<&str>,
+        events: &[WorkBuddyEvent],
+    ) -> Option<TurnRoute> {
+        let mut subscribers = self.subscribers.lock().await;
+        let subscriber = subscribers
+            .get_mut(thread_id)
+            .filter(|subscriber| subscriber.route.process_id == process_id)?;
+        if turn_id.is_none() && events.iter().any(is_terminal_event) {
+            return None;
+        }
+        if subscriber.turn_id.is_none() {
+            subscriber
+                .buffered
+                .push((turn_id.map(str::to_string), events.to_vec()));
+            return None;
+        }
+        if turn_id.is_some_and(|id| subscriber.turn_id.as_deref() != Some(id)) {
+            return None;
+        }
+        Some(subscriber.route.clone())
+    }
+
+    async fn dispatch_events(
+        &self,
+        thread_id: &str,
+        route: &TurnRoute,
+        mut events: Vec<WorkBuddyEvent>,
+    ) {
+        let mut subscribers = self.subscribers.lock().await;
+        let Some(subscriber) = subscribers
+            .get(thread_id)
+            .filter(|subscriber| subscriber.route.matches(route))
+        else {
+            return;
+        };
+        let cancelled = route.generation.load(Ordering::Relaxed);
+        if cancelled && !events.is_empty() {
+            events = vec![WorkBuddyEvent::Cancelled];
+        }
         let terminal = events.iter().any(is_terminal_event);
-        let sender = self.subscribers.lock().await.get(thread_id).cloned();
-        if let Some(sender) = sender {
-            for event in events {
-                let _ = sender.send(event);
-            }
+        for event in events {
+            let _ = subscriber.sender.send(event);
         }
         if terminal {
-            self.subscribers.lock().await.remove(thread_id);
-            self.approval_preferences.lock().await.remove(thread_id);
+            subscribers.remove(thread_id);
+            self.approval_preferences
+                .lock()
+                .await
+                .retain(|id, (owner, _)| id != thread_id || !owner.matches(route));
         }
     }
 
-    async fn broadcast_error(&self, message: String) {
-        let subscribers = self
-            .subscribers
-            .lock()
-            .await
-            .drain()
-            .map(|(_, sender)| sender)
-            .collect::<Vec<_>>();
-        for sender in subscribers {
-            let _ = sender.send(WorkBuddyEvent::Error {
+    async fn broadcast_error(&self, process_id: u64, message: String) {
+        self.subscribers.lock().await.retain(|_, subscriber| {
+            if subscriber.route.process_id != process_id {
+                return true;
+            }
+            let _ = subscriber.sender.send(WorkBuddyEvent::Error {
                 message: message.clone(),
             });
-        }
+            false
+        });
     }
 
     pub async fn diagnostic(
@@ -1126,12 +1951,59 @@ impl CodexRuntimeState {
     }
 
     pub async fn shutdown(&self) -> Result<(), CodexRuntimeStateError> {
-        self.active_turns.lock().await.clear();
-        let process = self.process.lock().await.take();
+        for active in self.active_turns.lock().await.values() {
+            active.cancellation.store(true, Ordering::Relaxed);
+        }
+        let process = self.process.lock().await.clone();
         if let Some(process) = process {
-            process.shutdown().await?;
+            self.retire_process(
+                &process,
+                "Codex runtime shut down; running tasks were stopped",
+            )
+            .await?;
+        }
+        let pending = {
+            let mut pending = self.pending_captures.lock().await;
+            let ready = pending
+                .iter()
+                .filter(|(_, capture)| !capture.writers_may_run)
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            ready
+                .into_iter()
+                .filter_map(|key| pending.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        for capture in pending {
+            capture
+                .capture
+                .mark_unavailable("runtime process shut down without a matching terminal")
+                .await;
+            capture.capture.abandon().await;
         }
         Ok(())
+    }
+}
+
+fn check_turn_cancellation(cancellation: &AtomicBool) -> Result<(), CodexRuntimeStateError> {
+    if cancellation.load(Ordering::Relaxed) {
+        Err(CodexRuntimeStateError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+async fn wait_turn_cancelled(cancellation: &AtomicBool) {
+    while !cancellation.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn capture_warning_event(message: &str) -> WorkBuddyEvent {
+    WorkBuddyEvent::RunStatus {
+        iteration: 0,
+        phase: "file_review_unavailable".into(),
+        detail: format!("文件审阅不可用（任务继续）：{message}"),
     }
 }
 
@@ -1400,15 +2272,156 @@ pub(crate) fn resolve_model_selection(
             let named = settings
                 .find_llm_provider(&provider_id)
                 .ok_or_else(|| format!("找不到已启用的模型提供商配置：{provider_id}"))?;
-            (named.provider.clone(), model)
+            named_responses_profile(named)?;
+            (
+                named_runtime_provider_id(&provider_id),
+                if model.is_empty() {
+                    named.model.clone()
+                } else {
+                    model
+                },
+            )
         }
     };
-    match provider.as_str() {
-        "openai" | "deepseek" | "harmony" => Ok((provider, model)),
-        _ => Err(format!(
-            "当前 Codex Responses runtime 尚未配置提供商“{provider}”；请切换到 OpenAI、DeepSeek 或 Harmony Responses API"
-        )),
+    let provider = if let Some(id) = provider.strip_prefix("named:") {
+        named_runtime_provider_id(id)
+    } else {
+        provider
+    };
+    if let Some(id) = provider.strip_prefix("workbuddy_named_") {
+        let id = hex::decode(id)
+            .ok()
+            .and_then(|id| String::from_utf8(id).ok())
+            .ok_or_else(|| "无效的命名提供商 ID".to_string())?;
+        let named = settings
+            .find_llm_provider(&id)
+            .ok_or_else(|| format!("找不到模型提供商配置：{id}"))?;
+        named_responses_profile(named)?;
+    } else {
+        responses_profile(
+            &provider,
+            &provider,
+            if provider == "custom" {
+                &settings.custom_base_url
+            } else {
+                ""
+            },
+            &global_provider_env_key(&provider),
+        )?;
     }
+    if model.trim().is_empty() {
+        return Err("模型 ID 不能为空".into());
+    }
+    Ok((provider, model))
+}
+
+fn named_runtime_provider_id(id: &str) -> String {
+    format!("workbuddy_named_{}", hex::encode(id.as_bytes()))
+}
+
+fn global_provider_env_key(provider: &str) -> String {
+    match provider {
+        "deepseek" => "DEEPSEEK_API_KEY",
+        "harmony" => "HARMONY_API_KEY",
+        _ => "OPENAI_API_KEY",
+    }
+    .into()
+}
+
+fn responses_profile(
+    provider: &str,
+    id: &str,
+    base: &str,
+    env_key: &str,
+) -> Result<crate::codex_runtime::config::ResponsesProviderProfile, String> {
+    use crate::codex_runtime::config::{
+        responses_provider_default_base, ResponsesProviderProfile, RESPONSES_PROVIDER_IDS,
+    };
+    if !RESPONSES_PROVIDER_IDS.contains(&provider) {
+        return Err(format!("提供商“{provider}”的外部协议不受当前 Responses 运行时支持；请使用 OpenAI、Harmony 或实现 Responses API 的 custom 端点。Anthropic 原生 Messages 协议不可用。"));
+    }
+    let base = if base.trim().is_empty() {
+        responses_provider_default_base(provider)
+            .ok_or_else(|| "custom Responses 端点需要配置 base URL".to_string())?
+    } else {
+        base.trim()
+    };
+    let url = reqwest::Url::parse(base).map_err(|_| "Responses base URL 无效".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Responses base URL 必须是无凭据、查询或片段的 HTTP(S) 地址".into());
+    }
+    Ok(ResponsesProviderProfile {
+        id: id.into(),
+        name: id.into(),
+        base_url: base.trim_end_matches('/').into(),
+        env_key: env_key.into(),
+    })
+}
+
+fn named_responses_profile(
+    named: &crate::store::settings::LlmProviderConfig,
+) -> Result<
+    (
+        crate::codex_runtime::config::ResponsesProviderProfile,
+        String,
+    ),
+    String,
+> {
+    let env_key = format!(
+        "WORKBUDDY_NAMED_{}_API_KEY",
+        hex::encode(named.id.as_bytes()).to_ascii_uppercase()
+    );
+    let profile = responses_profile(
+        &named.provider,
+        &named_runtime_provider_id(&named.id),
+        &named.base_url,
+        &env_key,
+    )?;
+    let key = named.effective_api_key().trim();
+    if key.is_empty() {
+        return Err(format!(
+            "命名提供商“{}”缺少自己的 API Key，不会回退到全局凭据",
+            named.id
+        ));
+    }
+    Ok((profile, key.into()))
+}
+
+fn configured_responses_profiles(
+    settings: &crate::store::Settings,
+) -> Vec<(
+    crate::codex_runtime::config::ResponsesProviderProfile,
+    String,
+)> {
+    let mut profiles = Vec::new();
+    for (provider, key) in [
+        ("deepseek", &settings.deepseek_api_key),
+        ("harmony", &settings.harmony_api_key),
+        ("custom", &settings.openai_api_key),
+    ] {
+        let base = if provider == "custom" {
+            settings.custom_base_url.as_str()
+        } else {
+            ""
+        };
+        if let Ok(profile) =
+            responses_profile(provider, provider, base, &global_provider_env_key(provider))
+        {
+            profiles.push((profile, key.clone()));
+        }
+    }
+    for named in &settings.llm_providers {
+        if let Ok(profile) = named_responses_profile(named) {
+            profiles.push(profile);
+        }
+    }
+    profiles
 }
 
 fn safe_attachment_name(filename: Option<&str>, media_type: &str) -> String {
@@ -1708,6 +2721,68 @@ fn merge_message_context(
     }
 }
 
+pub(crate) fn persisted_message_context(
+    user_context: Option<String>,
+    annotation_context: Option<String>,
+    attachments: &[CodexAttachment],
+) -> Option<String> {
+    let context = merge_message_context(user_context, annotation_context);
+    if attachments.is_empty() {
+        return context;
+    }
+    let mut value = context
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if value.is_array() {
+        value = serde_json::json!({"annotations":value});
+    }
+    value.as_object_mut()?.insert(
+        "attachments".into(),
+        serde_json::to_value(attachments).ok()?,
+    );
+    serde_json::to_string(&value).ok()
+}
+
+pub(crate) fn persist_user_message(
+    db: &crate::store::Database,
+    session_id: &str,
+    content: &str,
+    context: Option<&str>,
+    already_imported: bool,
+) -> Result<(), String> {
+    if already_imported {
+        if let Some(context) = context {
+            let message = db
+                .get_messages_latest(session_id, 1)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .last()
+                .filter(|message| message.role == "user" && message.content == content)
+                .ok_or_else(|| "找不到待补全附件上下文的用户消息".to_string())?;
+            db.conn
+                .execute(
+                    "UPDATE messages SET context_json = ?1 WHERE id = ?2 AND session_id = ?3",
+                    rusqlite::params![context, message.id, session_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
+        db.append_message_with_context(session_id, "user", content, context)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn known_session_artifact_uris(db: &crate::store::Database, session_id: &str) -> HashSet<String> {
+    db.list_session_artifacts(session_id, i64::MAX)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|artifact| artifact.uri)
+        .map(|uri| normalize_artifact_uri(&uri))
+        .collect()
+}
+
 fn append_reasoning_summary(target: &mut String, delta: &str) {
     if target.len() >= MAX_REASONING_SUMMARY_BYTES {
         return;
@@ -1865,8 +2940,17 @@ pub async fn codex_chat_send(
     comment_contexts: Option<Vec<Value>>,
     clear_plan: Option<bool>,
 ) -> Result<CodexTurnStarted, String> {
+    codex_state.attach_usage_database(app_state.db.clone()).await;
+    let cancellation = codex_state
+        .register_turn(&session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let cleanup_session_id = session_id.clone();
+    let cleanup_generation = cancellation.clone();
+    let result = async {
     let settings = app_state.settings.lock().await.clone();
-    codex_state.configure_credentials(&settings).await;
+    codex_state.configure_credentials_checked(&settings).await.map_err(|error| error.to_string())?;
+    crate::commands::usage_policy::check_budget(&app_state, &session_id).await?;
     let (session_workspace, is_mobile_shared) = {
         let db = app_state.db.lock().await;
         let session = db.get_session(&session_id).map_err(|error| error.to_string())?;
@@ -1894,7 +2978,7 @@ pub async fn codex_chat_send(
     let user_context_json = validated_message_context(user_context.as_deref());
     let annotation_context_json = validated_annotation_context(comment_contexts.as_deref())?;
     let message_context_json =
-        merge_message_context(user_context_json, annotation_context_json.clone());
+        persisted_message_context(user_context_json, annotation_context_json.clone(), &attachments);
     let content = compose_turn_content(
         content,
         explicit_skills,
@@ -1926,11 +3010,7 @@ pub async fn codex_chat_send(
         provider,
         model,
         permission_mode,
-        sandbox_mode: if settings.allow_outside_workspace {
-            CodexSandboxMode::FullAccess
-        } else {
-            CodexSandboxMode::WorkspaceWrite
-        },
+        sandbox_mode: CodexSandboxMode::from_permissions(permission_mode, settings.allow_outside_workspace),
         confirm_shell_commands: settings.confirm_shell_commands,
         confirm_file_writes: settings.confirm_file_writes,
         confirm_mcp_tool_calls: settings.confirm_mcp_tool_calls,
@@ -1939,29 +3019,19 @@ pub async fn codex_chat_send(
     };
     let workspace_artifacts_before = snapshot_workspace_artifacts(&options.workspace_root);
     let workspace_root_for_artifact_discovery = options.workspace_root.clone();
+    check_turn_cancellation(&cancellation).map_err(|error| error.to_string())?;
     if is_mobile_shared {
         crate::commands::mobile_bridge::prepare_desktop_send(&app_state, &session_id, &visible_content).await?;
     }
     {
         let db = app_state.db.lock().await;
-        if !is_mobile_shared {
-            db.append_message_with_context(
-                &session_id,
-                "user",
-                &visible_content,
-                message_context_json.as_deref(),
-            ).map_err(|error| error.to_string())?;
-        }
+        persist_user_message(&db, &session_id, &visible_content, message_context_json.as_deref(), is_mobile_shared)?;
         db.update_session_status(&session_id, "running")
             .map_err(|error| error.to_string())?;
     }
-    let execution = match codex_state.start_turn(&session_id, options).await {
+    let execution = match codex_state.start_turn_inner(&session_id, options, &cancellation).await {
         Ok(execution) => execution,
         Err(error) => {
-            {
-                let db = app_state.db.lock().await;
-                let _ = db.update_session_status(&session_id, "idle");
-            }
             if is_mobile_shared {
                 crate::commands::mobile_bridge::abort_desktop_send(&app_state, &session_id).await;
             }
@@ -1973,6 +3043,7 @@ pub async fn codex_chat_send(
         turn_id: execution.turn_id.clone(),
     };
     let history_turn_id = execution.turn_id.clone();
+    let cancellation = execution.generation.clone();
     let event_name = format!("agent_event_{session_id}");
     let mut events = execution.events;
     let codex_state = codex_state.inner().clone();
@@ -1995,6 +3066,9 @@ pub async fn codex_chat_send(
         )
         .await;
         while let Some(event) = events.recv().await {
+            let event = if cancellation.load(Ordering::Relaxed) && !matches!(&event, WorkBuddyEvent::Error { .. }) {
+                WorkBuddyEvent::Cancelled
+            } else { event };
             transcript.observe(&event);
             match &event {
                 WorkBuddyEvent::ReasoningSummaryStart { id, summary_index } => {
@@ -2109,12 +3183,7 @@ pub async fn codex_chat_send(
                 if matches!(&event, WorkBuddyEvent::Done { .. }) {
                     let known_artifact_uris: HashSet<String> = {
                         let db = app_state.db.lock().await;
-                        db.list_all_artifacts(10_000)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|artifact| artifact.uri)
-                            .map(|uri| normalize_artifact_uri(&uri))
-                            .collect()
+                        known_session_artifact_uris(&db, &session_id)
                     };
                     for candidate in discover_workspace_artifacts(
                         &workspace_root_for_artifact_discovery,
@@ -2182,21 +3251,27 @@ pub async fn codex_chat_send(
                             );
                         }
                     }
-                    let _ = db.update_session_status(&session_id, "idle");
                 }
-                codex_state.finish_session_turn(&session_id).await;
+                if !codex_state.finish_session_turn(&session_id, &cancellation).await { return; }
                 let mut broadcast = serde_json::to_value(&event).unwrap_or_default();
                 if let Some(payload) = broadcast.as_object_mut() {
                     payload.insert("sessionId".to_string(), serde_json::json!(session_id));
                 }
                 let _ = app.emit("agent_broadcast", broadcast);
                 let _ = app.emit(&event_name, event);
-                break;
+                return;
             }
             let _ = app.emit(&event_name, event);
         }
+        // A closed stream without a terminal notification must not reserve the session forever.
+        codex_state.finish_session_turn(&session_id, &cancellation).await;
     });
     Ok(started)
+    }.await;
+    if result.is_err() {
+        codex_state.finish_session_turn(&cleanup_session_id, &cleanup_generation).await;
+    }
+    result
 }
 
 #[tauri::command]
@@ -2220,6 +3295,10 @@ pub async fn codex_chat_cancel(
         _ => Err("缺少 sessionId 或 threadId/turnId".to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_regressions.rs"]
+mod runtime_regressions;
 
 #[cfg(test)]
 mod tests {
@@ -2373,11 +3452,19 @@ mod tests {
         };
         let mut other_session = CodexTurnTranscript::default();
         other_session.assistant_text = "完成了 slides.pptx".into();
-        assert!(!artifact_referenced_in_turn(&candidate, "C:\\work", &other_session));
+        assert!(!artifact_referenced_in_turn(
+            &candidate,
+            "C:\\work",
+            &other_session
+        ));
 
         let mut owning_session = CodexTurnTranscript::default();
         owning_session.assistant_text = "文件在 session-one/report.pdf".into();
-        assert!(artifact_referenced_in_turn(&candidate, "C:\\work", &owning_session));
+        assert!(artifact_referenced_in_turn(
+            &candidate,
+            "C:\\work",
+            &owning_session
+        ));
     }
 
     #[test]
@@ -2659,7 +3746,8 @@ mod tests {
     #[test]
     fn automation_mcp_candidates_include_macos_app_resources() {
         let executable = Path::new("/Applications/Harmony Work.app/Contents/MacOS/harmony-work");
-        let candidates = bundled_automation_candidates_from(executable, "mac-use-mcp/dist/helpers/cli.mjs");
+        let candidates =
+            bundled_automation_candidates_from(executable, "mac-use-mcp/dist/helpers/cli.mjs");
         assert!(candidates.iter().any(|path| path == Path::new(
             "/Applications/Harmony Work.app/Contents/Resources/resources/mac-use-mcp/dist/helpers/cli.mjs"
         )));

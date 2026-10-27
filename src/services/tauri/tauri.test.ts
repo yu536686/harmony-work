@@ -95,6 +95,14 @@ describe("chatApi", () => {
     });
   });
 
+  it("keeps interaction and external directory grants explicit and independent", async () => {
+    mockInvoke.mockResolvedValue(null);
+    await chatApi.getArtifactPreview("sess1", "E:/work/index.html", false, true);
+    expect(mockInvoke).toHaveBeenLastCalledWith("get_artifact_preview", { sessionId: "sess1", uri: "E:/work/index.html", allowDirectory: true });
+    await chatApi.getArtifactPreview("sess1", "E:/work/index.html", true, false);
+    expect(mockInvoke).toHaveBeenLastCalledWith("get_artifact_preview", { sessionId: "sess1", uri: "E:/work/index.html", allowNetwork: true });
+  });
+
   it("send() routes the main chat through codex_chat_send", async () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.send("sess1", "hello");

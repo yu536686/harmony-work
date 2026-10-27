@@ -39,7 +39,7 @@ test("Python is bundled as an isolated runtime instead of an installer executabl
   assert.match(lock.components.python.fileName, /-embed-amd64\.zip$/);
   assert.match(stageScript, /python-runtime\.zip/);
   assert.match(stageScript, /--target \$SitePackages/);
-  assert.match(engine, /ReplaceDirectoryFromZip\(runtimeZip, pythonRoot\)/);
+  assert.match(engine, /MergePythonRuntimeFromZip\(runtimeZip, pythonRoot\)/);
   assert.doesNotMatch(engine, /InstallAllUsers=|Include_pip=1/);
 });
 
@@ -151,12 +151,21 @@ test("full installer reuses managed runtimes and reports generic user-facing pro
   );
 
   assert.match(engine, /if \(!HasNodeRuntime\(\)\) await Task\.Run\(\(\) => InstallNode\(payloadRoot\), cancellationToken\)/);
-  assert.match(engine, /if \(!HasPythonRuntime\(\)\) await InstallPythonAsync/);
+  assert.match(engine, /if \(!await HasHealthyPythonRuntimeAsync\(cancellationToken\)\) await InstallPythonAsync/);
   assert.match(engine, /if \(!HasGitRuntime\(\)\) await InstallPortableGitAsync/);
   assert.match(engine, /if \(!HasWeComCliRuntime\(\)\) await Task\.Run\(\(\) => InstallWeComCli\(payloadRoot\), cancellationToken\)/);
   assert.match(engine, /"正在配置必要组件", ""/);
   assert.match(engine, /CopyPayloadArchiveAsync/);
   assert.match(engine, /ExtractPayloadArchiveAsync/);
+});
+
+test("existing Python must import all required modules before the full installer skips repair", async () => {
+  const engine = await readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8");
+  assert.match(engine, /async Task<bool> HasHealthyPythonRuntimeAsync/);
+  assert.match(engine, /await VerifyPythonRuntimeAsync\(cancellationToken\)/);
+  assert.match(engine, /import cv2, numpy, starlette, uvicorn, pydantic, imageio_ffmpeg/);
+  assert.match(engine, /CancelAfter\(TimeSpan.FromSeconds\(30\)\)/);
+  assert.doesNotMatch(engine, /DeleteDirectory\(_runtimeRoot\)/);
 });
 
 test("full installer bundles the deep uninstaller and exposes an installed entry", async () => {
@@ -173,7 +182,7 @@ test("full installer bundles the deep uninstaller and exposes an installed entry
   assert.match(cleanup, /卸载 Harmony Work\.lnk/);
 });
 
-test("Harmony Work 1.1.2 release metadata, payload manifest, and installer naming stay aligned", async () => {
+test("Harmony Work 1.1.3-rc1 release metadata, payload manifest, and installer naming stay aligned", async () => {
   const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
@@ -187,7 +196,7 @@ test("Harmony Work 1.1.2 release metadata, payload manifest, and installer namin
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.1.2");
+  assert.equal(packageJson.version, "1.1.3-rc1");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");
@@ -195,10 +204,10 @@ test("Harmony Work 1.1.2 release metadata, payload manifest, and installer namin
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(tauriConfig.identifier, "com.harmony.xiaoheng-workbuddy");
   assert.match(cargoToml, /name = "harmony-work"/);
-  assert.match(cargoToml, /version = "1\.1\.2"/);
+  assert.equal(cargoToml.match(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1], packageJson.version);
   assert.match(cargoToml, /default-run = "harmony-work"/);
   assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
-  assert.match(project, /<Version>1\.1\.2<\/Version>/);
+  assert.equal(project.match(/<Version>([^<]+)<\/Version>/)?.[1], packageJson.version);
   assert.match(engine, /private const string ProductName = "Harmony Work"/);
   assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
   assert.match(stageScript, /app\\harmony-work-setup\.exe/);
@@ -207,14 +216,15 @@ test("Harmony Work 1.1.2 release metadata, payload manifest, and installer namin
     /\[PSCustomObject\]@\{ version = \$Version; files = @\(\$Files\) \}/,
     "the staged payload manifest must inherit the formal release version",
   );
-  assert.match(buildScript, /\[string\]\$Version = "1\.1\.2"/);
+  assert.equal(buildScript.match(/\[string\]\$Version\s*=\s*"([^"]+)"/)?.[1], packageJson.version);
   assert.match(buildScript, /Harmony-Work-\$Version-x64-setup\.exe/);
 });
 
 test("the formal installer refreshes the alpha payload without removing user state", async () => {
-  const [engine, buildScript] = await Promise.all([
+  const [engine, buildScript, packageJson] = await Promise.all([
     readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
     readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
   ]);
 
   assert.match(
@@ -247,9 +257,9 @@ test("the formal installer refreshes the alpha payload without removing user sta
     /DeleteDirectory\(root\)/,
     "only the stale installer payload cache may be replaced",
   );
-  assert.match(
-    buildScript,
-    /\[string\]\$Version = "1\.1\.2"/,
+  assert.equal(
+    buildScript.match(/\[string\]\$Version\s*=\s*"([^"]+)"/)?.[1],
+    packageJson.version,
     "the release build must emit the formal installer filename by default",
   );
 });

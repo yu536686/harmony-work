@@ -10,6 +10,8 @@ describe("workspace navigation", () => {
   it("defines the Work, Collaboration, and System navigation groups", () => {
     expect(WORKSPACE_NAVIGATION.work.map((item) => item.id)).toEqual([
       "chat",
+      "task-center",
+      "workflows",
       "creative",
       "marketing-assets",
       "skills",
@@ -22,6 +24,11 @@ describe("workspace navigation", () => {
       "memory",
     ]);
     expect(WORKSPACE_NAVIGATION.system.map((item) => item.id)).toEqual(["settings"]);
+  });
+
+  it("keeps task and workflow destinations reachable", () => {
+    expect(normalizeWorkspaceRoute("task-center")).toEqual({ route: "task-center" });
+    expect(normalizeWorkspaceRoute("workflows")).toEqual({ route: "workflows" });
   });
 
   it("provides the sidebar presentation and drives App navigation from the model", () => {

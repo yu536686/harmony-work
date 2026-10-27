@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { loadHarvisTasks, saveHarvisTasks, normalizeReferenceSelection, resolveCanvasRequest } from "./creative";
 
 it("migrates cached public result URLs without changing supplier signed URLs", () => {
+  localStorage.setItem("workbuddy.marketingUser", JSON.stringify({ id: "test-owner" }));
   const key = "workbuddy.harvis.tasks";
   const tasks = [
-    { taskId: "old", resultUrl: "https://api.harmonywatch.cn:13001/output/a.png?token=x%2Fy" },
-    { taskId: "supplier", resultUrl: "https://cdn.example.com/a.mp3?signature=x%2Fy" }
+    { ownerId: "test-owner", taskId: "old", resultUrl: "https://api.harmonywatch.cn:13001/output/a.png?token=x%2Fy" },
+    { ownerId: "test-owner", taskId: "supplier", resultUrl: "https://cdn.example.com/a.mp3?signature=x%2Fy" }
   ];
   localStorage.setItem(key, JSON.stringify(tasks));
   try {
@@ -19,8 +20,9 @@ it("migrates cached public result URLs without changing supplier signed URLs", (
 });
 
 it("keeps image results when the music page saves its own tasks", () => {
-  const image = { taskId: "image-1", kind: "image" as const, prompt: "image", status: "succeeded" as const, progress: 100, createdAt: 1 };
-  const music = { taskId: "music-1", kind: "music" as const, prompt: "music", status: "pending" as const, progress: 0, createdAt: 2 };
+  localStorage.setItem("workbuddy.marketingUser", JSON.stringify({ id: "test-owner" }));
+  const image = { ownerId: "test-owner", taskId: "image-1", kind: "image" as const, prompt: "image", status: "succeeded" as const, progress: 100, createdAt: 1 };
+  const music = { ownerId: "test-owner", taskId: "music-1", kind: "music" as const, prompt: "music", status: "pending" as const, progress: 0, createdAt: 2 };
   localStorage.setItem("workbuddy.harvis.tasks", JSON.stringify([image]));
   try {
     saveHarvisTasks([music], "music");

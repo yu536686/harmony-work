@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+#[path = "runtime_health.rs"]
+pub mod runtime_health;
+
 /// Ensure the user has a visible, one-click entry to the active workspace.
 /// A `.url` shortcut avoids a system-wide COM dependency while Windows Explorer
 /// still opens the local folder directly when it is double-clicked.
@@ -241,8 +244,12 @@ pub async fn check_environment_bootstrap(
 #[tauri::command]
 pub async fn run_environment_bootstrap(
     state: State<'_, AppState>,
+    offline_only: Option<bool>,
 ) -> Result<EnvironmentBootstrapResult, String> {
     let settings = state.settings.lock().await.clone();
+    if offline_only == Some(true) {
+        return runtime_health::repair_offline_environment(&settings).await;
+    }
     let mut logs = Vec::new();
 
     ensure_bootstrap_workspace(&settings, &mut logs);

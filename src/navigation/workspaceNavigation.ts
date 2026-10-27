@@ -1,6 +1,7 @@
 import { getLegacySettingsSection, type SettingsSection } from "../components/Settings/settingsSections";
 import {
   Brain,
+  ClipboardList,
   Clock3,
   LineChart,
   Settings2,
@@ -8,6 +9,7 @@ import {
   SquarePen,
   UserRoundCheck,
   Users,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 
@@ -15,6 +17,8 @@ export type { SettingsSection } from "../components/Settings/settingsSections";
 
 export type WorkspaceRoute =
   | "chat"
+  | "task-center"
+  | "workflows"
   | "creative-music"
   | "creative-image"
   | "marketing-assets"
@@ -70,6 +74,8 @@ export const WORKSPACE_NAVIGATION: Record<"work" | "collaboration" | "system", W
       activeRoutes: ["chat"],
       action: "new-chat",
     },
+    { id: "task-center", route: "task-center", label: { text: "任务中心" }, icon: ClipboardList, activeRoutes: ["task-center"], action: "navigate" },
+    { id: "workflows", route: "workflows", label: { text: "交付流程" }, icon: Workflow, activeRoutes: ["workflows"], action: "navigate" },
     {
       id: "creative",
       route: "creative-music",
@@ -118,6 +124,8 @@ export const WORKSPACE_NAVIGATION: Record<"work" | "collaboration" | "system", W
 
 const ROUTES = new Set<WorkspaceRoute>([
   "chat",
+  "task-center",
+  "workflows",
   "creative-music",
   "creative-image",
   "marketing-assets",

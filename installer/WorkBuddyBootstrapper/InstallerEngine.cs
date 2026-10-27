@@ -69,7 +69,7 @@ public sealed class InstallerEngine
         if (!HasNodeRuntime()) await Task.Run(() => InstallNode(payloadRoot), cancellationToken);
 
         progress.Report(new(40, "正在配置必要组件", ""));
-        if (!HasPythonRuntime()) await InstallPythonAsync(payloadRoot, cancellationToken);
+        if (!await HasHealthyPythonRuntimeAsync(cancellationToken)) await InstallPythonAsync(payloadRoot, cancellationToken);
 
         progress.Report(new(52, "正在配置必要组件", ""));
         if (!HasGitRuntime()) await InstallPortableGitAsync(payloadRoot, cancellationToken);
@@ -245,11 +245,18 @@ public sealed class InstallerEngine
         var pythonRoot = Path.Combine(_runtimeRoot, "python");
         Directory.CreateDirectory(_runtimeRoot);
         var runtimeZip = PayloadPath(payloadRoot, "runtime", "python-runtime.zip");
-        await Task.Run(() => ReplaceDirectoryFromZip(runtimeZip, pythonRoot), cancellationToken);
+        await Task.Run(() => MergePythonRuntimeFromZip(runtimeZip, pythonRoot), cancellationToken);
+        await VerifyPythonRuntimeAsync(cancellationToken);
+    }
+
+    private async Task VerifyPythonRuntimeAsync(CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
         await RunProcessAsync(
-            Path.Combine(pythonRoot, "python.exe"),
-            "-c \"import cv2, numpy, starlette, uvicorn, pydantic, imageio_ffmpeg\"",
-            cancellationToken);
+            Path.Combine(_runtimeRoot, "python", "python.exe"),
+            "-I -c \"import cv2, numpy, starlette, uvicorn, pydantic, imageio_ffmpeg\"",
+            timeout.Token);
     }
 
     private async Task InstallPortableGitAsync(string payloadRoot, CancellationToken cancellationToken)
@@ -377,10 +384,22 @@ public sealed class InstallerEngine
 
     private bool HasNodeRuntime() => File.Exists(Path.Combine(_runtimeRoot, "node", "node.exe"));
 
-    private bool HasPythonRuntime() =>
-        File.Exists(Path.Combine(_runtimeRoot, "python", "python.exe")) &&
-        (Directory.Exists(Path.Combine(_runtimeRoot, "python", "Lib", "site-packages")) ||
-         Directory.Exists(Path.Combine(_runtimeRoot, "python-wheelhouse")));
+    private async Task<bool> HasHealthyPythonRuntimeAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(Path.Combine(_runtimeRoot, "python", "python.exe"))) return false;
+        try {
+            await VerifyPythonRuntimeAsync(cancellationToken);
+            return true;
+        } catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
+            return false;
+        } catch (InvalidOperationException) {
+            return false;
+        } catch (System.ComponentModel.Win32Exception) {
+            return false;
+        } catch (IOException) {
+            return false;
+        }
+    }
 
     private bool HasGitRuntime() => File.Exists(Path.Combine(_runtimeRoot, "git", "bin", "git.exe"));
 
@@ -418,15 +437,27 @@ public sealed class InstallerEngine
         }
     }
 
-    private static void ReplaceDirectoryFromZip(string zipPath, string destination)
+    private static void MergePythonRuntimeFromZip(string zipPath, string destination)
     {
         var staging = CreateStagingDirectory("wheels");
         try {
             ZipFile.ExtractToDirectory(zipPath, staging, true);
-            ReplaceDirectory(staging, destination);
-        } catch {
+            // Repair only bundled files; preserve extra user packages and data.
+            foreach (var file in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)) {
+                var target = Path.Combine(destination, Path.GetRelativePath(staging, file));
+                for (var parent = new DirectoryInfo(Path.GetDirectoryName(target)!); parent is not null; parent = parent.Parent) {
+                    if (parent.Exists && parent.Attributes.HasFlag(FileAttributes.ReparsePoint)) {
+                        throw new IOException("Python 修复路径不能是符号链接或目录联接。");
+                    }
+                }
+                if (File.Exists(target) && File.GetAttributes(target).HasFlag(FileAttributes.ReparsePoint)) {
+                    throw new IOException("Python 修复文件不能是符号链接。");
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: true);
+            }
+        } finally {
             DeleteDirectory(staging);
-            throw;
         }
     }
 

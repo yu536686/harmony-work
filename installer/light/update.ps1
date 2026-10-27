@@ -77,8 +77,127 @@ function WaitForInstallAccess($path,[int]$timeoutSeconds=20) {
  }while($true)
 }
 function OwnedPath($p) { return $p -eq 'harmony-work.exe' -or $p -match '^(resources/(workbuddy-mcp-host|harmony-cut)/|licenses/|resources/artifact-runtime/THIRD_PARTY_NOTICES.txt$)' }
+function AssertSettingsPath([string]$path) {
+ if(!$path -or $path -notmatch '^[a-zA-Z]:\\' -or $path.IndexOf(':',2) -ge 0 -or $path -match '[\x00-\x1f]' -or $path -match '(^|\\)(\.|\.\.)(\\|$)' -or $path -match '[. ](\\|$)'){throw 'Unsafe settings path'}
+ $full=[IO.Path]::GetFullPath($path)
+ $cursor=$full
+ while($cursor) {
+  try {if([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint){throw "Reparse point forbidden: $cursor"}}
+  catch [IO.FileNotFoundException] {} catch [IO.DirectoryNotFoundException] {}
+  $cursor=Split-Path -Parent $cursor
+ }
+}
+function GetSettingsPath {
+ $profile=[Environment]::GetFolderPath('UserProfile').TrimEnd('\')
+ AssertSettingsPath $profile
+ AssertSettingsPath $env:APPDATA
+ $appData=[IO.Path]::GetFullPath($env:APPDATA).TrimEnd('\')
+ $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+ if($sid -in @('S-1-5-18','S-1-5-19','S-1-5-20') -or (Split-Path -Leaf $profile) -in @('Default','Default User','Public','systemprofile','LocalService','NetworkService') -or !$appData.StartsWith($profile+'\',[StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $appData -PathType Container)){throw 'Settings must belong to the current non-default user profile'}
+ $config=Join-Path $env:APPDATA 'com.harmony.xiaoheng-workbuddy\config.json'
+ AssertSettingsPath $config
+ return $config
+}
+function SetSettingsPrivateAcl([string]$path) {
+ AssertSettingsPath $path
+ $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+ $isDirectory=(Get-Item -LiteralPath $path -Force).PSIsContainer
+ $acl=if($isDirectory){New-Object Security.AccessControl.DirectorySecurity}else{New-Object Security.AccessControl.FileSecurity}
+ $acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false)
+ $inherit=if($isDirectory){[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
+ $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+ $acl.AddAccessRule($rule)
+ Set-Acl -LiteralPath $path -AclObject $acl
+}
+function ReadSettingsBytes([string]$path,[int]$maximum) {
+ AssertSettingsPath $path
+ $stream=$null
+ try {
+  $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  if($stream.Length -gt $maximum){throw 'Settings snapshot exceeds size limit'}
+  $bytes=New-Object byte[] ([int]$stream.Length)
+  $offset=0
+  while($offset -lt $bytes.Length){$read=$stream.Read($bytes,$offset,$bytes.Length-$offset);if(!$read){throw 'Incomplete settings snapshot read'};$offset+=$read}
+  return ,$bytes
+ } finally {if($stream){$stream.Dispose()}}
+}
+function SettingsHash([byte[]]$bytes) {
+ $hash=[Security.Cryptography.SHA256]::Create()
+ try{return [BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','')}finally{$hash.Dispose()}
+}
+function SettingsEntropy([string]$directory) {
+ # Bind the protected envelope to this transaction, not a journal-supplied destination.
+ return ,([Text.Encoding]::UTF8.GetBytes('HarmonyWork.LightSettings.v1|'+(Split-Path -Leaf $directory)))
+}
+function NewSettingsSnapshot([string]$directory) {
+ Add-Type -AssemblyName System.Security
+ AssertSettingsPath $directory
+ $config=GetSettingsPath
+ $bytes=$null;$envelope=$null
+ try {
+  $existed=Test-Path -LiteralPath $config
+  if($existed){$bytes=ReadSettingsBytes $config 4MB}else{$bytes=New-Object byte[] 0}
+  $envelope=New-Object byte[] ($bytes.Length+1)
+  $envelope[0]=[byte][bool]$existed
+  if($bytes.Length){[Array]::Copy($bytes,0,$envelope,1,$bytes.Length)}
+  $protected=[Security.Cryptography.ProtectedData]::Protect($envelope,(SettingsEntropy $directory),[Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $blob=Join-Path $directory 'config.dpapi';AssertSettingsPath $blob
+  $stream=$null
+  try {
+   $stream=[IO.File]::Open($blob,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+   $stream.Dispose();$stream=$null
+   SetSettingsPrivateAcl $blob
+   $stream=[IO.File]::Open($blob,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
+   $stream.Write($protected,0,$protected.Length);$stream.Flush($true)
+  } finally {if($stream){$stream.Dispose()}}
+  return [pscustomobject]@{schemaVersion=1;snapshotTaken=$true;existed=[bool]$existed;protection='DPAPI-CurrentUser';blob='config.dpapi';sha256=(SettingsHash $protected);size=$protected.Length;configSize=$bytes.Length}
+ } finally {
+  if($null -ne $bytes){[Array]::Clear($bytes,0,$bytes.Length)}
+  if($null -ne $envelope){[Array]::Clear($envelope,0,$envelope.Length)}
+ }
+}
+function RestoreSettingsSnapshot([string]$directory,$metadata,[switch]$ValidateOnly) {
+ Add-Type -AssemblyName System.Security
+ $fields=@('schemaVersion','snapshotTaken','existed','protection','blob','sha256','size','configSize')
+ if($null -eq $metadata -or @($metadata.PSObject.Properties).Count -ne $fields.Count -or @($metadata.PSObject.Properties.Name|Where-Object {$_ -cnotin $fields}).Count){throw 'Invalid settings snapshot metadata'}
+ $validVersion=($metadata.schemaVersion -is [int] -or $metadata.schemaVersion -is [long]) -and ($metadata.schemaVersion -eq 1)
+ $validSize=($metadata.size -is [int] -or $metadata.size -is [long]) -and ($metadata.size -gt 0) -and ($metadata.size -le (4MB+64KB))
+ $validConfigSize=($metadata.configSize -is [int] -or $metadata.configSize -is [long]) -and ($metadata.configSize -ge 0) -and ($metadata.configSize -le 4MB)
+ if(!$validVersion -or !$validSize -or !$validConfigSize -or $metadata.snapshotTaken -isnot [bool] -or !$metadata.snapshotTaken -or $metadata.existed -isnot [bool] -or $metadata.protection -isnot [string] -or $metadata.protection -cne 'DPAPI-CurrentUser' -or $metadata.blob -isnot [string] -or $metadata.blob -cne 'config.dpapi' -or $metadata.sha256 -isnot [string] -or $metadata.sha256 -cnotmatch '^[A-Fa-f0-9]{64}$' -or (!$metadata.existed -and $metadata.configSize -ne 0)){throw 'Invalid settings snapshot metadata'}
+ $config=GetSettingsPath
+ AssertSettingsPath $directory
+ $protected=ReadSettingsBytes (Join-Path $directory 'config.dpapi') (4MB+64KB)
+ if($protected.Length -ne $metadata.size -or (SettingsHash $protected) -ne $metadata.sha256){throw 'Settings snapshot hash or size mismatch'}
+ $envelope=$null;$bytes=$null;$restoreDirectory=$null;$temp=$null
+ try {
+  $envelope=[Security.Cryptography.ProtectedData]::Unprotect($protected,(SettingsEntropy $directory),[Security.Cryptography.DataProtectionScope]::CurrentUser)
+  if($envelope.Length -ne ($metadata.configSize+1) -or $envelope[0] -ne [byte]$metadata.existed){throw 'Invalid settings snapshot envelope'}
+  if($ValidateOnly){return}
+  if(!$metadata.existed){return}
+  $bytes=New-Object byte[] $metadata.configSize
+  if($bytes.Length){[Array]::Copy($envelope,1,$bytes,0,$bytes.Length)}
+  $parent=Split-Path -Parent $config
+  if(!(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Path $parent|Out-Null;SetSettingsPrivateAcl $parent}
+  # Plaintext exists only in a private same-volume restore directory, never in the transaction.
+  $restoreDirectory=Join-Path $parent ('.harmony-config-restore-'+[guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $restoreDirectory|Out-Null;SetSettingsPrivateAcl $restoreDirectory
+  $temp=Join-Path $restoreDirectory 'config.json'
+  $stream=$null
+  try {$stream=[IO.File]::Open($temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{if($stream){$stream.Dispose()}}
+  SetSettingsPrivateAcl $temp
+  AssertSettingsPath $config;AssertSettingsPath $temp
+  # Windows PowerShell 5.1 marshals $null string arguments as empty paths, not CLR null.
+  if(Test-Path -LiteralPath $config){[IO.File]::Replace($temp,$config,[NullString]::Value)}else{[IO.File]::Move($temp,$config)}
+  SetSettingsPrivateAcl $config
+ } finally {
+  if($null -ne $envelope){[Array]::Clear($envelope,0,$envelope.Length)}
+  if($null -ne $bytes){[Array]::Clear($bytes,0,$bytes.Length)}
+  if($temp -and (Test-Path -LiteralPath $temp)){Remove-Item -LiteralPath $temp -Force}
+  if($restoreDirectory -and (Test-Path -LiteralPath $restoreDirectory)){Remove-Item -LiteralPath $restoreDirectory -Force}
+ }
+}
 function WriteJournal($state) {
- $journal=@{schemaVersion=1;installDirectory=$InstallDirectory;previousVersion=$key.DisplayVersion;state=$state;changes=@($changed | ForEach-Object { @{path=$_.path;existed=$_.existed;sha256=$_.sha256;size=$_.size} })}
+ $journal=@{schemaVersion=2;installDirectory=$InstallDirectory;previousVersion=$key.DisplayVersion;state=$state;settingsSnapshot=$settingsSnapshot;changes=@($changed | ForEach-Object { @{path=$_.path;existed=$_.existed;sha256=$_.sha256;size=$_.size} })}
  $tmp=Join-Path $transaction 'journal.tmp'
  $journal|ConvertTo-Json -Depth 6|Set-Content -LiteralPath $tmp -Encoding UTF8
  Move-Item -LiteralPath $tmp -Destination (Join-Path $transaction 'journal.json') -Force
@@ -86,11 +205,13 @@ function WriteJournal($state) {
 function RecoverTransactions($root,$registryKey) {
  foreach($dir in @(Get-ChildItem -LiteralPath $root -Directory -Filter '.harmony-update-*')) {
   $null=SafeJoin $root $dir.Name
-  $journalPath=Join-Path $dir.FullName 'journal.json'
+  $journalPath=SafeJoin $dir.FullName 'journal.json'
   if(!(Test-Path -LiteralPath $journalPath)){continue}
   $j=Get-Content -Raw -LiteralPath $journalPath|ConvertFrom-Json
-  if($j.schemaVersion -ne 1 -or $j.installDirectory -ne $root){throw "Invalid interrupted update journal: $journalPath"}
-  if($j.state -ne 'committed') {
+  $validSchema=($j.schemaVersion -is [int] -or $j.schemaVersion -is [long]) -and ($j.schemaVersion -in @(1,2))
+  if(!$validSchema -or $j.installDirectory -isnot [string] -or $j.installDirectory -ne $root -or $j.state -isnot [string] -or $j.state -cnotin @('pending','committed','rolledBack') -or ($j.schemaVersion -eq 1 -and ($null -ne $j.settingsSnapshot -or (Test-Path -LiteralPath (Join-Path $dir.FullName 'config.dpapi'))))){throw "Invalid interrupted update journal: $journalPath"}
+  if($j.schemaVersion -eq 2){RestoreSettingsSnapshot $dir.FullName $j.settingsSnapshot -ValidateOnly}
+  if($j.state -eq 'pending') {
    $entries=@($j.changes);[array]::Reverse($entries)
    foreach($entry in $entries) {
     if(!(OwnedPath $entry.path)){throw 'Unsafe interrupted update journal destination'}
@@ -98,13 +219,15 @@ function RecoverTransactions($root,$registryKey) {
     if($entry.existed){Verify (Join-Path $dir.FullName 'backup') @($entry);Copy-Item -LiteralPath (SafeJoin (Join-Path $dir.FullName 'backup') $entry.path) -Destination $target -Force}
     elseif(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Force}
    }
+   # Schema 1 predates settings migration; preserve recovery of those legacy app-only transactions.
+   if($j.schemaVersion -eq 2){RestoreSettingsSnapshot $dir.FullName $j.settingsSnapshot}
    Set-ItemProperty -LiteralPath $registryKey.PSPath -Name DisplayVersion -Value $j.previousVersion
    Log "RECOVERED interrupted transaction $($dir.FullName)"
   }
   Remove-Item -LiteralPath $dir.FullName -Recurse -Force
  }
 }
-$changed=@(); $transaction=$null; $child=$null; $mutex=$null; $originalExe=$null; $canRestart=$false; $recoveryFailed=$false
+$changed=@(); $transaction=$null; $child=$null; $mutex=$null; $originalExe=$null; $canRestart=$false; $recoveryFailed=$false; $settingsSnapshot=$null
 try {
  if(![Environment]::Is64BitProcess){throw 'The light updater requires 64-bit PowerShell. Run the signed lightweight installer instead of a 32-bit script host.'}
  $mutex=New-Object Threading.Mutex($false,'Local\HarmonyWorkLightUpdate'); if(!$mutex.WaitOne(0)){throw 'Another update is running'}
@@ -147,9 +270,12 @@ try {
  Log 'Preparing recovery and staged application files.'
  try { RecoverTransactions $actual $key } catch { $recoveryFailed=$true;throw }
  $transaction=Join-Path $actual ('.harmony-update-'+[guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Path $transaction | Out-Null
+ SetSettingsPrivateAcl $transaction
  New-Item -ItemType Directory -Path "$transaction\stage","$transaction\backup" | Out-Null
  foreach($f in $manifest.files){$stage=SafeJoin "$transaction\stage" $f.path; New-Item -ItemType Directory -Force (Split-Path -Parent $stage)|Out-Null; Copy-Item -LiteralPath (SafeJoin $Payload $f.path) -Destination $stage}
  Verify "$transaction\stage" $manifest.files
+ try {$settingsSnapshot=NewSettingsSnapshot $transaction} catch {$recoveryFailed=$true;throw}
  WriteJournal 'pending'
  $copied=0
  foreach($f in $manifest.files){Log "Installing $($f.path)";$target=SafeJoin $actual $f.path;$backup=SafeJoin "$transaction\backup" $f.path;$existed=Test-Path -LiteralPath $target; if($existed){New-Item -ItemType Directory -Force (Split-Path -Parent $backup)|Out-Null;Copy-Item -LiteralPath $target -Destination $backup};$backupInfo=if($existed){Get-Item -LiteralPath $backup}else{$null};$backupHash=if($existed){(Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash}else{$null};$changed+=@{path=$f.path;target=$target;backup=$backup;existed=$existed;size=$backupInfo.Length;sha256=$backupHash};WriteJournal 'pending';New-Item -ItemType Directory -Force (Split-Path -Parent $target)|Out-Null;Copy-Item -LiteralPath (SafeJoin "$transaction\stage" $f.path) -Destination $target -Force;$copied++;Progress 'copying' '正在安装更新' $copied @($manifest.files).Count}
@@ -181,11 +307,25 @@ try {
  exit 0
 } catch {
  $failure=$_.Exception.Message
+ Remove-Item Env:HARMONY_UPDATE_HEALTH_FILE,Env:HARMONY_UPDATE_HEALTH_TOKEN -ErrorAction SilentlyContinue
  Progress 'rollback' '正在恢复原版本'
- if($child -and !$child.HasExited){Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue; $child.WaitForExit(10000)|Out-Null}
  $rollbackErrors=@()
- [array]::Reverse($changed)
- foreach($c in $changed){try{if($c.existed){Copy-Item -LiteralPath $c.backup -Destination $c.target -Force}else{Remove-Item -LiteralPath $c.target -Force -ErrorAction Stop}}catch{$rollbackErrors+=$_.Exception.Message}}
+ if($transaction) {
+  try {
+   if($child -and !$child.HasExited){Stop-Process -Id $child.Id -Force; if(!$child.WaitForExit(10000)){throw 'Updated application did not exit for rollback'}}
+   WaitForProductExit $originalExe 10
+   AssertSettingsPath $transaction
+   if($settingsSnapshot){RestoreSettingsSnapshot $transaction $settingsSnapshot -ValidateOnly}
+  } catch {$rollbackErrors+=$_.Exception.Message}
+  if(!$rollbackErrors.Count) {
+   [array]::Reverse($changed)
+   foreach($c in $changed){try{$target=SafeJoin $InstallDirectory $c.path;if($c.existed){Verify (Join-Path $transaction 'backup') @($c);Copy-Item -LiteralPath $c.backup -Destination $target -Force}elseif(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Force -ErrorAction Stop}}catch{$rollbackErrors+=$_.Exception.Message}}
+   if($settingsSnapshot){try{RestoreSettingsSnapshot $transaction $settingsSnapshot}catch{$rollbackErrors+=$_.Exception.Message}}
+   if(!$rollbackErrors.Count -and $changed.Count){try{Set-ItemProperty -LiteralPath $key.PSPath -Name DisplayVersion -Value $key.DisplayVersion}catch{$rollbackErrors+=$_.Exception.Message}}
+   # Do not replay an already restored snapshot over edits made after the old client restarts.
+   if(!$rollbackErrors.Count -and $settingsSnapshot){try{WriteJournal 'rolledBack'}catch{$rollbackErrors+=$_.Exception.Message}}
+  }
+ }
  Log "FAILED $failure rollbackErrors=$($rollbackErrors -join '; ') backup=$transaction"
  $safeRestart=(!$Check -and $canRestart -and !$rollbackErrors.Count -and !$recoveryFailed)
  $message=if($failure -like '*still running*' -or $failure -like 'Please choose Exit*'){'请先从托盘退出客户端，再点击重试。'}elseif($failure -like 'Missing or incompatible*' -or $failure -like '*Runtime preflight*'){'运行环境校验未通过，请查看日志或使用完整安装包。'}elseif($safeRestart){'更新未完成，原版本已恢复。可以重试或返回客户端。'}else{'更新未完成。请查看日志或使用完整安装包修复。'}

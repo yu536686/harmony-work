@@ -7,6 +7,63 @@ const WORKBUDDY_MODEL_CATALOG: &[u8] = include_bytes!("../../resources/workbuddy
 use crate::platform_profile::DesktopPlatform;
 use std::path::{Path, PathBuf};
 
+pub const RESPONSES_PROVIDER_IDS: &[&str] = &["openai", "harmony", "custom"];
+
+pub fn responses_provider_default_base(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("https://api.openai.com/v1"),
+        "deepseek" => Some("https://api.deepseek.com"),
+        "harmony" => Some(crate::service_urls::HARMONY_API_BASE),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponsesProviderProfile {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub env_key: String,
+}
+
+pub fn merge_responses_provider_config(
+    existing: &str,
+    profiles: &[ResponsesProviderProfile],
+) -> std::io::Result<String> {
+    let mut doc = existing
+        .parse::<toml_edit::Document>()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    if doc.get("model_providers").is_none() {
+        doc["model_providers"] = toml_edit::table();
+    }
+    let providers = doc["model_providers"].as_table_like_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "model_providers must be a table",
+        )
+    })?;
+    let stale = providers
+        .iter()
+        .filter_map(|(id, _)| {
+            (id.starts_with("workbuddy_named_") && !profiles.iter().any(|profile| profile.id == id))
+                .then(|| id.to_string())
+        })
+        .collect::<Vec<_>>();
+    for id in stale {
+        providers.remove(&id);
+    }
+    for profile in profiles {
+        let mut table = toml_edit::Table::new();
+        table["name"] = toml_edit::value(&profile.name);
+        table["base_url"] = toml_edit::value(&profile.base_url);
+        table["env_key"] = toml_edit::value(&profile.env_key);
+        table["wire_api"] = toml_edit::value("responses");
+        table["supports_websockets"] = toml_edit::value(false);
+        providers.insert(&profile.id, toml_edit::Item::Table(table));
+    }
+    Ok(doc.to_string())
+}
+
 fn managed_model_catalog() -> std::io::Result<Vec<u8>> {
     let mut catalog: serde_json::Value = serde_json::from_slice(WORKBUDDY_MODEL_CATALOG)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -46,9 +103,10 @@ pub fn ensure_managed_auto_review_catalog(
                 .and_then(toml::Value::as_str)
                 .map(str::to_owned)
         });
-    if configured_path.as_deref().is_some_and(|path| {
-        !path.replace('\\', "/").eq_ignore_ascii_case(&managed_path)
-    }) {
+    if configured_path
+        .as_deref()
+        .is_some_and(|path| !path.replace('\\', "/").eq_ignore_ascii_case(&managed_path))
+    {
         return Ok(existing_config.to_string());
     }
 
@@ -204,7 +262,7 @@ impl WorkBuddyMcpProfile {
                     .join(if cfg!(windows) { ";" } else { ":" })
             });
         format!(
-            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {}, WORKBUDDY_MARKETING_URL = {}, WORKBUDDY_MARKETING_SESSION_DIR = {} }}\n",
+            "[mcp_servers.workbuddy]\ncommand = {}\nstartup_timeout_sec = 15\ntool_timeout_sec = 180\nenv_vars = [\"WORKBUDDY_MOBILE_TASK_CAPABILITY\"]\nenv = {{ WORKBUDDY_APP_DATA_DIR = {}, WORKBUDDY_DATABASE_PATH = {}, WORKBUDDY_SKILLS_DIRS = {}, WORKBUDDY_MARKETING_URL = {}, WORKBUDDY_MARKETING_SESSION_DIR = {} }}\n",
             toml_string(&self.executable.display().to_string()),
             toml_string(&self.app_data_dir.display().to_string()),
             toml_string(&database_path.display().to_string()),
@@ -278,7 +336,11 @@ impl AutomationMcpProfile {
                 toml_string(&executable.display().to_string())
             ));
         }
-        if let Some(entry) = self.macos_desktop.as_ref().filter(|_| !self.node.as_os_str().is_empty()) {
+        if let Some(entry) = self
+            .macos_desktop
+            .as_ref()
+            .filter(|_| !self.node.as_os_str().is_empty())
+        {
             rendered.push_str(&format!(
                 "\n[mcp_servers.macos_desktop]\ncommand = {}\nargs = [{}]\nstartup_timeout_sec = 30\ntool_timeout_sec = 180\n",
                 toml_string(&self.node.display().to_string()),
@@ -353,10 +415,8 @@ mod tests {
 
     #[test]
     fn managed_auto_review_catalog_uses_a_real_gateway_model_and_is_idempotent() {
-        let codex_home = std::env::temp_dir().join(format!(
-            "harmony-review-catalog-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let codex_home =
+            std::env::temp_dir().join(format!("harmony-review-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&codex_home).unwrap();
         let original = "model = \"deepseek-v4-flash\"\n[model_providers.harmony]\nbase_url = \"https://api.harmonywatch.cn/v1\"\n";
 
@@ -383,7 +443,11 @@ mod tests {
             let instructions = model["model_messages"]["instructions_template"]
                 .as_str()
                 .unwrap();
-            assert!(!instructions.starts_with("You are Codex"), "{}", model["slug"]);
+            assert!(
+                !instructions.starts_with("You are Codex"),
+                "{}",
+                model["slug"]
+            );
             assert!(!instructions.contains("As Codex,"), "{}", model["slug"]);
         }
         assert!(flash["model_messages"]["instructions_template"]
@@ -400,10 +464,8 @@ mod tests {
 
     #[test]
     fn managed_auto_review_catalog_respects_an_existing_custom_catalog() {
-        let codex_home = std::env::temp_dir().join(format!(
-            "harmony-custom-catalog-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let codex_home =
+            std::env::temp_dir().join(format!("harmony-custom-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&codex_home).unwrap();
         let custom = "model_catalog_json = \"C:/custom/models.json\"\n[model_providers.harmony]\nbase_url = \"https://api.harmonywatch.cn/v1\"\n";
 
@@ -430,7 +492,10 @@ mod tests {
             toml::Value::String(path.to_string_lossy().replace('\\', "/"))
         );
 
-        assert_eq!(ensure_managed_auto_review_catalog(&codex_home, &config).unwrap(), config);
+        assert_eq!(
+            ensure_managed_auto_review_catalog(&codex_home, &config).unwrap(),
+            config
+        );
         let updated: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let flash = updated["models"]
@@ -513,6 +578,17 @@ command = "host"
     }
 
     #[test]
+    fn runtime_regression_mobile_capability_uses_explicit_task_environment_forwarding() {
+        let config: toml::Value = WorkBuddyMcpProfile::new(
+            Path::new("/bin/host"), Path::new("/app-data"), &[], "https://portal.harmonywatch.cn"
+        ).render_toml().parse().unwrap();
+        let host = &config["mcp_servers"]["workbuddy"];
+        assert_eq!(host.get("env_vars").and_then(toml::Value::as_array),
+            Some(&vec![toml::Value::String("WORKBUDDY_MOBILE_TASK_CAPABILITY".into())]));
+        assert!(host["env"].get("WORKBUDDY_MOBILE_TASK_CAPABILITY").is_none(), "never persist a task capability in global MCP config");
+    }
+
+    #[test]
     fn managed_mcp_profile_registers_native_host_and_domain_paths() {
         let rendered = WorkBuddyMcpProfile::new(
             Path::new("C:/Program Files/Xiaoheng/workbuddy-mcp-host.exe"),
@@ -576,12 +652,7 @@ command = "host"
 
     #[test]
     fn automation_mcp_profile_skips_unavailable_servers() {
-        let profile = AutomationMcpProfile::new(
-            Path::new(""),
-            Path::new(""),
-            None,
-            false,
-        );
+        let profile = AutomationMcpProfile::new(Path::new(""), Path::new(""), None, false);
         assert!(profile.render_toml().is_empty());
     }
 

@@ -16,6 +16,17 @@ pub enum CodexSandboxMode {
 }
 
 impl CodexSandboxMode {
+    pub const fn from_permissions(
+        mode: CodexPermissionMode,
+        allow_outside_workspace: bool,
+    ) -> Self {
+        match (mode, allow_outside_workspace) {
+            (CodexPermissionMode::Restricted, _) => Self::ReadOnly,
+            (_, true) => Self::FullAccess,
+            (_, false) => Self::WorkspaceWrite,
+        }
+    }
+
     pub const fn sandbox(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
@@ -185,6 +196,28 @@ mod tests {
         let full = thread_start_params(&options(CodexPermissionMode::FullAccess));
         assert_eq!(full["sandbox"], "danger-full-access");
         assert_eq!(full["approvalPolicy"], "never");
+    }
+
+    #[test]
+    fn runtime_regression_foreground_keeps_approval_and_sandbox_independent() {
+        for mode in [
+            CodexPermissionMode::Restricted,
+            CodexPermissionMode::Approval,
+            CodexPermissionMode::FullAccess,
+        ] {
+            for outside in [false, true] {
+                let mut options = options(mode);
+                options.sandbox_mode = CodexSandboxMode::from_permissions(mode, outside);
+                for params in [
+                    thread_start_params(&options),
+                    thread_resume_params("t", &options),
+                    turn_start_params("t", &options),
+                ] {
+                    assert_eq!(params["sandbox"], options.sandbox_mode.sandbox());
+                    assert_eq!(params["approvalPolicy"], mode.approval_policy());
+                }
+            }
+        }
     }
 
     #[test]

@@ -262,40 +262,10 @@ async fn run_im_agent_and_send_reply(
 }
 
 /// Open a local file or directory with the system default application.
-/// On Windows, directories are opened with `explorer.exe` to guarantee
-/// Explorer opens (ShellExecute "open" verb is unreliable for directories).
-/// Files are opened with the `start` command (equivalent to double-clicking).
+/// Open a validated URL or local path using the platform's native association.
 #[tauri::command]
 pub(crate) fn open_path(path: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let p = std::path::Path::new(&path);
-        if p.is_dir() {
-            crate::process::std_command("explorer")
-                .arg(&path)
-                .spawn()
-                .map_err(|e| format!("Failed to open directory in Explorer: {e}"))?;
-        } else {
-            crate::process::std_command("cmd")
-                .args(["/c", "start", "", &path])
-                .spawn()
-                .map_err(|e| format!("Failed to open file: {e}"))?;
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let cmd = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        crate::process::std_command(cmd)
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("Failed to open path: {e}"))?;
-        Ok(())
-    }
+    super::external_open::open(&path)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -316,6 +286,9 @@ fn run_impl() {
         .unwrap_or(false);
 
     let mut builder = tauri::Builder::default()
+        .register_uri_scheme_protocol("harmony-preview", |_ctx, request| {
+            crate::commands::artifact_preview::serve_html_preview(request)
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -1240,6 +1213,9 @@ fn run_impl() {
             crate::codex_runtime::service::codex_chat_cancel,
             commands::artifact_preview::get_artifact_preview,
             commands::artifact_preview::save_artifact_copy,
+            commands::usage_policy::usage_get,
+            commands::global_search::global_search,
+            commands::usage_policy::usage_set_budget,
             // config/
             commands::config::settings::get_settings,
             commands::config::settings::get_default_workspace,
@@ -1381,6 +1357,9 @@ fn run_impl() {
             commands::chat::chat_cancel,
             commands::journal::journal_list_changes,
             commands::journal::journal_undo_last,
+            commands::journal::journal_review,
+            commands::journal::journal_diff,
+            commands::journal::journal_restore_file,
             commands::chat::get_context_preview,
             commands::chat::scheduler::list_tasks,
             commands::chat::scheduler::create_task,
@@ -1472,6 +1451,8 @@ fn run_impl() {
             commands::platform::system::check_runtimes,
             commands::platform::system::check_environment_bootstrap,
             commands::platform::system::run_environment_bootstrap,
+            commands::platform::system::runtime_health::check_runtime_diagnostics,
+            commands::platform::system::runtime_health::export_runtime_diagnostics,
             commands::platform::system::install_environment_bootstrap_item,
             commands::platform::system::check_system_dependencies,
             commands::platform::system::check_privilege_elevation,
@@ -1500,6 +1481,24 @@ mod tests {
     use crate::{gateway, store};
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn security_open_path_rejects_unknown_protocol_before_launch() {
+        assert!(super::open_path("harmony-security-test-unknown://sentinel".into()).is_err());
+    }
+
+    #[test]
+    fn security_open_path_never_uses_command_interpreter() {
+        let source = include_str!("bootstrap.rs");
+        let implementation = source
+            .split("pub(crate) fn open_path")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg_attr(mobile")
+            .next()
+            .unwrap();
+        assert!(!implementation.contains("std_command(\"cmd\")"));
+    }
 
     fn inbound_message() -> gateway::InboundMessage {
         gateway::InboundMessage {

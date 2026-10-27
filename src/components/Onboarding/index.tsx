@@ -19,6 +19,8 @@ interface Props {
   onComplete: () => void;
 }
 
+import { mainChatCapability } from "../../utils/providerCapabilities";
+
 type Step = "welcome" | "provider" | "policy" | "done";
 
 const PROVIDERS = [
@@ -120,7 +122,7 @@ const PROVIDERS = [
     placeholder: "model-name",
     keyPlaceholder: "sk-...",
     guide: "",
-    guideText: "填写兼容 OpenAI /v1 接口的 Base URL 和 API Key。",
+    guideText: "填写支持 /v1/responses 的接口地址和 API Key。",
   },
 ];
 
@@ -207,6 +209,7 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   const fetchModels = async () => {
+    if (!mainChatCapability(provider).selectable) { setError(mainChatCapability(provider).message); return; }
     if (!apiKey.trim()) {
       setError(t("onboarding.apiKeyRequired"));
       return;
@@ -242,6 +245,7 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   const handleSave = async () => {
+    if (!apiSkipped && !mainChatCapability(provider).selectable) { setError(mainChatCapability(provider).message); return; }
     if (!apiSkipped && !apiKey.trim()) {
       setError(t("onboarding.apiKeyRequired"));
       return;
@@ -377,9 +381,10 @@ export default function Onboarding({ onComplete }: Props) {
               <label className="label">{t("onboarding.aiProvider")}</label>
               <select className="input" value={provider} onChange={(e) => changeProvider(e.target.value)}>
                 {PROVIDERS.map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
+                  <option key={item.id} value={item.id} disabled={!mainChatCapability(item.id).selectable}>{item.label}{mainChatCapability(item.id).selectable ? "" : "（主会话暂不支持）"}</option>
                 ))}
               </select>
+              <p role="note" style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8 }}>{mainChatCapability(provider).message}</p>
             </div>
 
             {provider === "custom" && (

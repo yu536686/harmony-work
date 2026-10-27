@@ -942,7 +942,15 @@ impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
         let mut settings = if path.exists() {
             let content = std::fs::read_to_string(path)?;
-            match serde_json::from_str::<Settings>(&content) {
+            let parsed = serde_json::from_str::<serde_json::Value>(&content);
+            let parsed = match parsed {
+                Ok(mut value) => {
+                    Self::mark_stored_secrets(&mut value)?;
+                    serde_json::from_value::<Settings>(value)
+                }
+                Err(error) => Err(error),
+            };
+            match parsed {
                 Ok(s) => s,
                 Err(e) => {
                     // Log the parse error and keep the broken file as a backup
@@ -965,37 +973,37 @@ impl Settings {
         settings.migrate_public_service_urls();
         sanitize_workspace_root(&mut settings);
 
-        // Decrypt API keys (hex-encoded ciphertext on disk).
-        // If decryption fails the value is likely still plaintext (pre-migration);
-        // keep it as-is and the next save() will encrypt it.
-        if let Some(store) = Self::secret_store(path) {
-            Self::try_decrypt_field(&store, &mut settings.anthropic_api_key);
-            Self::try_decrypt_field(&store, &mut settings.openai_api_key);
-            Self::try_decrypt_field(&store, &mut settings.deepseek_api_key);
-            Self::try_decrypt_field(&store, &mut settings.qwen_api_key);
-            Self::try_decrypt_field(&store, &mut settings.minimax_api_key);
-            Self::try_decrypt_field(&store, &mut settings.zhipu_api_key);
-            Self::try_decrypt_field(&store, &mut settings.kimi_api_key);
-            Self::try_decrypt_field(&store, &mut settings.siliconflow_api_key);
-            Self::try_decrypt_field(&store, &mut settings.harmony_api_key);
-            Self::try_decrypt_field(&store, &mut settings.feishu_app_secret);
-            Self::try_decrypt_field(&store, &mut settings.wecom_bot_secret);
-            Self::try_decrypt_field(&store, &mut settings.dingtalk_app_secret);
-            Self::try_decrypt_field(&store, &mut settings.dingtalk_robot_code);
-            Self::try_decrypt_field(&store, &mut settings.telegram_bot_token);
-            Self::try_decrypt_field(&store, &mut settings.matrix_access_token);
-            Self::try_decrypt_field(&store, &mut settings.webhook_auth_token);
-            Self::try_decrypt_field(&store, &mut settings.wechat_gateway_token);
-            Self::try_decrypt_field(&store, &mut settings.wechat_bot_token);
-            Self::try_decrypt_field(&store, &mut settings.smtp_password);
+        // Legacy values remain readable; versioned ciphertext must decrypt successfully.
+        {
+            let store = Self::secret_store(path)?;
+            Self::try_decrypt_field(&store, &mut settings.anthropic_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.openai_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.deepseek_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.qwen_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.minimax_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.zhipu_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.kimi_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.siliconflow_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.harmony_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.vision_api_key)?;
+            Self::try_decrypt_field(&store, &mut settings.feishu_app_secret)?;
+            Self::try_decrypt_field(&store, &mut settings.wecom_bot_secret)?;
+            Self::try_decrypt_field(&store, &mut settings.dingtalk_app_secret)?;
+            Self::try_decrypt_field(&store, &mut settings.dingtalk_robot_code)?;
+            Self::try_decrypt_field(&store, &mut settings.telegram_bot_token)?;
+            Self::try_decrypt_field(&store, &mut settings.matrix_access_token)?;
+            Self::try_decrypt_field(&store, &mut settings.webhook_auth_token)?;
+            Self::try_decrypt_field(&store, &mut settings.wechat_gateway_token)?;
+            Self::try_decrypt_field(&store, &mut settings.wechat_bot_token)?;
+            Self::try_decrypt_field(&store, &mut settings.smtp_password)?;
             // Decrypt SSH server credentials
             for srv in &mut settings.ssh_servers {
-                Self::try_decrypt_field(&store, &mut srv.password);
-                Self::try_decrypt_field(&store, &mut srv.private_key);
+                Self::try_decrypt_field(&store, &mut srv.password)?;
+                Self::try_decrypt_field(&store, &mut srv.private_key)?;
             }
             // Decrypt named LLM provider API keys
             for p in &mut settings.llm_providers {
-                Self::try_decrypt_field(&store, &mut p.api_key);
+                Self::try_decrypt_field(&store, &mut p.api_key)?;
             }
         }
         Ok(settings)
@@ -1008,64 +1016,168 @@ impl Settings {
         let mut clone = self.clone();
         clone.migrate_public_service_urls();
         // Encrypt secret fields before writing to disk
-        if let Some(store) = Self::secret_store(&self.config_path) {
-            Self::encrypt_field(&store, &mut clone.anthropic_api_key);
-            Self::encrypt_field(&store, &mut clone.openai_api_key);
-            Self::encrypt_field(&store, &mut clone.deepseek_api_key);
-            Self::encrypt_field(&store, &mut clone.qwen_api_key);
-            Self::encrypt_field(&store, &mut clone.minimax_api_key);
-            Self::encrypt_field(&store, &mut clone.zhipu_api_key);
-            Self::encrypt_field(&store, &mut clone.kimi_api_key);
-            Self::encrypt_field(&store, &mut clone.siliconflow_api_key);
-            Self::encrypt_field(&store, &mut clone.harmony_api_key);
-            Self::encrypt_field(&store, &mut clone.feishu_app_secret);
-            Self::encrypt_field(&store, &mut clone.wecom_bot_secret);
-            Self::encrypt_field(&store, &mut clone.dingtalk_app_secret);
-            Self::encrypt_field(&store, &mut clone.dingtalk_robot_code);
-            Self::encrypt_field(&store, &mut clone.telegram_bot_token);
-            Self::encrypt_field(&store, &mut clone.matrix_access_token);
-            Self::encrypt_field(&store, &mut clone.webhook_auth_token);
-            Self::encrypt_field(&store, &mut clone.wechat_gateway_token);
-            Self::encrypt_field(&store, &mut clone.wechat_bot_token);
-            Self::encrypt_field(&store, &mut clone.smtp_password);
+        {
+            let store = Self::secret_store(&self.config_path)?;
+            Self::encrypt_field(&store, &mut clone.anthropic_api_key)?;
+            Self::encrypt_field(&store, &mut clone.openai_api_key)?;
+            Self::encrypt_field(&store, &mut clone.deepseek_api_key)?;
+            Self::encrypt_field(&store, &mut clone.qwen_api_key)?;
+            Self::encrypt_field(&store, &mut clone.minimax_api_key)?;
+            Self::encrypt_field(&store, &mut clone.zhipu_api_key)?;
+            Self::encrypt_field(&store, &mut clone.kimi_api_key)?;
+            Self::encrypt_field(&store, &mut clone.siliconflow_api_key)?;
+            Self::encrypt_field(&store, &mut clone.harmony_api_key)?;
+            Self::encrypt_field(&store, &mut clone.vision_api_key)?;
+            Self::encrypt_field(&store, &mut clone.feishu_app_secret)?;
+            Self::encrypt_field(&store, &mut clone.wecom_bot_secret)?;
+            Self::encrypt_field(&store, &mut clone.dingtalk_app_secret)?;
+            Self::encrypt_field(&store, &mut clone.dingtalk_robot_code)?;
+            Self::encrypt_field(&store, &mut clone.telegram_bot_token)?;
+            Self::encrypt_field(&store, &mut clone.matrix_access_token)?;
+            Self::encrypt_field(&store, &mut clone.webhook_auth_token)?;
+            Self::encrypt_field(&store, &mut clone.wechat_gateway_token)?;
+            Self::encrypt_field(&store, &mut clone.wechat_bot_token)?;
+            Self::encrypt_field(&store, &mut clone.smtp_password)?;
             // Encrypt SSH server credentials
             for srv in &mut clone.ssh_servers {
-                Self::encrypt_field(&store, &mut srv.password);
-                Self::encrypt_field(&store, &mut srv.private_key);
+                Self::encrypt_field(&store, &mut srv.password)?;
+                Self::encrypt_field(&store, &mut srv.private_key)?;
             }
             // Encrypt named LLM provider API keys
             for p in &mut clone.llm_providers {
-                Self::encrypt_field(&store, &mut p.api_key);
+                Self::encrypt_field(&store, &mut p.api_key)?;
             }
         }
-        let json = serde_json::to_string_pretty(&clone)?;
-        std::fs::write(&self.config_path, json)?;
+        let mut stored = serde_json::to_value(&clone)?;
+        let mut encrypted = Vec::new();
+        for pointer in Self::secret_field_paths(&stored) {
+            if let Some(value) = stored.pointer_mut(&pointer) {
+                if let Some(ciphertext) = value.as_str().and_then(|text| text.strip_prefix("enc:v1:")) {
+                    let ciphertext = ciphertext.to_string();
+                    *value = ciphertext.into();
+                    encrypted.push(pointer);
+                }
+            }
+        }
+        // Keep legacy ciphertext unchanged for 1.1.2 rollback; metadata is ignored by that reader.
+        stored["_secret_storage"] = serde_json::json!({ "version": 1, "fields": encrypted });
+        self.preserve_legacy_snapshot()?;
+        let json = serde_json::to_string_pretty(&stored)?;
+        let temporary = self
+            .config_path
+            .with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> Result<()> {
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temporary, &self.config_path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result?;
         Ok(())
     }
 
-    fn secret_store(config_path: &Path) -> Option<super::secrets::SecretStore> {
-        config_path
+    fn secret_store(config_path: &Path) -> Result<super::secrets::SecretStore> {
+        let dir = config_path
             .parent()
-            .and_then(|dir| super::secrets::SecretStore::new(dir).ok())
+            .ok_or_else(|| anyhow::anyhow!("Missing settings directory"))?;
+        super::secrets::SecretStore::new(dir)
     }
 
-    fn encrypt_field(store: &super::secrets::SecretStore, field: &mut String) {
-        if field.is_empty() {
-            return;
+    fn secret_field_paths(value: &serde_json::Value) -> Vec<String> {
+        let mut paths = ["anthropic_api_key", "openai_api_key", "deepseek_api_key", "qwen_api_key",
+            "minimax_api_key", "zhipu_api_key", "kimi_api_key", "siliconflow_api_key", "harmony_api_key",
+            "vision_api_key", "feishu_app_secret", "wecom_bot_secret", "dingtalk_app_secret", "dingtalk_robot_code",
+            "telegram_bot_token", "matrix_access_token", "webhook_auth_token", "wechat_gateway_token",
+            "wechat_bot_token", "smtp_password"].into_iter().map(|field| format!("/{field}")).collect::<Vec<_>>();
+        for (array, fields) in [("ssh_servers", &["password", "private_key"][..]), ("llm_providers", &["api_key"][..])] {
+            for index in 0..value.get(array).and_then(serde_json::Value::as_array).map_or(0, Vec::len) {
+                for field in fields { paths.push(format!("/{array}/{index}/{field}")); }
+            }
         }
-        if let Ok(encrypted) = store.encrypt_hex(field) {
-            *field = encrypted;
-        }
+        paths
     }
 
-    fn try_decrypt_field(store: &super::secrets::SecretStore, field: &mut String) {
-        if field.is_empty() {
-            return;
+    fn mark_stored_secrets(value: &mut serde_json::Value) -> Result<()> {
+        let Some(metadata) = value.get("_secret_storage") else { return Ok(()); };
+        anyhow::ensure!(metadata.get("version").and_then(serde_json::Value::as_u64) == Some(1), "Unsupported secret storage metadata");
+        let fields = metadata.get("fields").and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("Invalid secret storage metadata"))?.clone();
+        let allowed = Self::secret_field_paths(value);
+        let mut seen = std::collections::HashSet::new();
+        for field in fields {
+            let pointer = field.as_str().ok_or_else(|| anyhow::anyhow!("Invalid secret field marker"))?;
+            anyhow::ensure!(allowed.iter().any(|path| path == pointer) && seen.insert(pointer.to_string()), "Invalid secret field marker");
+            let stored = value.pointer_mut(pointer).ok_or_else(|| anyhow::anyhow!("Missing marked secret"))?;
+            let ciphertext = stored.as_str().filter(|text| !text.is_empty()).ok_or_else(|| anyhow::anyhow!("Invalid marked secret"))?;
+            *stored = format!("enc:v1:{ciphertext}").into();
         }
-        if let Ok(decrypted) = store.decrypt_hex(field) {
+        Ok(())
+    }
+
+    fn preserve_legacy_snapshot(&self) -> Result<()> {
+        if self.vision_api_key.is_empty() || !self.config_path.is_file() { return Ok(()); }
+        let original = std::fs::read(&self.config_path)?;
+        let value: serde_json::Value = serde_json::from_slice(&original)?;
+        if value.get("_secret_storage").is_some() { return Ok(()); }
+        let snapshot = self.config_path.with_file_name(format!("{}.pre-1.1.3.snapshot", self.config_path.file_name().unwrap().to_string_lossy()));
+        match std::fs::symlink_metadata(&snapshot) {
+            Ok(metadata) => {
+                anyhow::ensure!(metadata.is_file() && !metadata.file_type().is_symlink(), "Invalid settings recovery snapshot");
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let protected = Self::secret_store(&self.config_path)?.encrypt(&String::from_utf8(original)?)?;
+        let temporary = snapshot.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> Result<()> {
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)] {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(&protected)?; file.sync_all()?; drop(file);
+            match std::fs::hard_link(&temporary, &snapshot) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        result
+    }
+
+    fn encrypt_field(store: &super::secrets::SecretStore, field: &mut String) -> Result<()> {
+        if !field.is_empty() {
+            *field = format!("enc:v1:{}", store.encrypt_hex(field)?);
+        }
+        Ok(())
+    }
+
+    fn try_decrypt_field(store: &super::secrets::SecretStore, field: &mut String) -> Result<()> {
+        if let Some(ciphertext) = field.strip_prefix("enc:v1:") {
+            *field = store.decrypt_hex(ciphertext)?;
+        } else if let Ok(decrypted) = store.decrypt_hex(field) {
+            // Old ciphertext and plaintext had no discriminator; retain legacy plaintext on failure.
             *field = decrypted;
         }
-        // If decrypt fails, the field is probably still plaintext (legacy) — keep as-is
+        Ok(())
     }
 
     /// Returns true if at least one API key is configured
@@ -1179,8 +1291,165 @@ pub const CLOUD_EXCLUDED_SETTING_KEYS: &[&str] = &[
 ];
 
 #[cfg(test)]
+#[path = "tests/legacy112_decrypt.rs"]
+mod legacy112_decrypt;
+
+#[cfg(test)]
 mod tests {
     use super::{sanitize_workspace_root, Settings};
+
+    #[test]
+    fn account_settings_112_actual_decrypt_reads_new_saved_legacy_fields() {
+        use super::legacy112_decrypt::Legacy112;
+        let dir = std::env::temp_dir().join(format!("harmony-112-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fields = ["anthropic_api_key", "openai_api_key", "deepseek_api_key", "qwen_api_key",
+            "minimax_api_key", "zhipu_api_key", "kimi_api_key", "siliconflow_api_key", "harmony_api_key",
+            "feishu_app_secret", "wecom_bot_secret", "dingtalk_app_secret", "dingtalk_robot_code",
+            "telegram_bot_token", "matrix_access_token", "webhook_auth_token", "wechat_gateway_token",
+            "wechat_bot_token", "smtp_password"];
+        let mut data = serde_json::to_value(Settings::default()).unwrap();
+        for field in fields { data[field] = format!("compat-test-{field}").into(); }
+        data["ssh_servers"] = serde_json::json!([{"id":"s", "host":"localhost", "port":22,
+            "username":"user", "password":"compat-password", "private_key":"compat-private-key"}]);
+        data["llm_providers"] = serde_json::json!([{"id":"p", "label":"P", "provider":"custom", "model":"m",
+            "api_key":"compat-named-key", "base_url":"", "max_tokens":0}]);
+        let mut settings: Settings = serde_json::from_value(data).unwrap();
+        settings.config_path = dir.join("settings.json");
+        settings.save().unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&settings.config_path).unwrap()).unwrap();
+        // The old Settings serde parser ignores the new metadata, just as 1.1.2 did.
+        let _: Settings = serde_json::from_value(saved.clone()).unwrap();
+        let store = crate::store::secrets::SecretStore::new(&dir).unwrap();
+        for field in fields {
+            let mut value = saved[field].as_str().unwrap().to_string();
+            Legacy112::try_decrypt_field(&store, &mut value);
+            assert!(value == format!("compat-test-{field}"), "1.1.2 cannot decrypt field {field}");
+        }
+        for (pointer, expected) in [("/ssh_servers/0/password", "compat-password"),
+            ("/ssh_servers/0/private_key", "compat-private-key"), ("/llm_providers/0/api_key", "compat-named-key")] {
+            let mut value = saved.pointer(pointer).unwrap().as_str().unwrap().to_string();
+            Legacy112::try_decrypt_field(&store, &mut value);
+            assert!(value == expected, "1.1.2 cannot decrypt nested field {pointer}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_metadata_marks_ciphertext_and_corruption_fails_closed() {
+        let dir = std::env::temp_dir().join(format!("harmony-metadata-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.config_path = path.clone();
+        settings.harmony_api_key = "compat-main".into();
+        settings.vision_api_key = "compat-vision".into();
+        settings.save().unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["_secret_storage"]["version"], 1);
+        let fields = saved["_secret_storage"]["fields"].as_array().unwrap();
+        assert!(fields.contains(&serde_json::json!("/vision_api_key")));
+        assert!(fields.contains(&serde_json::json!("/harmony_api_key")));
+        saved["vision_api_key"] = "corrupted".into();
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert!(Settings::load(&path).is_err(), "marked ciphertext must not degrade to plaintext");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_snapshot_is_preserved_before_vision_migration() {
+        let dir = std::env::temp_dir().join(format!("harmony-snapshot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.vision_api_key = "original-vision-test".into();
+        let original = serde_json::to_vec_pretty(&settings).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let mut loaded = Settings::load(&path).unwrap();
+        loaded.save().unwrap();
+        let snapshot = dir.join("settings.json.pre-1.1.3.snapshot");
+        assert!(snapshot.is_file(), "pre-upgrade settings snapshot is required before visual key migration");
+        let before = std::fs::read(&snapshot).unwrap();
+        assert!(!String::from_utf8_lossy(&before).contains("original-vision-test"));
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&snapshot).unwrap().permissions().mode() & 0o077, 0);
+        }
+        loaded.language = "en".into();
+        loaded.save().unwrap();
+        assert_eq!(std::fs::read(&snapshot).unwrap(), before, "never replace the upgrade snapshot");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_legacy_hex_plaintext_remains_readable() {
+        let dir = std::env::temp_dir().join(format!("harmony-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let key = "abcdef0123456789".repeat(4);
+        let mut settings = Settings::default();
+        settings.vision_api_key = key.clone();
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let loaded = Settings::load(&path).expect("legacy plaintext hex token must still load");
+        assert_eq!(loaded.vision_api_key, key);
+        loaded.save().unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains(&key));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_versioned_ciphertext_corruption_fails_closed() {
+        let dir = std::env::temp_dir().join(format!("harmony-corrupt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.vision_api_key = "enc:v1:corrupted".into();
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert!(Settings::load(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_vision_secret_round_trip() {
+        let dir = std::env::temp_dir().join(format!("harmony-secret-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut settings = Settings::default();
+        settings.config_path = dir.join("settings.json");
+        settings.vision_api_key = "sk-vision-sensitive".into();
+        settings.save().unwrap();
+        let disk = std::fs::read_to_string(&settings.config_path).unwrap();
+        assert!(
+            !disk.contains("sk-vision-sensitive"),
+            "vision key leaked as plaintext"
+        );
+        assert_eq!(
+            Settings::load(&settings.config_path)
+                .unwrap()
+                .vision_api_key,
+            "sk-vision-sensitive"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_secret_store_failure_preserves_existing_file() {
+        let dir = std::env::temp_dir().join(format!("harmony-secret-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut settings = Settings::default();
+        settings.config_path = dir.join("settings.json");
+        std::fs::write(&settings.config_path, "original").unwrap();
+        std::fs::write(dir.join(".secret_key"), "broken").unwrap();
+        settings.harmony_api_key = "sk-do-not-leak".into();
+        assert!(
+            settings.save().is_err(),
+            "must fail closed rather than write plaintext"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&settings.config_path).unwrap(),
+            "original"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn public_service_urls_migrate_from_cloud_without_changing_keys_or_local_urls() {

@@ -34,6 +34,8 @@ import remarkGfm from "remark-gfm";
 import InteractiveCard from "./InteractiveCard";
 import ExecutionTimeline from "./ExecutionTimeline";
 import WorkbenchPanel, { type WorkbenchBrowserTarget } from "./WorkbenchPanel";
+import MessageAttachments from "./MessageAttachments";
+import { mainChatCapability } from "../../utils/providerCapabilities";
 import {
   addAnnotation,
   annotationAnchor,
@@ -541,6 +543,11 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
     if (pendingMainChatNav.sessionId) {
       setIsDraft(false);
       dispatch(sessionsActions.setActiveSession(pendingMainChatNav.sessionId));
+      if (pendingMainChatNav.focusArtifacts) {
+        const id = pendingMainChatNav.sessionId;
+        setWorkbenchOpenBySession(current => ({ ...current, [id]: true }));
+        setFocusedArtifactIdBySession(current => ({ ...current, [id]: pendingMainChatNav.artifactId ?? null }));
+      }
     }
     if (pendingMainChatNav.composerDraft) {
       setInput(pendingMainChatNav.composerDraft);
@@ -996,6 +1003,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
   const chatLayoutRef = useRef<HTMLDivElement | null>(null);
   const workbenchResizeCleanupRef = useRef<(() => void) | null>(null);
   const [focusedArtifactUriBySession, setFocusedArtifactUriBySession] = useState<Record<string, string>>({});
+  const [focusedArtifactIdBySession, setFocusedArtifactIdBySession] = useState<Record<string, string | null>>({});
   const [browserTargetBySession, setBrowserTargetBySession] = useState<Record<string, WorkbenchBrowserTarget>>({});
   const [annotationDraftsBySession, setAnnotationDraftsBySession] = useState<Record<string, AnnotationDraftState>>({});
   const [focusedAnnotationId, setFocusedAnnotationId] = useState<string | null>(null);
@@ -2046,8 +2054,9 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
       ...(currentSettings.enabled_models ?? []),
       currentSettings.model,
     ].filter(Boolean) as string[]));
-    globalModels.forEach((m) => addModel("current", m));
+    if (mainChatCapability(currentSettings.provider).selectable) globalModels.forEach((m) => addModel("current", m));
     for (const p of currentSettings.llm_providers ?? []) {
+      if (!mainChatCapability(p.provider).selectable) continue;
       const models = [p.model, ...(p.enabled_models ?? [])].filter(Boolean) as string[];
       models.forEach((m) => addModel(`named:${p.id}`, m, p.label || p.id));
     }
@@ -2421,7 +2430,14 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
         role: "user",
         content: displayContent,
         created_at: new Date().toISOString(),
-        context_json: commentContexts.length ? JSON.stringify(commentContexts) : null,
+        context_json: attachments.length ? JSON.stringify({
+          annotations: commentContexts,
+          attachments: attachments.filter(item => item.attachment.path).map(item => ({
+            path: item.attachment.path,
+            name: item.attachment.filename,
+            mediaType: item.attachment.media_type,
+          })),
+        }) : commentContexts.length ? JSON.stringify(commentContexts) : null,
       },
     }));
 
@@ -2588,7 +2604,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
 
   const handleCancel = useCallback(() => {
     if (displaySessionId) {
-      chatApi.cancel(displaySessionId);
+      void chatApi.cancel(displaySessionId).catch(error => setSendError(`停止任务失败：${String(error)}`));
     }
   }, [displaySessionId]);
 
@@ -2893,6 +2909,7 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
                       </div>
                       <div className="message-content">
                         <MessageContent content={msg.content} onOpenHarmonyCut={(projectId) => onNavigateTab?.("harmony-cut", { projectId, sessionId: displaySessionId })} onOpenArtifact={openArtifactInWorkbench} onOpenBrowser={openBrowserInWorkbench} />
+                        {msg.role === "user" && <MessageAttachments context={msg.context_json} onOpen={openArtifactInWorkbench} />}
                         {msg.role === "assistant" && !running && messageIndex === activeMessages.length - 1 && (
                           <ArtifactQuickLinks
                             artifacts={activeArtifacts}
@@ -3271,6 +3288,15 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
               role="separator"
               aria-orientation="vertical"
               aria-label="调整工具面板宽度"
+              tabIndex={0}
+              aria-valuemin={WORKBENCH_MIN_WIDTH}
+              aria-valuenow={workbenchWidth}
+              onKeyDown={event => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const max = Math.max(WORKBENCH_MIN_WIDTH, (chatLayoutRef.current?.clientWidth ?? 980) - CHAT_MAIN_MIN_WIDTH);
+                setWorkbenchWidth(width => event.key === "Home" ? WORKBENCH_MIN_WIDTH : event.key === "End" ? max : Math.min(max, Math.max(WORKBENCH_MIN_WIDTH, width + (event.key === "ArrowLeft" ? 32 : -32))));
+              }}
               onPointerDown={beginWorkbenchResize}
             />
           )}
@@ -3278,6 +3304,8 @@ export default function Chat({ onNavigateTab, sidebarHost, sidebarCollapsed = fa
             open={workbenchOpen}
             width={workbenchWidth}
             sessionId={displaySessionId}
+            workspaceRoot={displaySession?.workspace_root || globalWorkspace}
+            focusedArtifactId={focusedArtifactIdBySession[displaySessionId]}
             artifacts={workbenchArtifacts}
             execution={executionModel}
             annotations={activeAnnotationDraft.items}

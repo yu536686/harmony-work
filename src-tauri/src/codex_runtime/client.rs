@@ -4,7 +4,8 @@ use crate::codex_runtime::protocol::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
@@ -20,6 +21,8 @@ pub enum AppServerError {
     Rpc(Value),
     #[error("failed to encode app-server request: {0}")]
     Encode(#[from] serde_json::Error),
+    #[error("app-server RPC timed out")]
+    Timeout,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,8 +46,23 @@ impl AppServerEventReceiver {
 
 struct ClientInner<W> {
     writer: Mutex<W>,
-    pending: Mutex<HashMap<String, PendingResponse>>,
+    pending: StdMutex<HashMap<String, PendingResponse>>,
     next_id: AtomicU64,
+}
+
+struct PendingRequest<W> {
+    inner: Arc<ClientInner<W>>,
+    key: String,
+}
+
+impl<W> Drop for PendingRequest<W> {
+    fn drop(&mut self) {
+        self.inner
+            .pending
+            .lock()
+            .expect("pending responses")
+            .remove(&self.key);
+    }
 }
 
 pub struct AppServerClient<W> {
@@ -69,7 +87,7 @@ where
     {
         let inner = Arc::new(ClientInner {
             writer: Mutex::new(writer),
-            pending: Mutex::new(HashMap::new()),
+            pending: StdMutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         });
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
@@ -84,18 +102,40 @@ where
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, AppServerError> {
+        self.request_with_timeout(method, params, Duration::from_secs(30))
+            .await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, AppServerError> {
+        tokio::time::timeout(timeout, self.request_inner(method, params))
+            .await
+            .map_err(|_| AppServerError::Timeout)?
+    }
+
+    async fn request_inner(&self, method: &str, params: Value) -> Result<Value, AppServerError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let key = id.to_string();
         let (sender, receiver) = oneshot::channel();
-        self.inner.pending.lock().await.insert(key.clone(), sender);
-
-        if let Err(error) = self
-            .write_message(&json!({"id": id, "method": method, "params": params}))
+        self.inner
+            .pending
+            .lock()
+            .expect("pending responses")
+            .insert(key.clone(), sender);
+        let _pending = PendingRequest {
+            inner: self.inner.clone(),
+            key,
+        };
+        let message = json!({"id": id, "method": method, "params": params});
+        let client = self.clone();
+        // A dropped request must not leave half a JSON frame in the shared pipe.
+        tokio::spawn(async move { client.write_message(&message).await })
             .await
-        {
-            self.inner.pending.lock().await.remove(&key);
-            return Err(error);
-        }
+            .map_err(|error| AppServerError::Transport(error.to_string()))??;
 
         receiver
             .await
@@ -136,7 +176,12 @@ fn spawn_reader<R, W>(
                 Ok(Some(line)) => match parse_incoming(&line) {
                     Ok(IncomingMessage::Response(response)) => {
                         let key = response_key(&response.id);
-                        if let Some(sender) = inner.pending.lock().await.remove(&key) {
+                        if let Some(sender) = inner
+                            .pending
+                            .lock()
+                            .expect("pending responses")
+                            .remove(&key)
+                        {
                             let outcome = match response.error {
                                 Some(error) => Err(AppServerError::Rpc(error)),
                                 None => Ok(response.result.unwrap_or(Value::Null)),
@@ -162,7 +207,7 @@ fn spawn_reader<R, W>(
             }
         }
 
-        for (_, sender) in inner.pending.lock().await.drain() {
+        for (_, sender) in inner.pending.lock().expect("pending responses").drain() {
             let _ = sender.send(Err(AppServerError::TransportClosed));
         }
         let _ = events.send(AppServerEvent::Closed);
@@ -192,6 +237,72 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn cancelled_request_does_not_leave_a_pending_response() {
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (reader, writer) = split(client_stream);
+        let (client, _events) = AppServerClient::new(reader, writer);
+        let running_client = client.clone();
+        let running =
+            tokio::spawn(async move { running_client.request("stalled", json!({})).await });
+        let mut lines = BufReader::new(server_stream).lines();
+        lines.next_line().await.unwrap().unwrap();
+        running.abort();
+        let _ = running.await;
+        assert!(client.inner.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_request_expires_and_unregisters_without_a_response() {
+        let (client_stream, _server_stream) = tokio::io::duplex(4096);
+        let (reader, writer) = split(client_stream);
+        let (client, _events) = AppServerClient::new(reader, writer);
+        assert!(matches!(
+            client
+                .request_with_timeout("stalled", json!({}), Duration::from_millis(30))
+                .await,
+            Err(AppServerError::Timeout)
+        ));
+        assert!(client.inner.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_partial_write_preserves_shared_json_framing() {
+        use tokio::io::AsyncReadExt;
+        let (client_stream, server_stream) = tokio::io::duplex(64);
+        let (reader, writer) = split(client_stream);
+        let (server_reader, mut server_writer) = split(server_stream);
+        let (client, _events) = AppServerClient::new(reader, writer);
+        let first_client = client.clone();
+        let first = tokio::spawn(async move {
+            first_client
+                .request("first", json!({"text":"x".repeat(4096)}))
+                .await
+        });
+        let mut reader = BufReader::new(server_reader);
+        let mut prefix = [0_u8; 8];
+        reader.read_exact(&mut prefix).await.unwrap();
+        first.abort();
+        let _ = first.await;
+        let second_client = client.clone();
+        let second = tokio::spawn(async move { second_client.request("second", json!({})).await });
+        let mut rest = String::new();
+        reader.read_line(&mut rest).await.unwrap();
+        let first_json: Value =
+            serde_json::from_slice(&[prefix.as_slice(), rest.as_bytes()].concat()).unwrap();
+        assert_eq!(first_json["method"], "first");
+        rest.clear();
+        reader.read_line(&mut rest).await.unwrap();
+        let second_json: Value = serde_json::from_str(&rest).unwrap();
+        assert_eq!(second_json["method"], "second");
+        server_writer
+            .write_all(format!("{}\n", json!({"id":second_json["id"],"result":{}})).as_bytes())
+            .await
+            .unwrap();
+        second.await.unwrap().unwrap();
+        assert!(client.inner.pending.lock().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn correlates_out_of_order_responses() {

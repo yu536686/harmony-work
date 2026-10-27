@@ -11,6 +11,47 @@ pub struct SecretStore {
     key: [u8; 32],
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn account_settings_secret_key_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("harmony-key-{}", uuid::Uuid::new_v4()));
+        SecretStore::new(&dir).unwrap();
+        let mode = std::fs::metadata(dir.join(KEY_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "secret key must not be accessible to other users"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_settings_secrets_round_trip_and_reject_corruption() {
+        let dir = std::env::temp_dir().join(format!("harmony-key-{}", uuid::Uuid::new_v4()));
+        let store = SecretStore::new(&dir).unwrap();
+        let ciphertext = store.encrypt_hex("vision-secret").unwrap();
+        assert_ne!(ciphertext, store.encrypt_hex("vision-secret").unwrap());
+        assert_eq!(
+            SecretStore::new(&dir)
+                .unwrap()
+                .decrypt_hex(&ciphertext)
+                .unwrap(),
+            "vision-secret"
+        );
+        assert!(store.decrypt_hex("not-hex").is_err());
+        assert!(store.decrypt(&[0; 28]).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 impl SecretStore {
     pub fn new(app_dir: &Path) -> Result<Self> {
         let key_path = app_dir.join(KEY_FILE);
@@ -30,10 +71,40 @@ impl SecretStore {
             if let Some(parent) = key_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let mut f = std::fs::File::create(&key_path)?;
-            f.write_all(&key)?;
+            let temporary = key_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+            let published = (|| -> Result<()> {
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(&temporary)?;
+                file.write_all(&key)?;
+                file.sync_all()?;
+                drop(file);
+                // Publish a complete key without overwriting a concurrent creator's key.
+                match std::fs::hard_link(&temporary, &key_path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    Err(error) => Err(error.into()),
+                }
+            })();
+            let _ = std::fs::remove_file(&temporary);
+            published?;
+            let data = std::fs::read(&key_path)?;
+            if data.len() != 32 {
+                return Err(anyhow::anyhow!("Invalid secret key file"));
+            }
+            key.copy_from_slice(&data);
             key
         };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(Self { key })
     }
 

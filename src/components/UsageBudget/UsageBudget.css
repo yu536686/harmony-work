@@ -1,0 +1,12 @@
+.usage-budget { padding: 16px; overflow: auto; min-width: 0; }
+.usage-budget header { display: flex; align-items: center; justify-content: space-between; }
+.usage-budget h2 { margin: 0; font-size: 14px; }
+.usage-budget dl { margin: 20px 0; }
+.usage-budget dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-color); }
+.usage-budget dt { color: var(--text-secondary); }
+.usage-budget dd { margin: 0; font-variant-numeric: tabular-nums; }
+.usage-budget form { display: grid; gap: 16px; margin: 20px 0; }
+.usage-budget label { display: grid; gap: 6px; font-size: 12px; }
+.usage-workspace { overflow-wrap: anywhere; color: var(--text-muted); font-size: 11px; }
+.usage-note { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.usage-budget [role=alert] { color: var(--danger, #c43535); overflow-wrap: anywhere; }

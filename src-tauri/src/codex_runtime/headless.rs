@@ -1,4 +1,4 @@
-use crate::codex_runtime::runner::{CodexAttachment, CodexPermissionMode};
+use crate::codex_runtime::runner::{CodexAttachment, CodexPermissionMode, CodexSandboxMode};
 use crate::process::tokio_command;
 use serde::Serialize;
 use serde_json::Value;
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex as StdMutex,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -18,6 +18,7 @@ pub struct CodexExecOptions {
     pub model: String,
     pub prompt: String,
     pub permission_mode: CodexPermissionMode,
+    pub allow_outside_workspace: bool,
     pub attachments: Vec<CodexAttachment>,
     pub thread_id: Option<String>,
     pub extra_environment: HashMap<String, String>,
@@ -66,6 +67,31 @@ pub enum CodexExecError {
     Timeout,
     #[error("codex exec returned exit code {code:?}: {stderr}")]
     Failed { code: Option<i32>, stderr: String },
+    #[error("{cause}")]
+    Partial {
+        cause: Box<CodexExecError>,
+        result: Box<CodexExecResult>,
+        writers_stopped: bool,
+    },
+}
+
+impl CodexExecError {
+    pub fn partial_result(&self) -> Option<&CodexExecResult> {
+        match self {
+            Self::Partial { result, .. } => Some(result),
+            _ => None,
+        }
+    }
+
+    pub fn writers_stopped(&self) -> bool {
+        match self {
+            Self::Partial {
+                writers_stopped, ..
+            } => *writers_stopped,
+            Self::Start(_) | Self::Cancelled => true,
+            _ => false,
+        }
+    }
 }
 
 pub fn build_exec_command(executable: &Path, options: &CodexExecOptions) -> CodexExecCommand {
@@ -82,16 +108,25 @@ pub fn build_exec_command(executable: &Path, options: &CodexExecOptions) -> Code
         "-c".to_string(),
         format!("model_provider=\"{}\"", options.provider),
     ];
-    match options.permission_mode {
-        CodexPermissionMode::Restricted => {
-            args.extend(["--sandbox".to_string(), "read-only".to_string()]);
-        }
-        CodexPermissionMode::Approval => {
-            args.push("--approve-for-me".to_string());
-        }
-        CodexPermissionMode::FullAccess => {
-            args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
-        }
+    args.extend([
+        "--sandbox".to_string(),
+        CodexSandboxMode::from_permissions(
+            options.permission_mode,
+            options.allow_outside_workspace,
+        )
+        .sandbox()
+        .to_string(),
+        "-c".to_string(),
+        format!(
+            "approval_policy={}",
+            toml::Value::String(options.permission_mode.approval_policy().into())
+        ),
+    ]);
+    if options.permission_mode == CodexPermissionMode::Approval {
+        args.extend([
+            "-c".to_string(),
+            "approvals_reviewer=\"auto_review\"".to_string(),
+        ]);
     }
     for attachment in &options.attachments {
         if attachment.media_type.starts_with("image/") {
@@ -148,16 +183,25 @@ pub async fn run_codex_exec_observed(
     cancellation: Option<Arc<AtomicBool>>,
     observer: Option<mpsc::Sender<Value>>,
 ) -> Result<CodexExecResult, CodexExecError> {
-    let mut child = tokio_command(&command.executable)
+    if cancellation
+        .as_ref()
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+        return Err(CodexExecError::Cancelled);
+    }
+    let mut launch = tokio_command(&command.executable);
+    launch
         .args(&command.args)
         .env("CODEX_HOME", codex_home)
         .envs(environment)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(CodexExecError::Start)?;
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    launch.process_group(0);
+    let mut child = launch.spawn().map_err(CodexExecError::Start)?;
+    let pid = child.id().ok_or(CodexExecError::MissingStdout)?;
     {
         let mut stdin = child.stdin.take().ok_or(CodexExecError::MissingStdin)?;
         stdin.write_all(command.stdin.as_bytes()).await?;
@@ -173,61 +217,114 @@ pub async fn run_codex_exec_observed(
         }
         Ok::<String, std::io::Error>(output.join("\n"))
     });
-    let stdout_task = tokio::spawn(async move {
-        let mut parser = CodexExecJsonlParser::default();
+    let progress = Arc::new(StdMutex::new(CodexExecJsonlParser::default()));
+    let parsed = progress.clone();
+    let mut stdout_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Some(line) = lines.next_line().await? {
-            parser.push_line(&line);
+            parsed.lock().expect("exec progress").push_line(&line);
             if let Some(ref sender) = observer {
                 if let Ok(event) = serde_json::from_str::<Value>(&line) {
                     let _ = sender.try_send(event);
                 }
             }
         }
-        Ok::<CodexExecJsonlParser, std::io::Error>(parser)
+        Ok::<(), std::io::Error>(())
     });
-    let mut cancelled = false;
+    let mut cause = None;
+    let mut writers_stopped = false;
     let started_at = tokio::time::Instant::now();
-    let status = loop {
+    loop {
         if cancellation
             .as_ref()
             .is_some_and(|flag| flag.load(Ordering::Relaxed))
         {
-            cancelled = true;
-            let _ = child.kill().await;
-            break child.wait().await?;
+            cause = Some(CodexExecError::Cancelled);
+            break;
         }
         if started_at.elapsed() >= std::time::Duration::from_secs(30 * 60) {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            return Err(CodexExecError::Timeout);
+            cause = Some(CodexExecError::Timeout);
+            break;
         }
-        if let Some(status) = child.try_wait()? {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                writers_stopped = true;
+                if !status.success() {
+                    cause = Some(CodexExecError::Failed {
+                        code: status.code(),
+                        stderr: String::new(),
+                    });
+                }
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                cause = Some(CodexExecError::Io(error));
+                break;
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
-    let parser = stdout_task
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))??;
-    let stderr = stderr_task
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))??;
-    if cancelled {
-        return Err(CodexExecError::Cancelled);
     }
-    if !status.success() {
-        return Err(CodexExecError::Failed {
-            code: status.code(),
-            stderr,
+    if !writers_stopped {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::codex_runtime::process::terminate_process_tree(&mut child, pid),
+        )
+        .await
+        {
+            Ok(Ok(())) => writers_stopped = true,
+            _ => {
+                cause = Some(CodexExecError::Io(std::io::Error::other(
+                    "could not confirm exec writer termination",
+                )));
+            }
+        }
+    }
+    // Retain parsed usage even on read errors or inherited pipes that never close.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut stdout_task).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => {
+            if cause.is_none() {
+                cause = Some(CodexExecError::Io(error));
+            }
+        }
+        Ok(Err(error)) => {
+            if cause.is_none() {
+                cause = Some(CodexExecError::Io(std::io::Error::other(error.to_string())));
+            }
+        }
+        Err(_) => {
+            stdout_task.abort();
+            cause = Some(CodexExecError::Io(std::io::Error::other(
+                "exec output did not close",
+            )));
+            writers_stopped = false;
+        }
+    }
+    let mut stderr_task = stderr_task;
+    let stderr =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut stderr_task).await {
+            Ok(Ok(Ok(stderr))) => stderr,
+            _ => {
+                stderr_task.abort();
+                String::new()
+            }
+        };
+    let result = std::mem::take(&mut *progress.lock().expect("exec progress")).finish(stderr);
+    if let Some(CodexExecError::Failed { stderr, .. }) = &mut cause {
+        *stderr = result.stderr.clone();
+    }
+    if let Some(cause) = cause {
+        return Err(CodexExecError::Partial {
+            cause: Box::new(cause),
+            result: Box::new(result),
+            writers_stopped,
         });
     }
-    Ok(parser.finish(stderr))
+    Ok(result)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CodexExecJsonlParser {
     thread_id: Option<String>,
     final_message: String,
@@ -262,12 +359,21 @@ impl CodexExecJsonlParser {
                         .to_string();
                 }
             }
-            Some("turn.completed") => {
+            Some("turn.completed" | "turn.failed") => {
                 if let Some(usage) = event.get("usage") {
                     self.usage = CodexExecUsage {
-                        input_tokens: u64_field(usage, "input_tokens"),
-                        cached_input_tokens: u64_field(usage, "cached_input_tokens"),
-                        output_tokens: u64_field(usage, "output_tokens"),
+                        input_tokens: self
+                            .usage
+                            .input_tokens
+                            .max(u64_field(usage, "input_tokens")),
+                        cached_input_tokens: self
+                            .usage
+                            .cached_input_tokens
+                            .max(u64_field(usage, "cached_input_tokens")),
+                        output_tokens: self
+                            .usage
+                            .output_tokens
+                            .max(u64_field(usage, "output_tokens")),
                     };
                 }
             }
@@ -295,6 +401,21 @@ fn u64_field(value: &Value, key: &str) -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn runtime_regression_failed_usage_cannot_erase_known_totals() {
+        let mut parser = CodexExecJsonlParser::default();
+        for line in [
+            r#"{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}"#,
+            r#"{"type":"turn.failed","usage":{"input_tokens":120,"output_tokens":15}}"#,
+            r#"{"type":"turn.failed","usage":{}}"#,
+        ] {
+            parser.push_line(line);
+        }
+        let result = parser.finish(String::new());
+        assert_eq!(result.usage.input_tokens, 120);
+        assert_eq!(result.usage.output_tokens, 15);
+    }
+
     fn options(mode: CodexPermissionMode) -> CodexExecOptions {
         CodexExecOptions {
             workspace_root: PathBuf::from("/work"),
@@ -302,6 +423,7 @@ mod tests {
             model: "deepseek-v4-pro".to_string(),
             prompt: "统计数据".to_string(),
             permission_mode: mode,
+            allow_outside_workspace: false,
             attachments: vec![
                 CodexAttachment {
                     path: "/work/chart.png".to_string(),
@@ -329,21 +451,72 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["--image", "/work/chart.png"]));
-        assert!(command.args.contains(&"--approve-for-me".to_string()));
+        assert!(command
+            .args
+            .contains(&"approvals_reviewer=\"auto_review\"".to_string()));
         assert_eq!(command.args.last().map(String::as_str), Some("-"));
         assert!(command.stdin.contains("/work/data.csv"));
         assert!(!command.stdin.contains("chart.png"));
     }
 
     #[test]
-    fn full_access_uses_explicit_headless_bypass_flag() {
+    fn runtime_regression_no_approval_still_uses_workspace_sandbox() {
         let command = build_exec_command(
             Path::new("codex"),
             &options(CodexPermissionMode::FullAccess),
         );
         assert!(command
             .args
+            .windows(2)
+            .any(|args| args == ["--sandbox", "workspace-write"]));
+        assert!(!command
+            .args
             .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
+    fn runtime_regression_headless_permission_sandbox_matrix() {
+        for mode in [
+            CodexPermissionMode::Restricted,
+            CodexPermissionMode::Approval,
+            CodexPermissionMode::FullAccess,
+        ] {
+            for outside in [false, true] {
+                let mut options = options(mode);
+                options.allow_outside_workspace = outside;
+                let command = build_exec_command(Path::new("codex"), &options);
+                let expected = CodexSandboxMode::from_permissions(mode, outside).sandbox();
+                assert!(command
+                    .args
+                    .windows(2)
+                    .any(|args| args[0] == "--sandbox" && args[1] == expected));
+                assert!(command.args.contains(&format!(
+                    "approval_policy={}",
+                    toml::Value::String(mode.approval_policy().into())
+                )));
+                assert!(!command
+                    .args
+                    .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+                assert!(
+                    !command.args.contains(&"--approve-for-me".to_string()),
+                    "CLI auto-review shortcut would override the sandbox"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_access_requires_separate_outside_workspace_permission() {
+        let mut opts = options(CodexPermissionMode::FullAccess);
+        opts.allow_outside_workspace = true;
+        let command = build_exec_command(Path::new("codex"), &opts);
+        assert!(command
+            .args
+            .windows(2)
+            .any(|args| args == ["--sandbox", "danger-full-access"]));
+        assert!(command
+            .args
+            .contains(&"approval_policy=\"never\"".to_string()));
     }
 
     #[test]

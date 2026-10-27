@@ -1,0 +1,21 @@
+.runtime-diagnostics { color: var(--text-primary, #23272f); padding: 20px; min-width: 0; width: 100%; box-sizing: border-box; }
+.runtime-diagnostics-header, .diagnostics-item-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.runtime-diagnostics h2 { margin: 0; font-size: 19px; display: flex; align-items: center; gap: 8px; }
+.runtime-diagnostics h3 { margin: 0; font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.runtime-diagnostics p { font-size: 13px; line-height: 1.6; margin: 6px 0; overflow-wrap: anywhere; }
+.runtime-diagnostics-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.runtime-diagnostics button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border-color, #d5d9df); border-radius: 6px; background: var(--bg-secondary, #f5f6f8); color: inherit; font-size: 13px; cursor: pointer; }
+.runtime-diagnostics button:disabled { opacity: .5; cursor: wait; }
+.runtime-diagnostics button:focus-visible { outline: 2px solid #168a96; outline-offset: 2px; }
+.runtime-diagnostics .diagnostics-icon { width: 34px; height: 34px; padding: 0; flex: 0 0 34px; }
+.diagnostics-meta, .diagnostics-remediation { color: var(--text-secondary, #616976); }
+.diagnostics-results { list-style: none; padding: 0; margin: 0; }
+.diagnostics-results li { border-top: 1px solid var(--border-color, #d5d9df); padding: 14px 0; }
+.diagnostics-results dl { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; margin: 8px 0; }
+.diagnostics-results dt { color: var(--text-secondary, #616976); }
+.diagnostics-results dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.diagnostics-state { flex: 0 0 auto; font-size: 12px; line-height: 22px; font-weight: 600; }
+.diagnostics-ok { color: #168069; }
+.diagnostics-broken, .diagnostics-missing, .diagnostics-error { color: #c54959; }
+.diagnostics-warning, .diagnostics-timeout { color: #976700; }
+@media (max-width: 480px) { .runtime-diagnostics { padding: 12px; } .runtime-diagnostics-actions { gap: 6px; } }

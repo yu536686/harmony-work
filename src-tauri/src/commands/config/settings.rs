@@ -39,8 +39,160 @@ pub async fn save_settings(
     state: State<'_, AppState>,
     updates: Value,
 ) -> Result<Settings, String> {
-    let mut settings = state.settings.lock().await;
+    let saved = save_settings_with(
+        &state.settings,
+        &updates,
+        validate_vision_settings,
+        |settings| {
+            settings.save().map_err(|error| error.to_string())?;
+            crate::agent_core::approval::sync_confirm_flags(
+                &state.confirm_flags,
+                settings.confirm_shell_commands,
+                settings.confirm_file_writes,
+            );
+            Ok(())
+        },
+    )
+    .await?;
+    if let Err(error) =
+        crate::commands::platform::system::ensure_workspace_shortcut(&saved.workspace_root)
+    {
+        let warning = format!("设置已保存，但创建工作区桌面快捷方式失败：{error}");
+        tracing::warn!("{}", warning);
+        let _ = app.emit("settings_save_warning", warning);
+    } else {
+        let _ = app.emit("workspace_shortcut_ready", &saved.workspace_root);
+    }
+    Ok(saved)
+}
 
+async fn save_settings_with<V, F, P>(
+    shared: &tokio::sync::Mutex<Settings>,
+    updates: &Value,
+    validate: V,
+    persist: P,
+) -> Result<Settings, String>
+where
+    V: FnOnce(Settings) -> F,
+    F: std::future::Future<Output = Result<(), String>>,
+    P: FnOnce(&Settings) -> Result<(), String>,
+{
+    let original = shared.lock().await.clone();
+    let mut candidate = original.clone();
+    apply_settings_patch(&mut candidate, updates);
+    candidate.migrate_public_service_urls();
+    if vision_target(&candidate).is_some() && vision_target(&original) != vision_target(&candidate)
+    {
+        validate(candidate.clone()).await?;
+    }
+    let mut current = shared.lock().await;
+    if serde_json::to_value(&*current).map_err(|e| e.to_string())?
+        != serde_json::to_value(&original).map_err(|e| e.to_string())?
+        || current.config_path != original.config_path
+    {
+        return Err("设置在校验期间已变更，请重试保存。".into());
+    }
+    persist(&candidate)?;
+    *current = candidate.clone();
+    Ok(candidate)
+}
+
+fn vision_target(settings: &Settings) -> Option<(bool, String, String, String, String)> {
+    if !settings.vision_enabled {
+        return None;
+    }
+    Some(if settings.vision_use_main_llm {
+        (
+            true,
+            settings.provider.clone(),
+            settings.model.clone(),
+            settings.active_api_key().into(),
+            settings.custom_base_url.clone(),
+        )
+    } else {
+        (
+            false,
+            settings.vision_provider.clone(),
+            settings.vision_model.clone(),
+            settings.vision_api_key.clone(),
+            settings.vision_base_url.clone(),
+        )
+    })
+}
+
+async fn validate_vision_settings(settings: Settings) -> Result<(), String> {
+    if settings.vision_use_main_llm {
+        // User chose to use main LLM as vision model — validate if vision is enabled
+        if settings.vision_enabled {
+            let main_api_key = settings.active_api_key().to_string();
+            if !main_api_key.is_empty() && !settings.model.is_empty() {
+                let main_base_url = if settings.custom_base_url.is_empty() {
+                    None
+                } else {
+                    Some(settings.custom_base_url.as_str())
+                };
+                match crate::commands::chat::validate_vision_model(
+                    &settings.provider,
+                    &main_api_key,
+                    &settings.model,
+                    main_base_url,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        info!(
+                            "Vision validation: main model '{}' supports vision",
+                            settings.model
+                        );
+                    }
+                    Err(msg) => {
+                        tracing::warn!("Vision validation failed: {}", msg);
+                        return Err(format!(
+                "主模型 '{}' 不支持视觉功能，无法启用。请配置独立的视觉模型，或更换支持视觉的主模型。\nTechnical: {}",
+                settings.model, msg
+                ));
+                    }
+                }
+            }
+        }
+    } else {
+        // User configured a separate vision model — validate it
+        if !settings.vision_provider.is_empty()
+            && !settings.vision_model.is_empty()
+            && !settings.vision_api_key.is_empty()
+        {
+            let vis_base_url = if settings.vision_base_url.is_empty() {
+                None
+            } else {
+                Some(settings.vision_base_url.as_str())
+            };
+            match crate::commands::chat::validate_vision_model(
+                &settings.vision_provider,
+                &settings.vision_api_key,
+                &settings.vision_model,
+                vis_base_url,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!(
+                        "Vision validation: separate model '{}' supports vision",
+                        settings.vision_model
+                    );
+                }
+                Err(msg) => {
+                    tracing::warn!("Vision validation failed: {}", msg);
+                    return Err(format!(
+                "独立视觉模型 '{}' 不支持视觉功能，无法保存配置。请检查模型名称是否正确，或更换支持视觉的模型。\nTechnical: {}",
+                settings.vision_model, msg
+            ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn apply_settings_patch(settings: &mut Settings, updates: &Value) {
     // LLM provider keys — only overwrite if the incoming value is non-empty.
     // An empty string means "unchanged" (the frontend may not send the decrypted key back).
     if let Some(v) = updates["anthropic_api_key"].as_str() {
@@ -125,7 +277,6 @@ pub async fn save_settings(
         } else {
             v.to_string()
         };
-        let _ = std::fs::create_dir_all(&resolved);
         settings.workspace_root = resolved;
     }
     if let Some(v) = updates["allow_outside_workspace"].as_bool() {
@@ -285,13 +436,17 @@ pub async fn save_settings(
         settings.wechat_enabled = v;
     }
     if let Some(v) = updates["wechat_gateway_token"].as_str() {
-        settings.wechat_gateway_token = v.to_string();
+        if !v.is_empty() {
+            settings.wechat_gateway_token = v.to_string();
+        }
     }
     if let Some(v) = updates["wechat_gateway_port"].as_u64() {
         settings.wechat_gateway_port = v as u16;
     }
     if let Some(v) = updates["wechat_bot_token"].as_str() {
-        settings.wechat_bot_token = v.to_string();
+        if !v.is_empty() {
+            settings.wechat_bot_token = v.to_string();
+        }
     }
     if let Some(v) = updates["wechat_base_url"].as_str() {
         settings.wechat_base_url = v.to_string();
@@ -497,7 +652,9 @@ pub async fn save_settings(
                 // Only update password/key if non-empty (frontend may omit to keep existing)
                 password: {
                     let v = item["password"].as_str().unwrap_or("");
-                    if v.is_empty() {
+                    if item.get("password").is_some_and(Value::is_null) {
+                        String::new()
+                    } else if v.is_empty() {
                         existing_password
                     } else {
                         v.to_string()
@@ -505,7 +662,9 @@ pub async fn save_settings(
                 },
                 private_key: {
                     let v = item["private_key"].as_str().unwrap_or("");
-                    if v.is_empty() {
+                    if item.get("private_key").is_some_and(Value::is_null) {
+                        String::new()
+                    } else if v.is_empty() {
                         existing_key
                     } else {
                         v.to_string()
@@ -547,7 +706,9 @@ pub async fn save_settings(
                     .unwrap_or_default(),
                 api_key: {
                     let v = item["api_key"].as_str().unwrap_or("");
-                    if v.is_empty() {
+                    if item.get("api_key").is_some_and(Value::is_null) {
+                        String::new()
+                    } else if v.is_empty() {
                         existing_api_key
                     } else {
                         v.to_string()
@@ -571,103 +732,36 @@ pub async fn save_settings(
             .collect();
     }
 
-    // ── Vision model validation ────────────────────────────────────────────
-    // Validate that the configured vision model actually supports vision by
-    // making a real API call. This replaces the old string-matching heuristic.
-    // Skip validation if no vision-related fields were changed.
-    settings.migrate_public_service_urls();
-    let vision_fields_changed = updates["vision_enabled"].as_bool().is_some()
-        || updates["vision_use_main_llm"].as_bool().is_some()
-        || updates["vision_provider"].as_str().is_some()
-        || updates["vision_model"].as_str().is_some()
-        || updates["vision_api_key"].as_str().is_some();
-
-    if vision_fields_changed {
-        if settings.vision_use_main_llm {
-            // User chose to use main LLM as vision model — validate if vision is enabled
-            if settings.vision_enabled {
-                let main_api_key = settings.active_api_key().to_string();
-                if !main_api_key.is_empty() && !settings.model.is_empty() {
-                    let main_base_url = if settings.custom_base_url.is_empty() {
-                        None
-                    } else {
-                        Some(settings.custom_base_url.as_str())
-                    };
-                    match crate::commands::chat::validate_vision_model(
-                        &settings.provider,
-                        &main_api_key,
-                        &settings.model,
-                        main_base_url,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            info!(
-                                "Vision validation: main model '{}' supports vision",
-                                settings.model
-                            );
-                        }
-                        Err(msg) => {
-                            tracing::warn!("Vision validation failed: {}", msg);
-                            return Err(format!(
-                                "主模型 '{}' 不支持视觉功能，无法启用。请配置独立的视觉模型，或更换支持视觉的主模型。\nTechnical: {}",
-                                settings.model, msg
-                            ));
-                        }
-                    }
-                }
+    // Missing/blank secrets preserve existing values. JSON null is an explicit clear.
+    macro_rules! clear_secret {
+        ($($field:ident),+ $(,)?) => { $(
+            if updates.get(stringify!($field)).is_some_and(Value::is_null) {
+                settings.$field.clear();
             }
-        } else {
-            // User configured a separate vision model — validate it
-            if !settings.vision_provider.is_empty()
-                && !settings.vision_model.is_empty()
-                && !settings.vision_api_key.is_empty()
-            {
-                let vis_base_url = if settings.vision_base_url.is_empty() {
-                    None
-                } else {
-                    Some(settings.vision_base_url.as_str())
-                };
-                match crate::commands::chat::validate_vision_model(
-                    &settings.vision_provider,
-                    &settings.vision_api_key,
-                    &settings.vision_model,
-                    vis_base_url,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        info!(
-                            "Vision validation: separate model '{}' supports vision",
-                            settings.vision_model
-                        );
-                    }
-                    Err(msg) => {
-                        tracing::warn!("Vision validation failed: {}", msg);
-                        return Err(format!(
-                            "独立视觉模型 '{}' 不支持视觉功能，无法保存配置。请检查模型名称是否正确，或更换支持视觉的模型。\nTechnical: {}",
-                            settings.vision_model, msg
-                        ));
-                    }
-                }
-            }
-        }
+        )+ };
     }
-
-    settings.save().map_err(|e| e.to_string())?;
-    let saved = settings.clone();
-    crate::agent_core::approval::sync_confirm_flags(
-        &state.confirm_flags,
-        saved.confirm_shell_commands,
-        saved.confirm_file_writes,
+    clear_secret!(
+        anthropic_api_key,
+        openai_api_key,
+        deepseek_api_key,
+        qwen_api_key,
+        minimax_api_key,
+        zhipu_api_key,
+        kimi_api_key,
+        siliconflow_api_key,
+        harmony_api_key,
+        vision_api_key,
+        feishu_app_secret,
+        wecom_bot_secret,
+        dingtalk_app_secret,
+        dingtalk_robot_code,
+        telegram_bot_token,
+        matrix_access_token,
+        webhook_auth_token,
+        wechat_gateway_token,
+        wechat_bot_token,
+        smtp_password
     );
-    drop(settings);
-
-    crate::commands::platform::system::ensure_workspace_shortcut(&saved.workspace_root)
-        .map_err(|error| format!("创建工作区桌面快捷方式失败：{error}"))?;
-    let _ = app.emit("workspace_shortcut_ready", &saved.workspace_root);
-
-    Ok(saved)
 }
 
 fn string_array(arr: &[Value]) -> Vec<String> {
@@ -714,8 +808,11 @@ fn normalize_model_base_url(provider: &str, base_url: Option<&str>) -> Result<St
 /// 返回 "chat" | "embedding" | "image" | "video" | "music" | "tts"。
 pub fn classify_harvis_model_kind(id: &str) -> &'static str {
     let lower = id.to_ascii_lowercase();
-    if lower.contains("embedding") || lower.contains("bge-") || lower.contains("gte-")
-        || lower.contains("nomic-embed") || lower.contains("mxbai-embed")
+    if lower.contains("embedding")
+        || lower.contains("bge-")
+        || lower.contains("gte-")
+        || lower.contains("nomic-embed")
+        || lower.contains("mxbai-embed")
         || lower.contains("e5-")
     {
         "embedding"
@@ -777,7 +874,8 @@ fn extract_models(value: &Value) -> Vec<ProviderModelInfo> {
                 .or_else(|| item.get("owner"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let declared_kind = item.get("kind")
+            let declared_kind = item
+                .get("kind")
                 .or_else(|| item.get("type"))
                 .or_else(|| item.get("category"))
                 .and_then(|v| v.as_str())
@@ -881,7 +979,10 @@ mod model_catalog_tests {
 
     #[test]
     fn embedding_models_are_classified_by_id_or_declared_type() {
-        assert_eq!(classify_harvis_model_kind("Qwen/Qwen3-Embedding-8B"), "embedding");
+        assert_eq!(
+            classify_harvis_model_kind("Qwen/Qwen3-Embedding-8B"),
+            "embedding"
+        );
         assert_eq!(classify_harvis_model_kind("BAAI/bge-m3"), "embedding");
         let models = extract_models(&json!({"data": [
             {"id": "private-vector", "type": "embedding"},
@@ -889,5 +990,193 @@ mod model_catalog_tests {
         ]}));
         assert_eq!(models[1].kind, "embedding");
         assert_eq!(models[0].kind, "chat");
+    }
+}
+
+#[cfg(test)]
+mod account_settings_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn account_settings_concurrent_change_is_not_overwritten() {
+        let shared = tokio::sync::Mutex::new(Settings::default());
+        let result = save_settings_with(
+            &shared,
+            &json!({"vision_enabled":true, "language":"en"}),
+            |_| async {
+                shared.lock().await.wechat_bot_token = "newly-bound-token".into();
+                Ok(())
+            },
+            |_| panic!("must not overwrite newer settings"),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("变更"));
+        let current = shared.lock().await;
+        assert_eq!(current.wechat_bot_token, "newly-bound-token");
+        assert!(!current.vision_enabled);
+    }
+
+    #[tokio::test]
+    async fn account_settings_effective_vision_changes_validate_but_unrelated_fields_do_not() {
+        let mut original = Settings::default();
+        original.vision_enabled = true;
+        original.vision_use_main_llm = false;
+        original.vision_provider = "openai".into();
+        original.vision_model = "visual".into();
+        original.vision_api_key = "key".into();
+        original.vision_base_url = "https://old.example/v1".into();
+        for patch in [
+            json!({"language":"en"}),
+            serde_json::to_value(&original).unwrap(),
+        ] {
+            let shared = tokio::sync::Mutex::new(original.clone());
+            assert!(save_settings_with(
+                &shared,
+                &patch,
+                |_| async { panic!("unchanged target must not validate") },
+                |_| Ok(())
+            )
+            .await
+            .is_ok());
+        }
+        for patch in [
+            json!({"vision_base_url":"https://new.example/v1"}),
+            json!({"vision_api_key":"new-key"}),
+        ] {
+            let shared = tokio::sync::Mutex::new(original.clone());
+            let result = save_settings_with(
+                &shared,
+                &patch,
+                |_| async { Err("validated".into()) },
+                |_| panic!("validation failed"),
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), "validated");
+        }
+        original.vision_use_main_llm = true;
+        for patch in [
+            json!({"harmony_api_key":"main-key"}),
+            json!({"custom_base_url":"https://main.example/v1"}),
+        ] {
+            let shared = tokio::sync::Mutex::new(original.clone());
+            let result = save_settings_with(
+                &shared,
+                &patch,
+                |_| async { Err("validated".into()) },
+                |_| panic!("validation failed"),
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), "validated");
+        }
+        let shared = tokio::sync::Mutex::new(original);
+        assert!(save_settings_with(
+            &shared,
+            &json!({"vision_enabled":false}),
+            |_| async { panic!("disabling vision must not validate") },
+            |_| Ok(())
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn account_settings_validation_failure_is_atomic() {
+        let shared = tokio::sync::Mutex::new(Settings::default());
+        let before = serde_json::to_value(shared.lock().await.clone()).unwrap();
+        let result = save_settings_with(
+            &shared,
+            &json!({"language":"en", "vision_enabled":true}),
+            |_| async { Err("invalid model".into()) },
+            |_| panic!("must not persist"),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            serde_json::to_value(shared.lock().await.clone()).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn account_settings_disk_failure_is_atomic() {
+        let shared = tokio::sync::Mutex::new(Settings::default());
+        let before = serde_json::to_value(shared.lock().await.clone()).unwrap();
+        let result = save_settings_with(
+            &shared,
+            &json!({"language":"en"}),
+            |_| async { Ok(()) },
+            |_| Err("disk full".into()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            serde_json::to_value(shared.lock().await.clone()).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn account_settings_network_validation_does_not_hold_lock() {
+        let shared = tokio::sync::Mutex::new(Settings::default());
+        let result = save_settings_with(
+            &shared,
+            &json!({"vision_enabled":true}),
+            |_| async {
+                assert!(
+                    shared.try_lock().is_ok(),
+                    "network validation holds settings lock"
+                );
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn account_settings_equal_vision_fields_do_not_validate() {
+        let settings = Settings::default();
+        let updates = json!({"language":"en", "vision_enabled":settings.vision_enabled,
+            "vision_use_main_llm":settings.vision_use_main_llm, "vision_model":settings.vision_model,
+            "vision_provider":settings.vision_provider, "vision_api_key":""});
+        let shared = tokio::sync::Mutex::new(settings);
+        let result = save_settings_with(
+            &shared,
+            &updates,
+            |_| async { panic!("unchanged visual fields must not validate") },
+            |_| Ok(()),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn account_settings_blank_wechat_credentials_mean_unchanged() {
+        let mut settings = Settings::default();
+        settings.wechat_bot_token = "bound-token".into();
+        settings.wechat_gateway_token = "gateway-token".into();
+        apply_settings_patch(
+            &mut settings,
+            &json!({"wechat_bot_token":"", "wechat_gateway_token":""}),
+        );
+        assert_eq!(settings.wechat_bot_token, "bound-token");
+        assert_eq!(settings.wechat_gateway_token, "gateway-token");
+    }
+
+    #[test]
+    fn account_settings_null_explicitly_clears_credentials() {
+        let mut settings = Settings::default();
+        settings.wechat_bot_token = "bound-token".into();
+        settings.vision_api_key = "vision-key".into();
+        settings.harmony_api_key = "main-key".into();
+        apply_settings_patch(
+            &mut settings,
+            &json!({"wechat_bot_token":null, "vision_api_key":null, "harmony_api_key":null}),
+        );
+        assert!(settings.wechat_bot_token.is_empty());
+        assert!(settings.vision_api_key.is_empty());
+        assert!(settings.harmony_api_key.is_empty());
     }
 }

@@ -129,6 +129,45 @@ export interface MarketingAssetDataUrl {
 }
 
 const USER_STORAGE_KEY = "workbuddy.marketingUser";
+let sessionGeneration = 0;
+let accountGeneration = 0;
+const SESSION_CHANGED = "workbuddy:marketing-session-changed";
+
+export interface MarketingSessionSnapshot {
+  readonly userId: string | null;
+  readonly generation: number;
+}
+
+function invalidateAccountSession() {
+  accountGeneration++;
+  window.dispatchEvent(new Event(SESSION_CHANGED));
+}
+
+export function captureMarketingSession(): MarketingSessionSnapshot {
+  const id = readRememberedMarketingUser()?.id;
+  return Object.freeze({ userId: typeof id === "string" && id.trim() ? id : null, generation: accountGeneration });
+}
+
+export function isCurrentMarketingSession(session: MarketingSessionSnapshot): boolean {
+  const current = captureMarketingSession();
+  return session.generation === current.generation && session.userId === current.userId;
+}
+
+export function subscribeMarketingSession(onChange: () => void): () => void {
+  window.addEventListener(SESSION_CHANGED, onChange);
+  return () => window.removeEventListener(SESSION_CHANGED, onChange);
+}
+
+window.addEventListener("storage", event => {
+  if (event.key === USER_STORAGE_KEY || event.key === null) {
+    sessionGeneration++;
+    invalidateAccountSession();
+  }
+});
+
+function ensureCurrentSession(generation: number) {
+  if (generation !== sessionGeneration) throw new Error("账户会话已变更，请重新登录。");
+}
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "svg"]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "mkv", "avi", "webm", "m4v"]);
@@ -200,11 +239,14 @@ function normalizeSummary(raw: MarketingAssetSummary): MarketingAssetSummary {
 }
 
 function rememberUser(user: MarketingUser | null) {
+  const previous = readRememberedMarketingUser()?.id ?? null;
   if (user) localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
   else localStorage.removeItem(USER_STORAGE_KEY);
+  if (previous !== (user?.id ?? null)) invalidateAccountSession();
 }
 
 export function forgetRememberedMarketingUser() {
+  sessionGeneration++;
   rememberUser(null);
 }
 
@@ -229,7 +271,11 @@ export function marketingUserContext(user: MarketingUser | null = readRemembered
 
 export const marketingApi = {
   login: async (email: string, password: string) => {
+    const generation = ++sessionGeneration;
+    rememberUser(null);
+    invalidateAccountSession();
     const result = await invoke<{ user: MarketingUser }>("marketing_login", { request: { email, password } });
+    ensureCurrentSession(generation);
     rememberUser(result.user);
     try {
       const prepared = await invoke<AccountSettingsSyncPrepared>("account_settings_sync_prepare", {
@@ -240,20 +286,31 @@ export const marketingApi = {
         },
       });
       const prompt: AccountSettingsSyncPrompt = { ...prepared, userId: result.user.id };
+      ensureCurrentSession(generation);
       window.dispatchEvent(new CustomEvent("workbuddy:account-settings-sync-prepared", { detail: prompt }));
     } catch (error) {
       // Settings sync is optional. Authentication remains available if a legacy
       // cloud vault cannot be unlocked on this device.
       console.warn("Unable to prepare account settings sync", error);
     }
+    ensureCurrentSession(generation);
     return result.user;
   },
   logout: async () => {
-    await invoke("marketing_logout");
+    sessionGeneration++;
     rememberUser(null);
+    invalidateAccountSession();
+    try {
+      await invoke("marketing_logout");
+    } catch (error) {
+      // Local logout must complete even if the remote service is offline.
+      console.warn("Marketing logout command unavailable; remembered user cleared", error);
+    }
   },
   me: async () => {
+    const generation = sessionGeneration;
     const result = await invoke<{ user: MarketingUser }>("marketing_me");
+    ensureCurrentSession(generation);
     rememberUser(result.user);
     return result.user;
   },

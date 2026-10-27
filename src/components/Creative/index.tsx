@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { migratePublicServiceUrl } from "../../services/serviceUrls";
+import { extractHarvisResultUrl } from "./harvisRefresh";
+import { useHarvisTasks } from "./useHarvisTasks";
+import { isCurrentMarketingSession } from "../../services/tauri/marketing";
 import {
   creativeApi,
   normalizeReferenceSelection,
@@ -8,45 +11,17 @@ import {
   type MusicAssistantConfig,
   type MarketingUser,
   type HarvisTask,
-  loadHarvisTasks,
-  saveHarvisTasks
+  addHarvisTask,
+  updateHarvisFeedback
 } from "../../services/tauri";
 import "./Creative.css";
 
-type CreativePageProps = {
+export type CreativePageProps = {
   initialKind: "music" | "image";
   user: MarketingUser | null;
+  focusedTaskId?: string;
+  focusResult?: boolean;
 };
-
-function normalizeHarvisStatus(raw: unknown): HarvisTask["status"] {
-  const value = typeof raw === "string" ? raw.toLowerCase() : "";
-  if (["succeeded", "success", "completed", "complete", "done"].includes(value)) return "succeeded";
-  if (["incomplete", "cancelled", "canceled"].includes(value)) return "failed";
-  if (value === "failed" || value.includes("fail") || value.includes("error")) return "failed";
-  if (["queued", "pending", "submitted"].includes(value)) return "pending";
-  if (value === "processing" || value.includes("process") || value.includes("running")) return "processing";
-  return "processing";
-}
-
-function extractHarvisResultUrl(raw: unknown): string | undefined {
-  const obj = raw as Record<string, unknown> | null | undefined;
-  if (!obj) return undefined;
-  const candidates = [obj.url, obj.resultUrl, obj.result_url, obj.downloadUrl, obj.audioUrl, obj.audio_url, obj.imageUrl, obj.image_url];
-  for (const value of candidates) {
-    if (typeof value === "string" && value.trim()) return migratePublicServiceUrl(value.trim());
-  }
-  const content = obj.content;
-  if (Array.isArray(content)) {
-    for (const item of content) {
-      const url = extractHarvisResultUrl(item);
-      if (url) return url;
-    }
-  } else if (content && typeof content === "object") {
-    const url = extractHarvisResultUrl(content);
-    if (url) return url;
-  }
-  return undefined;
-}
 
 type ReferenceAttachment = {
   id: string;
@@ -112,13 +87,16 @@ function readPreview(file: File): Promise<string> {
   });
 }
 
-export default function CreativePage({ initialKind, user }: CreativePageProps) {
+export default function CreativePage({ initialKind, user, focusedTaskId, focusResult = false }: CreativePageProps) {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ fileName: string; kind: "audio" | "image"; dataUrl: string; task: HarvisTask } | null>(null);
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
-  const [harvisTasks, setHarvisTasks] = useState<HarvisTask[]>(() => loadHarvisTasks());
+  const previewRequest = useRef(0);
+  const focusedTarget = useRef("");
+  const taskListRef = useRef<HTMLDivElement | null>(null);
+  const { tasks: harvisTasks, refresh: refreshHarvisTasks, session } = useHarvisTasks(initialKind, Boolean(user));
   const [showMusicConfig, setShowMusicConfig] = useState(false);
   const [adminBrandName, setAdminBrandName] = useState("");
   const [adminCollections, setAdminCollections] = useState("");
@@ -170,59 +148,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
 
   const activeHarvisTasks = harvisTasks.filter((task) => task.kind === initialKind && (task.status === "pending" || task.status === "processing"));
   const filteredHarvisTasks = harvisTasks.filter((task) => task.kind === initialKind);
-  const refreshHarvisTasks = useCallback(async (tasks: HarvisTask[]) => {
-    if (!tasks.length) return;
-    const updated = await Promise.all(tasks.map(async (task) => {
-        try {
-          const statusResp = await creativeApi.harvisQueryTask(task.taskId, task.kind);
-          const status = normalizeHarvisStatus((statusResp as any)?.status ?? (statusResp as any)?.state ?? statusResp);
-          const progress = typeof (statusResp as any)?.progress === "number"
-            ? Math.max(0, Math.min(99, (statusResp as any).progress))
-            : undefined;
-          if (status === "succeeded") {
-            let resultUrl = extractHarvisResultUrl(statusResp);
-            if (!resultUrl) {
-              const contentResp = await creativeApi.harvisQueryTaskContent(task.taskId, task.kind);
-              resultUrl = extractHarvisResultUrl(contentResp);
-            }
-            if (!resultUrl) return { ...task, status: "failed" as const, errorMessage: "任务已结束但未返回成品，请联系管理员检查任务结果" };
-            return { ...task, status: "succeeded" as const, progress: 100, resultUrl, errorMessage: undefined };
-          }
-          if (status === "failed") {
-            return { ...task, status: "failed" as const, errorMessage: String(statusResp.error_message || "生成任务失败") };
-          }
-          return { ...task, status, progress, errorMessage: undefined };
-        } catch (error) {
-          return { ...task, errorMessage: String(error) };
-        }
-    }));
-    setHarvisTasks((prev) => {
-      const next = prev.map((task) => {
-        if (task.kind !== initialKind) return task;
-        const refreshed = updated.find((item) => item.taskId === task.taskId);
-        return refreshed ? { ...refreshed, progress: refreshed.progress ?? task.progress, adopted: task.adopted, rating: task.rating, feedbackTags: task.feedbackTags } : task;
-      });
-      saveHarvisTasks(next, initialKind);
-      return next;
-    });
-  }, [initialKind]);
-
-  useEffect(() => {
-    if (!activeHarvisTasks.length) return;
-    void refreshHarvisTasks(activeHarvisTasks);
-    const timer = window.setInterval(() => {
-      void refreshHarvisTasks(activeHarvisTasks);
-    }, 8_000);
-    return () => window.clearInterval(timer);
-  }, [activeHarvisTasks.map((task) => task.taskId).join(","), refreshHarvisTasks]);
-
-  const updateLocalTask = (taskId: string, changes: Partial<HarvisTask>) => {
-    setHarvisTasks((prev) => {
-      const next = prev.map((task) => task.taskId === taskId ? { ...task, ...changes } : task);
-      saveHarvisTasks(next, initialKind);
-      return next;
-    });
-  };
+  const updateLocalTask = (taskId: string, changes: Pick<Partial<HarvisTask>, "adopted" | "rating" | "feedbackTags">) => updateHarvisFeedback(taskId, initialKind, changes, session);
 
   const updateBrand = (nextBrand: string) => {
     const nextCollection = musicConfig.brands.find((item) => item.name === nextBrand)?.collections[0] ?? "";
@@ -285,6 +211,8 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
   };
 
   const createMusic = async () => {
+    const owner = session;
+    if (!owner.userId || owner.userId !== user?.id || !isCurrentMarketingSession(owner)) return;
     if (!musicTags.trim()) {
       setNotice("请先填写提示词，或在助手模式中点击“生成提示词”");
       return;
@@ -299,6 +227,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
         duration: musicDuration,
         mode: musicMode
       });
+      if (!isCurrentMarketingSession(owner)) return;
       const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
       const resultUrl = extractHarvisResultUrl(result);
       if (taskId || resultUrl) {
@@ -311,22 +240,20 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
           resultUrl,
           createdAt: Date.now(),
         };
-        setHarvisTasks((prev) => {
-          const next = [task, ...prev];
-          saveHarvisTasks(next, initialKind);
-          return next;
-        });
+        addHarvisTask(task, owner);
       } else {
         throw new Error("未收到创作任务或成品，请稍后重试");
       }
     } catch (error) {
-      setNotice(String(error));
+      if (isCurrentMarketingSession(owner)) setNotice(String(error));
     } finally {
-      setBusy(false);
+      if (isCurrentMarketingSession(owner)) setBusy(false);
     }
   };
 
   const createImage = async () => {
+    const owner = session;
+    if (!owner.userId || owner.userId !== user?.id || !isCurrentMarketingSession(owner)) return;
     if (!imagePrompt.trim()) {
       setNotice("请填写图像提示词");
       return;
@@ -349,11 +276,12 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
         referenceIds,
         referenceUrls: imageMode === "image" ? referenceFiles.map((file) => file.referenceUrl).filter(Boolean) : []
       });
+      if (!isCurrentMarketingSession(owner)) return;
       const taskId = (result as any)?.task_id ?? (result as any)?.id ?? "";
       const resultUrl = extractHarvisResultUrl(result) ?? "";
       if (resultUrl) {
         const task: HarvisTask = {
-          taskId: `image-${Date.now()}`,
+          taskId: taskId || `image-${Date.now()}`,
           kind: "image",
           prompt: imagePrompt.trim(),
           status: "succeeded",
@@ -361,11 +289,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
           resultUrl,
           createdAt: Date.now(),
         };
-        setHarvisTasks((prev) => {
-          const next = [task, ...prev];
-          saveHarvisTasks(next, initialKind);
-          return next;
-        });
+        addHarvisTask(task, owner);
       } else if (taskId) {
         const task: HarvisTask = {
           taskId,
@@ -375,18 +299,14 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
           progress: 0,
           createdAt: Date.now(),
         };
-        setHarvisTasks((prev) => {
-          const next = [task, ...prev];
-          saveHarvisTasks(next, initialKind);
-          return next;
-        });
+        addHarvisTask(task, owner);
       } else {
         throw new Error("未收到创作任务或成品，请稍后重试");
       }
     } catch (error) {
-      setNotice(String(error));
+      if (isCurrentMarketingSession(owner)) setNotice(String(error));
     } finally {
-      setBusy(false);
+      if (isCurrentMarketingSession(owner)) setBusy(false);
     }
   };
 
@@ -429,21 +349,45 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
     });
   };
 
-  const showHarvisPreview = async (task: HarvisTask) => {
-    if (!task.resultUrl || (task.kind !== "image" && task.kind !== "music")) return;
+  const showHarvisPreview = useCallback(async (task: HarvisTask) => {
+    if (!task.resultUrl || task.ownerId !== session.userId || !isCurrentMarketingSession(session) || (task.kind !== "image" && task.kind !== "music")) return;
+    const request = ++previewRequest.current;
     setPreviewLoading(task.taskId);
     try {
       const result = await creativeApi.harvisPreviewResult(task.resultUrl, task.kind);
+      if (request !== previewRequest.current || !isCurrentMarketingSession(session)) return;
       setPreview({ task, fileName: `Harvis ${task.kind === "music" ? "音乐" : "图片"}成品`, kind: task.kind === "music" ? "audio" : "image", dataUrl: result.dataUrl });
     } catch (error) {
-      setNotice(`预览失败：${String(error)}。仍可下载成品查看。`);
+      if (request === previewRequest.current) setNotice(`预览失败：${String(error)}。仍可下载成品查看。`);
     } finally {
-      setPreviewLoading(null);
+      if (request === previewRequest.current) setPreviewLoading(null);
     }
-  };
+  }, [session.userId, session.generation]);
+
+  useEffect(() => { setBusy(false); setNotice(""); }, [session.userId, session.generation]);
+
+  useEffect(() => {
+    setPreview(null);
+    setPreviewLoading(null);
+    return () => { previewRequest.current += 1; focusedTarget.current = ""; };
+  }, [initialKind, focusedTaskId, focusResult, user?.id, session.generation]);
+
+  useEffect(() => {
+    if (!focusedTaskId || !user) { focusedTarget.current = ""; return; }
+    const task = harvisTasks.find((item) => item.taskId === focusedTaskId && item.kind === initialKind);
+    if (!task) return;
+    const key = JSON.stringify([initialKind, focusedTaskId, focusResult]);
+    if (focusedTarget.current === key) return;
+    const node = Array.from(taskListRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find((item) => item.dataset.taskId === focusedTaskId);
+    node?.scrollIntoView?.({ block: "nearest" });
+    node?.focus({ preventScroll: true });
+    if (focusResult && !task.resultUrl) return;
+    focusedTarget.current = key;
+    if (focusResult) void showHarvisPreview(task);
+  }, [focusedTaskId, focusResult, initialKind, harvisTasks, user, showHarvisPreview]);
 
   const downloadHarvisTask = async (task: HarvisTask) => {
-    if (!task.resultUrl || downloadingTaskId) return;
+    if (!task.resultUrl || downloadingTaskId || task.ownerId !== session.userId || !isCurrentMarketingSession(session)) return;
     setDownloadingTaskId(task.taskId);
     try {
       let extension = task.kind === "music" ? "m4a" : task.kind === "video" ? "mp4" : "png";
@@ -456,7 +400,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
         defaultPath: `Harvis-${task.taskId.replace(/[^a-zA-Z0-9_-]/g, "")}.${extension}`,
         filters: [{ name: "创作成品", extensions: [extension] }]
       });
-      if (!path || Array.isArray(path)) return;
+      if (!path || Array.isArray(path) || !isCurrentMarketingSession(session)) return;
       await creativeApi.harvisSaveResult(task.resultUrl, path);
     } catch (error) {
       setNotice(String(error));
@@ -492,7 +436,7 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
     <section className="creative-page">
       <header className="creative-header">
         <div><span className="eyebrow">Harvis Creative</span><h1>{isMusic ? "Harvis 音乐创作" : "Harvis 图片创作"}</h1></div>
-        <div className="creative-meta"><span>{activeHarvisTasks.length ? `${activeHarvisTasks.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => void refreshHarvisTasks(activeHarvisTasks)} disabled={busy}>刷新成果</button></div>
+        <div className="creative-meta"><span>{activeHarvisTasks.length ? `${activeHarvisTasks.length} 个任务进行中` : "创作通道已就绪"}</span><button className="btn btn-secondary" onClick={() => void refreshHarvisTasks()} disabled={busy}>刷新成果</button></div>
       </header>
       {notice && <div className="creative-notice">{notice}</div>}
       <div className="creative-layout">
@@ -553,11 +497,12 @@ export default function CreativePage({ initialKind, user }: CreativePageProps) {
         <aside className="creative-side">
           <section className="creative-panel">
             <div className="creative-panel-head"><strong>创作成果</strong><span>{filteredHarvisTasks.length}</span></div>
-            <div className="creative-job-list">
+            <div className="creative-job-list" ref={taskListRef}>
               {filteredHarvisTasks.map((task) => (
-                <div key={task.taskId} className="creative-local-job">
+                <div key={task.taskId} className="creative-local-job" data-task-id={task.taskId} data-focused={task.taskId === focusedTaskId} tabIndex={-1}>
                   <div className="creative-local-job-top"><strong>{task.prompt.slice(0, 48) || "未命名创作"}</strong><small>{task.status === "succeeded" ? "已完成" : task.status === "failed" ? "失败" : task.status === "pending" ? "排队中" : "生成中…"}</small></div>
                   {task.errorMessage && <small className="creative-error">{task.errorMessage}</small>}
+                  {task.queryError && <small className="creative-error">查询暂不可用：{task.queryError}</small>}
                   {(task.status === "pending" || task.status === "processing") && (
                     <div className="creative-job-progress">
                       <progress value={task.progress > 0 ? task.progress : undefined} max="100" aria-label="生成进度" />

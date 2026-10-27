@@ -46,6 +46,8 @@ interface SessionsState {
     composerDraft?: string;
     composerAttachments?: ChatAttachment[];
     autoSend?: boolean;
+    focusArtifacts?: boolean;
+    artifactId?: string;
   } | null;
 }
 
@@ -106,6 +108,8 @@ export const sessionsSlice = createSlice({
         composerDraft?: string;
         composerAttachments?: ChatAttachment[];
         autoSend?: boolean;
+        focusArtifacts?: boolean;
+        artifactId?: string;
       }>,
     ) => {
       state.pendingMainChatNav = {
@@ -114,6 +118,8 @@ export const sessionsSlice = createSlice({
         composerDraft: action.payload.composerDraft,
         composerAttachments: action.payload.composerAttachments,
         autoSend: action.payload.autoSend,
+        focusArtifacts: action.payload.focusArtifacts,
+        artifactId: action.payload.artifactId,
       };
       if (action.payload.sessionId) {
         state.activeSessionId = action.payload.sessionId;
