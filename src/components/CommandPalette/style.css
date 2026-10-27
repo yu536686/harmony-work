@@ -25,6 +25,10 @@
 .command-palette-empty { margin: 0; padding: 24px 12px; color: var(--text-secondary, #626a75); }
 .command-palette-more { margin: 0; padding: 8px 14px; border-top: 1px solid var(--border-color, #d5dbe1); color: var(--text-secondary, #626a75); font-size: 11px; }
 .command-palette-spinner { animation: command-palette-spin 1s linear infinite; }
+.command-palette-backdrop { animation: command-palette-fade-in 140ms ease-out both; }
+.command-palette { animation: command-palette-enter 200ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes command-palette-fade-in { from { background: #0000; } to { background: #0006; } }
+@keyframes command-palette-enter { from { opacity: 0; transform: translateY(-8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes command-palette-spin { to { transform: rotate(360deg); } }
 @media (max-width: 580px) { .command-palette-backdrop { padding: 16px 10px; } .command-palette { max-height: calc(100dvh - 32px); } .command-palette-search { gap: 5px; padding: 8px; } }
-@media (prefers-reduced-motion: reduce) { .command-palette-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .command-palette-spinner, .command-palette-backdrop, .command-palette { animation: none; } }

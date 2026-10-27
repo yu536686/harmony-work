@@ -6,7 +6,6 @@
 :root[data-platform="windows"] :is(.workbench-tabs, .workbench-header-actions, .page-header-actions) { flex-wrap: wrap; }
 :root[data-platform="windows"] .workbench-tabs button { min-height: 34px; flex: 1 0 72px; }
 :root[data-platform="windows"] .workbench-icon-button { min-width: 30px; min-height: 30px; }
-:root[data-platform="windows"] .sidebar-nav { overflow-y: auto; overscroll-behavior: contain; }
 :root[data-platform="windows"] :is(.task-center, .workflow-page, .usage-budget) { scrollbar-gutter: stable; }
 :root[data-platform="windows"][data-color-mode="dark"] :is(.main-content, .page-header, .chat-topbar, .feature-topbar) { background: var(--bg-primary); box-shadow: none; }
 @media (forced-colors: active) {

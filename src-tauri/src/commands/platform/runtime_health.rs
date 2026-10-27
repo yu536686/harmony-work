@@ -609,6 +609,11 @@ const FROZEN_PYTHON_SHA256: &str =
 const COMPATIBLE_PYTHON_CACHE_VERSIONS: &[&str] = &["1.1.2", "1.1.1", "1.1.0"];
 
 #[cfg(any(windows, test))]
+fn permits_frozen_python_cache_reuse(version: &str) -> bool {
+    matches!(version, "1.1.3-rc1" | "1.1.3-rc2")
+}
+
+#[cfg(any(windows, test))]
 fn merge_cached_python_from_cache(
     cache: &Path,
     destination: &Path,
@@ -616,11 +621,11 @@ fn merge_cached_python_from_cache(
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
     let mut error = format!("没有可验证的完整离线载荷。{REINSTALL}");
-    // Only this light release may reuse these explicitly frozen full payloads.
+    // Only these light candidates may reuse the explicitly frozen full payloads.
     let previous = COMPATIBLE_PYTHON_CACHE_VERSIONS
         .iter()
         .copied()
-        .filter(|_| version == "1.1.3-rc1");
+        .filter(|_| permits_frozen_python_cache_reuse(version));
     for cached_version in std::iter::once(version).chain(previous) {
         let payload = cache.join(cached_version).join("payload");
         match verified_python_archive(&payload, version, Some(cached_version), started) {
@@ -675,7 +680,8 @@ fn verified_python_archive(
     }
     let previous = payload_version != version;
     if previous
-        && (version != "1.1.3-rc1" || !COMPATIBLE_PYTHON_CACHE_VERSIONS.contains(&payload_version))
+        && (!permits_frozen_python_cache_reuse(version)
+            || !COMPATIBLE_PYTHON_CACHE_VERSIONS.contains(&payload_version))
     {
         return Err("离线载荷版本不匹配，拒绝修复".into());
     }
@@ -1153,6 +1159,127 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert!(result.is_ok(), "Windows ZIP rejected: {result:?}");
         assert!(repaired);
+    }
+
+    #[test]
+    fn runtime_health_offline_repair_rc2_requires_frozen_previous_hashes() {
+        let (root, payload, destination) = repair_fixture(&[("python.exe", "untrusted")]);
+        let own_hash = read_payload_manifest(&payload).unwrap()["files"][0]["sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for cached_version in COMPATIBLE_PYTHON_CACHE_VERSIONS {
+            set_repair_manifest(&payload, cached_version, Some(&own_hash));
+            let error = verified_python_archive(
+                &payload,
+                "1.1.3-rc2",
+                Some(cached_version),
+                std::time::Instant::now(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("冻结校验和"),
+                "unexpected rejection: {error}"
+            );
+            set_repair_manifest(&payload, cached_version, Some(FROZEN_PYTHON_SHA256));
+            let error = verified_python_archive(
+                &payload,
+                "1.1.3-rc2",
+                Some(cached_version),
+                std::time::Instant::now(),
+            )
+            .unwrap_err();
+            assert!(error.contains("SHA-256"), "unexpected rejection: {error}");
+        }
+        assert!(!destination.join("python.exe").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_health_offline_repair_rc2_rejects_unsupported_cache_and_target_versions() {
+        let (root, payload, destination) = repair_fixture(&[("python.exe", "untrusted")]);
+        for cached_version in ["0.9.0", "1.1.3-rc1", "1.1.3-rc3", "1.1.4"] {
+            set_repair_manifest(&payload, cached_version, Some(FROZEN_PYTHON_SHA256));
+            let error = verified_python_archive(
+                &payload,
+                "1.1.3-rc2",
+                Some(cached_version),
+                std::time::Instant::now(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("版本不匹配"),
+                "accepted unsupported cache: {cached_version}"
+            );
+        }
+        set_repair_manifest(&payload, "1.1.2", Some(FROZEN_PYTHON_SHA256));
+        for target in ["1.1.3", "1.1.3-rc0", "1.1.3-rc02", "1.1.3-rc3", "1.1.4-rc1"] {
+            let error =
+                verified_python_archive(&payload, target, Some("1.1.2"), std::time::Instant::now())
+                    .unwrap_err();
+            assert!(
+                error.contains("版本不匹配"),
+                "accepted unsupported target: {target}"
+            );
+        }
+        assert!(verified_python_archive(
+            &payload,
+            "1.1.3-rc2",
+            Some("1.1.0"),
+            std::time::Instant::now()
+        )
+        .unwrap_err()
+        .contains("版本不匹配"));
+        assert!(!destination.join("python.exe").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires independently hashed production payload; set HARMONY_FROZEN_PYTHON_TEST_PAYLOAD"]
+    fn runtime_health_offline_repair_rc2_accepts_verified_frozen_previous_payload() {
+        let fixture = PathBuf::from(
+            std::env::var_os("HARMONY_FROZEN_PYTHON_TEST_PAYLOAD")
+                .expect("production fixture payload"),
+        );
+        let (root, _, destination) = repair_fixture(&[]);
+        let payload = root.join("installer-cache/1.1.2/payload");
+        std::fs::create_dir_all(payload.join("runtime")).unwrap();
+        for relative in ["payload.manifest.json", "runtime/python-runtime.zip"] {
+            std::fs::copy(fixture.join(relative), payload.join(relative)).unwrap();
+        }
+        set_repair_manifest(&payload, "1.1.2", None);
+        std::fs::write(destination.join("user-data.txt"), "keep").unwrap();
+        assert!(!root.join("installer-cache/1.1.3-rc2").exists());
+        let result = merge_cached_python_from_cache(
+            &root.join("installer-cache"),
+            &destination,
+            "1.1.3-rc2",
+        );
+        let repaired = destination.join("python.exe").is_file();
+        let modules_repaired = REQUIRED_PYTHON_MODULES.iter().all(|module| {
+            destination
+                .join(format!("Lib/site-packages/{module}/__init__.py"))
+                .is_file()
+        });
+        let preserved = std::fs::read_to_string(destination.join("user-data.txt")).unwrap();
+        for cached_version in COMPATIBLE_PYTHON_CACHE_VERSIONS {
+            set_repair_manifest(&payload, cached_version, None);
+            let verified = verified_python_archive(
+                &payload,
+                "1.1.3-rc2",
+                Some(cached_version),
+                std::time::Instant::now(),
+            );
+            assert!(
+                verified.is_ok(),
+                "rc2 rejected frozen {cached_version}: {verified:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(result.is_ok(), "rc2 fallback rejected: {result:?}");
+        assert!(repaired);
+        assert!(modules_repaired);
+        assert_eq!(preserved, "keep");
     }
 
     // Opt in with a local copy of the independently hashed production payload.

@@ -18,6 +18,25 @@ const sessions = [
 const t = (key: string) => key;
 
 describe("GlobalSessionRail", () => {
+  it("uses a standard navigation row and collapses projects without losing folder state", async () => {
+    render(<GlobalSessionRail collapsed={false}
+      projects={[{ id: "workspace:test", name: "测试项目", path: "C:\\test", kind: "workspace", system: false, sessions }]}
+      activeProjectId="workspace:test" activeSessionId="session-1"
+      labels={{ projects: "项目", createProject: "新建项目", emptyProject: "暂无对话" }}
+      onProjectSelect={vi.fn()} onSelect={vi.fn()} onDelete={vi.fn()}
+      onRemoveProject={vi.fn()} onCreateProject={vi.fn()} t={t} />);
+    const toggle = screen.getByRole("button", { name: "项目", expanded: true });
+    expect(toggle).toHaveClass("nav-item");
+    await userEvent.click(toggle);
+    expect(screen.queryByRole("tree", { name: "项目" })).not.toBeInTheDocument();
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.inert).toBe(true);
+    await userEvent.click(toggle);
+    expect(screen.getByRole("tree", { name: "项目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "季度营销复盘" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /测试项目/ }));
+    expect(screen.queryByRole("button", { name: "季度营销复盘" })).not.toBeInTheDocument();
+  });
+
   it("renders one project tree and selects conversations inside folders", async () => {
     const onSelect = vi.fn();
     render(

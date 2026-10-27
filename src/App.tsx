@@ -4,13 +4,13 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-  ChevronDown,
   ChevronRight,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Sun,
-  Circle,
+  UsersRound,
+  Settings2,
   Minus,
   Square as WindowSquare,
   X,
@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
-import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, windowApi, type AccountSettingsSyncPrompt, type MarketingUser } from "./services/tauri";
+import { accountSettingsSyncApi, forgetRememberedMarketingUser, marketingApi, openPath, readRememberedMarketingUser, settingsApi, sessionsApi, type AccountSettingsSyncPrompt, type MarketingUser } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { classifyMainChatSession } from "./utils/session";
 import type { TaskCenterTarget, SessionActivity } from "./tasks/taskCenter";
@@ -41,6 +41,7 @@ import MobileBridgeWizard, { mobileBridgeStorageKey, mobileBridgeTokenKey } from
 import { BridgePeer, type BridgeSignal } from "./bridgePeer";
 import { DirectFileSender } from "./directFileSender";
 import BrandWordmark from "./components/BrandWordmark";
+import SidebarSection, { SidebarDisclosure } from "./components/SidebarSection";
 import { NativeUpdateBridge, UpdateBadge } from "./updates/UpdateControls";
 import { nativeUpdateStore } from "./updates/nativeUpdateStore";
 import Toaster from "./components/Toaster";
@@ -147,6 +148,7 @@ function AppContent() {
   const [marketingUser, setMarketingUser] = useState<MarketingUser | null>(() => readRememberedMarketingUser());
   const [marketingExpanded, setMarketingExpanded] = useState(true);
   const [creativeExpanded, setCreativeExpanded] = useState(true);
+  const [systemExpanded, setSystemExpanded] = useState(true);
   const [collaborationExpanded, setCollaborationExpanded] = useState(
     () => localStorage.getItem("harmony-work.collaboration-expanded") !== "false",
   );
@@ -662,11 +664,11 @@ function AppContent() {
   const renderNavigationItem = (item: WorkspaceNavigationItem) => {
     if (item.id === "marketing-assets" && marketingUser?.accountType !== "marketing") return null;
     const Icon = item.icon;
-    const expanded = item.action === "toggle-marketing"
+    const expanded = !sidebarCollapsed && (item.action === "toggle-marketing"
       ? marketingExpanded
       : item.action === "toggle-creative"
         ? creativeExpanded
-        : false;
+        : false);
 
     return (
       <Fragment key={item.id}>
@@ -674,12 +676,13 @@ function AppContent() {
           className={`nav-item ${item.activeRoutes.includes(activeTab) ? "active" : ""}`}
           onClick={() => handleNavigationItemClick(item)}
           title={navigationLabel(item.label)}
+          aria-expanded={item.children ? expanded : undefined}
         >
           <span className="nav-icon"><Icon size={17} strokeWidth={1.8} /></span>
           <span className="nav-label">{navigationLabel(item.label)}</span>
-          {item.children && <span className="nav-caret">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>}
+          {item.children && <ChevronRight className="nav-caret sidebar-disclosure-chevron" data-expanded={expanded} size={14} aria-hidden="true" />}
         </button>
-        {item.children && expanded && (
+        {item.children && <SidebarDisclosure expanded={expanded}>
           <div className="nav-subitems">
             {item.children.map((child) => (
               <button
@@ -691,7 +694,7 @@ function AppContent() {
               </button>
             ))}
           </div>
-        )}
+        </SidebarDisclosure>}
       </Fragment>
     );
   };
@@ -770,25 +773,19 @@ function AppContent() {
           <div className="sidebar-section-label">工作</div>
           {WORKSPACE_NAVIGATION.work.map(renderNavigationItem)}
 
-          <div className="sidebar-section-label sidebar-section-label-collaboration">
-            <button
-              type="button"
-              className="sidebar-section-toggle"
-              aria-expanded={collaborationExpanded}
-              onClick={() => setCollaborationExpanded((expanded) => !expanded)}
-            >
-              <span>协作</span>
-              {collaborationExpanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-            </button>
-          </div>
-          {collaborationExpanded && (
+          <SidebarSection label="协作" icon={UsersRound} expanded={collaborationExpanded && !sidebarCollapsed}
+            onToggle={() => { if (sidebarCollapsed) setSidebarCollapsed(false); setCollaborationExpanded(value => sidebarCollapsed || !value); }}>
             <div className="sidebar-navigation-group">
               {WORKSPACE_NAVIGATION.collaboration.map(renderNavigationItem)}
             </div>
-          )}
+          </SidebarSection>
 
-          <div className="sidebar-section-label sidebar-section-label-system">系统</div>
-          {WORKSPACE_NAVIGATION.system.map(renderNavigationItem)}
+          <SidebarSection label="系统" icon={Settings2} expanded={systemExpanded && !sidebarCollapsed}
+            onToggle={() => { if (sidebarCollapsed) setSidebarCollapsed(false); setSystemExpanded(value => sidebarCollapsed || !value); }}>
+            <div className="sidebar-navigation-group">
+              {WORKSPACE_NAVIGATION.system.map(renderNavigationItem)}
+            </div>
+          </SidebarSection>
         </nav>
         <div ref={setChatSidebarHost} className="sidebar-conversations" aria-label={t("chat.projects")} />
         </div>
@@ -808,14 +805,6 @@ function AppContent() {
             </div>
           )}
           {IS_WINDOWS && <button className="nav-item mobile-bridge-nav" title={`连接手机 · ${mobilePeerState === "direct" ? "P2P 直连" : "服务器保障"}`} onClick={() => setMobileBridgeOpen(true)}><span className="nav-icon"><Smartphone size={17} strokeWidth={1.8} /></span><span className="nav-label">连接手机</span></button>}
-          <button
-            className="nav-item minimal-mode-btn"
-            title={t("nav.minimalMode")}
-            onClick={() => windowApi.enterMinimalMode()}
-          >
-            <span className="nav-icon"><Circle size={16} strokeWidth={1.8} /></span>
-            <span className="nav-label">{t("nav.minimalMode")}</span>
-          </button>
           <button className="user-card" onClick={() => setUserMenuOpen((value) => !value)}>
             <span className="user-avatar">{userInitial}</span>
             <span className="user-card-text">

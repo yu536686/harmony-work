@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, CircleAlert, Folder, FolderPlus, LoaderCircle, Smartphone, Trash2 } from "lucide-react";
+import { ChevronRight, CircleAlert, Folder, FolderPlus, LoaderCircle, Smartphone, Trash2 } from "lucide-react";
 import type { ChatProject } from "../../utils/chatProjects";
+import SidebarSection, { SidebarDisclosure } from "../SidebarSection";
 
 interface GlobalSessionRailProps {
   collapsed: boolean;
@@ -35,6 +36,7 @@ export default function GlobalSessionRail({
   t,
   imFooter,
 }: GlobalSessionRailProps) {
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(projects.filter((project) => project.sessions.length > 0).map((project) => project.id)),
   );
@@ -63,12 +65,12 @@ export default function GlobalSessionRail({
 
   return (
     <section className="global-session-rail">
-      <div className="project-rail-heading">
-        <span>{labels.projects}</span>
-        <button type="button" onClick={onCreateProject} aria-label={labels.createProject} title={labels.createProject}>
+      <SidebarSection label={labels.projects} icon={Folder} expanded={projectsExpanded}
+        onToggle={() => setProjectsExpanded(value => !value)} action={
+        <button type="button" className="sidebar-section-action" onClick={onCreateProject} aria-label={labels.createProject} title={labels.createProject}>
           <FolderPlus size={15} strokeWidth={1.8} aria-hidden="true" />
         </button>
-      </div>
+      }>
       <div className="project-tree" role="tree" aria-label={labels.projects}>
         {projects.map((project) => {
           const isExpanded = expanded.has(project.id);
@@ -79,10 +81,11 @@ export default function GlobalSessionRail({
                 <button
                   type="button"
                   className={`project-tree-folder ${isActive ? "active" : ""}`}
+                  aria-expanded={isExpanded}
                   onClick={() => toggleProject(project)}
                   title={project.path ?? project.name}
                 >
-                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <ChevronRight className="sidebar-disclosure-chevron" data-expanded={isExpanded} size={14} aria-hidden="true" />
                   <Folder size={15} strokeWidth={1.8} />
                   <span>{project.name}</span>
                   {project.sessions.length > 0 && <small>{project.sessions.length}</small>}
@@ -102,7 +105,7 @@ export default function GlobalSessionRail({
                   </button>
                 )}
               </div>
-              {isExpanded && (
+              <SidebarDisclosure expanded={isExpanded}>
                 <div className="project-tree-children" role="group">
                   {project.sessions.map((session) => (
                     <div key={session.id} className={`project-session-row ${session.id === activeSessionId ? "active" : ""}`}>
@@ -138,11 +141,12 @@ export default function GlobalSessionRail({
                   {project.sessions.length === 0 && <div className="project-tree-empty">{labels.emptyProject}</div>}
                   {project.kind === "im" && imFooter}
                 </div>
-              )}
+              </SidebarDisclosure>
             </div>
           );
         })}
       </div>
+      </SidebarSection>
     </section>
   );
 }

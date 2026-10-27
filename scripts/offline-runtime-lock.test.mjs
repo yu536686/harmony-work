@@ -182,8 +182,8 @@ test("full installer bundles the deep uninstaller and exposes an installed entry
   assert.match(cleanup, /卸载 Harmony Work\.lnk/);
 });
 
-test("Harmony Work 1.1.3-rc1 release metadata, payload manifest, and installer naming stay aligned", async () => {
-  const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript] =
+test("Harmony Work 1.1.3-rc2 release metadata, payload manifest, and installer naming stay aligned", async () => {
+  const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript, cargoLock, uninstaller, lightScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
       readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
@@ -193,10 +193,13 @@ test("Harmony Work 1.1.3-rc1 release metadata, payload manifest, and installer n
       readFile(new URL("../installer/WorkBuddyBootstrapper/InstallerEngine.cs", import.meta.url), "utf8"),
       readFile(new URL("./stage-full-installer-payload.ps1", import.meta.url), "utf8"),
       readFile(new URL("./build-full-installer.ps1", import.meta.url), "utf8"),
+      readFile(new URL("../src-tauri/Cargo.lock", import.meta.url), "utf8"),
+      readFile(new URL("../installer/HarmonyWorkUninstaller/HarmonyWorkUninstaller.csproj", import.meta.url), "utf8"),
+      readFile(new URL("./build-light-installer.ps1", import.meta.url), "utf8"),
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.1.3-rc1");
+  assert.equal(packageJson.version, "1.1.3-rc2");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");
@@ -208,6 +211,9 @@ test("Harmony Work 1.1.3-rc1 release metadata, payload manifest, and installer n
   assert.match(cargoToml, /default-run = "harmony-work"/);
   assert.match(project, /<AssemblyName>Harmony-Work-Setup<\/AssemblyName>/);
   assert.equal(project.match(/<Version>([^<]+)<\/Version>/)?.[1], packageJson.version);
+  assert.equal(cargoLock.match(/\[\[package\]\]\s*name = "harmony-work"\s*version = "([^"]+)"/)?.[1], packageJson.version);
+  assert.equal(uninstaller.match(/<Version>([^<]+)<\/Version>/)?.[1], packageJson.version);
+  assert.equal(lightScript.match(/\[string\]\$Version\s*=\s*['"]([^'"]+)['"]/)?.[1], packageJson.version);
   assert.match(engine, /private const string ProductName = "Harmony Work"/);
   assert.match(engine, /private const string ApplicationExecutable = "harmony-work\.exe"/);
   assert.match(stageScript, /app\\harmony-work-setup\.exe/);

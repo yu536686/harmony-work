@@ -17,7 +17,7 @@ test('manifest deterministic with exact compatibility hashes, missing dependency
   const args=['payload','baseline','managed'].map(x=>join(dir,x));
   const a=await generate(...args,'1.1.1');assert.deepEqual(a,await generate(...args,'1.1.1'));assert.equal(a.dependencies.length,3);assert.equal(a.files.length,4);assert.equal(a.files[0].sha256.length,64);
   const formal=await generate(...args,'1.1.2');assert.equal(formal.version,'1.1.2');assert.deepEqual(formal.files,a.files);
-  const rc=await generate(...args,'1.1.3-rc1');assert.equal(rc.version,'1.1.3-rc1');assert.deepEqual(rc.dependencies,a.dependencies);
+  for(const version of ['1.1.3-rc1','1.1.3-rc2']){const rc=await generate(...args,version);assert.equal(rc.version,version);assert.deepEqual(rc.dependencies,a.dependencies);assert.deepEqual(rc.files,a.files);assert.deepEqual(rc.managedDependencies,a.managedDependencies)}
   for(const invalid of ['1.1.3-rc0','1.1.3-rc01','1.1.3','1.1.4-rc1'])await assert.rejects(generate(...args,invalid),/Unsupported version/);
   await assert.rejects(generate(...args,'1.1.2-rc.0'),/Unsupported version/);
   await assert.rejects(generate(...args,'1.1.1',join(dir,'payload')),/New build dependencies differ/);
