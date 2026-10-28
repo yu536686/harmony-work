@@ -15,6 +15,7 @@ $fixture=Join-Path $TestRoot ([guid]::NewGuid().ToString('N'))
 AssertSettingsPath $fixture
 New-Item -ItemType Directory -Path $fixture -Force|Out-Null
 SetSettingsPrivateAcl $fixture
+SetSettingsPrivateAcl $fixture
 $savedAppData=$env:APPDATA;$registryPath=$null
 $log=Join-Path $fixture 'test.log'
 try {
@@ -31,6 +32,8 @@ try {
  [byte[]]$original=@(0xEF,0xBB,0xBF)+[Text.Encoding]::UTF8.GetBytes("{`r`n  `"vision_api_key`": `"synthetic-plaintext-key-113`", `"value`": 17`r`n}`r`n")
  [byte[]]$migrated=[Text.Encoding]::UTF8.GetBytes('{"vision_api_key":"new-encrypted-format"}')
  [IO.File]::WriteAllBytes($config,$original)
+ SetSettingsPrivateAcl $config
+ SetSettingsPrivateAcl $config
  $metadata=NewSettingsSnapshot $transaction
  Assert $metadata.snapshotTaken 'Snapshot flag missing'
  Assert ($metadata.protection -ceq 'DPAPI-CurrentUser') 'Wrong protection scope'

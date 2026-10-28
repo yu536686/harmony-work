@@ -6,6 +6,12 @@ const source = await readFile(new URL('../installer/light/update.ps1', import.me
 const main = source.slice(source.indexOf('$changed=@()'));
 const recovery = source.slice(source.indexOf('function RecoverTransactions('), source.indexOf('$changed=@()'));
 
+test('private ACL updates do not request audit privileges through PowerShell Set-Acl', () => {
+  const body = source.slice(source.indexOf('function SetSettingsPrivateAcl'), source.indexOf('function ReadSettingsBytes'));
+  assert.doesNotMatch(body, /Set-Acl/);
+  assert.match(body, /SetAccessControl/);
+});
+
 test('source contract: snapshot after exit, before journaled app mutation and launch', () => {
   const exit = main.indexOf('WaitForProductExit $exe');
   const snapshot = main.indexOf('NewSettingsSnapshot $transaction');

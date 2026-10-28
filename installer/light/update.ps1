@@ -107,7 +107,7 @@ function SetSettingsPrivateAcl([string]$path) {
  $inherit=if($isDirectory){[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
  $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
  $acl.AddAccessRule($rule)
- Set-Acl -LiteralPath $path -AclObject $acl
+ (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
 }
 function ReadSettingsBytes([string]$path,[int]$maximum) {
  AssertSettingsPath $path
