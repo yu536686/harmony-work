@@ -25,7 +25,7 @@ function pythonLayout(files) {
  throw Error('Unsupported Python layout in runtime compatibility reference');
 }
 export async function generate(payload, baseline, managed, version, expectedDependencies, compatibleManagedRuntime) {
- if(!/^1\.1\.(1|2(?:-rc\.[1-9]\d*)?|3-rc[1-9]\d*)$/.test(version)) throw Error('Unsupported version');
+ if(!/^1\.1\.(1|2(?:-rc\.[1-9]\d*)?|3(?:-rc[1-9]\d*)?)$/.test(version)) throw Error('Unsupported version');
  const files=await inventory(payload); if(!files.some(f=>f.path==='harmony-work.exe') || files.some(f=>!owned(f.path))) throw Error('Invalid payload ownership');
  for(const prefix of ['resources/workbuddy-mcp-host/','resources/harmony-cut/']) if(!files.some(f=>f.path.startsWith(prefix))) throw Error('Missing payload '+prefix);
  const dependencies=await inventory(baseline,p=>!owned(p)&&p.startsWith('resources/')&&!p.startsWith('resources/offline-installers/')&&stableResourcePath(p));
