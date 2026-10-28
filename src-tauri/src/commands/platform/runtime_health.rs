@@ -610,7 +610,7 @@ const COMPATIBLE_PYTHON_CACHE_VERSIONS: &[&str] = &["1.1.2", "1.1.1", "1.1.0"];
 
 #[cfg(any(windows, test))]
 fn permits_frozen_python_cache_reuse(version: &str) -> bool {
-    matches!(version, "1.1.3-rc1" | "1.1.3-rc2")
+    matches!(version, "1.1.3-rc1" | "1.1.3-rc2" | "1.1.3")
 }
 
 #[cfg(any(windows, test))]
@@ -1196,6 +1196,17 @@ mod tests {
     }
 
     #[test]
+    fn runtime_health_formal_113_reuses_only_explicitly_allowed_frozen_cache() {
+        assert!(permits_frozen_python_cache_reuse("1.1.3"));
+        assert!(!permits_frozen_python_cache_reuse("1.1.4"));
+        let (root, payload, _) = repair_fixture(&[("python.exe", "untrusted")]);
+        set_repair_manifest(&payload, "1.1.2", Some(FROZEN_PYTHON_SHA256));
+        let error = verified_python_archive(&payload, "1.1.3", Some("1.1.2"), std::time::Instant::now()).unwrap_err();
+        assert!(error.contains("SHA-256"), "unexpected rejection: {error}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn runtime_health_offline_repair_rc2_rejects_unsupported_cache_and_target_versions() {
         let (root, payload, destination) = repair_fixture(&[("python.exe", "untrusted")]);
         for cached_version in ["0.9.0", "1.1.3-rc1", "1.1.3-rc3", "1.1.4"] {
@@ -1213,7 +1224,7 @@ mod tests {
             );
         }
         set_repair_manifest(&payload, "1.1.2", Some(FROZEN_PYTHON_SHA256));
-        for target in ["1.1.3", "1.1.3-rc0", "1.1.3-rc02", "1.1.3-rc3", "1.1.4-rc1"] {
+        for target in ["1.1.3-rc0", "1.1.3-rc02", "1.1.3-rc3", "1.1.4-rc1"] {
             let error =
                 verified_python_archive(&payload, target, Some("1.1.2"), std::time::Instant::now())
                     .unwrap_err();
