@@ -57,6 +57,8 @@ const SchoolPage = lazy(() => import("./components/School"));
 const Pond = lazy(() => import("./components/Pond"));
 const Skills = lazy(() => import("./components/Skills"));
 const Marketing = lazy(() => import("./components/Marketing"));
+const WatchLibrary = lazy(() => import("./components/WatchLibrary"));
+const WatchUploadWindow = lazy(() => import("./components/WatchLibrary").then(module => ({ default: module.WatchUploadWindow })));
 const Creative = lazy(() => import("./components/Creative"));
 const HarmonyCut = lazy(() => import("./components/HarmonyCut"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
@@ -359,7 +361,7 @@ function AppContent() {
 
   useEffect(() => {
     if (!marketingUser || marketingUser.accountType === "marketing") return;
-    if (["marketing-assets", "marketing-dashboard", "harmony-cut"].includes(activeTab)) {
+    if (["marketing-assets", "watch-library", "marketing-dashboard", "harmony-cut"].includes(activeTab)) {
       setActiveTab("account");
     }
   }, [activeTab, marketingUser?.accountType]);
@@ -569,7 +571,7 @@ function AppContent() {
 
   const navigateTab = (requestedRoute: string, opts?: { schoolSubTab?: SchoolSubTab }) => {
     if (marketingUser && marketingUser.accountType !== "marketing" &&
-      ["marketing-assets", "marketing-dashboard", "harmony-cut"].includes(requestedRoute)) {
+      ["marketing-assets", "watch-library", "marketing-dashboard", "harmony-cut"].includes(requestedRoute)) {
       setActiveTab("account");
       return;
     }
@@ -832,6 +834,12 @@ function AppContent() {
               />
             </div>
           )}
+          {mountedTabs.has("watch-library") && (
+            <div className="tab-panel" hidden={activeTab !== "watch-library"}>
+              <WatchLibrary active={activeTab === "watch-library"} user={marketingUser} onNavigateToChat={() => setActiveTab("chat")} />
+            </div>
+          )}
+          <WatchUploadWindow user={marketingUser} />
           {mountedTabs.has("marketing-assets") && (!marketingUser || marketingUser.accountType === "marketing") && (
             <div className="tab-panel" hidden={activeTab !== "marketing-assets"}>
               <Marketing

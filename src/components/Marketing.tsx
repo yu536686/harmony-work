@@ -18,6 +18,7 @@ import {
 } from "../services/tauri";
 import "./Marketing.css";
 import { shouldShowAsset } from "./Marketing/assetFiltering";
+import { watchLibraryApi } from "../services/tauri/watchLibrary";
 
 function formatBytes(value: number | string | undefined) {
   const bytes = Number(value ?? 0);
@@ -360,11 +361,11 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
     const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
     if (!paths.length) return;
     setUploading(true);
-    setMessage(`正在上传 ${paths.length} 个素材…`);
+    setMessage(`正在创建 ${paths.length} 个上传任务…`);
     try {
-      const result = await marketingApi.uploadAssets(paths, folder);
-      await loadAll();
-      setMessage(`已上传 ${result.assets.length} 个素材。`);
+      const tasks = await watchLibraryApi.marketingUploadStart(paths, folder);
+      window.dispatchEvent(new Event("harmony:watch-uploads-open"));
+      setMessage(`已创建 ${tasks.length} 个上传任务，可在上传窗口查看进度。`);
     } catch (error) {
       setMessage(`上传失败：${String(error)}`);
     } finally {
@@ -583,8 +584,9 @@ export default function Marketing({ view, user, onUserChange, onNavigateToChat }
                 <div className="marketing-actions">
                   <span className="marketing-panel-foot">当前筛选 {assets.length} / {assetTotal} 条</span>
                   <button className="btn btn-secondary" onClick={() => void uploadAssets()} disabled={uploading}>
-                    {uploading ? "上传中…" : "上传素材"}
+                    {uploading ? "准备中…" : "上传素材"}
                   </button>
+                  <button className="btn btn-secondary" onClick={() => window.dispatchEvent(new Event("harmony:watch-uploads-open"))}>上传任务</button>
                 </div>
               </div>
               <div className="marketing-filters">

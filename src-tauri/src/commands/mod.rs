@@ -26,6 +26,7 @@ pub mod harmony_cut;
 pub mod ide;
 pub mod journal;
 pub mod marketing;
+pub mod watch_library;
 pub mod mobile_bridge;
 pub mod mobile_attachment;
 pub mod mobile_task_events;

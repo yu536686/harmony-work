@@ -22,6 +22,7 @@ export type WorkspaceRoute =
   | "creative-music"
   | "creative-image"
   | "marketing-assets"
+  | "watch-library"
   | "skills"
   | "team"
   | "members"
@@ -93,10 +94,11 @@ export const WORKSPACE_NAVIGATION: Record<"work" | "collaboration" | "system", W
       route: "marketing-assets",
       label: { text: "线上营销工作台" },
       icon: LineChart,
-      activeRoutes: ["marketing-assets", "marketing-dashboard", "harmony-cut"],
+      activeRoutes: ["marketing-assets", "watch-library", "marketing-dashboard", "harmony-cut"],
       action: "toggle-marketing",
       children: [
         { id: "marketing-assets", route: "marketing-assets", label: { text: "素材库" } },
+        { id: "watch-library", route: "watch-library", label: { text: "腕表如诗内容看板" } },
         { id: "marketing-dashboard", route: "marketing-dashboard", label: { text: "数据看板" } },
         { id: "harmony-cut", route: "harmony-cut", label: { text: "商摄快剪" }, action: "open-harmony-cut" },
       ],
@@ -129,6 +131,7 @@ const ROUTES = new Set<WorkspaceRoute>([
   "creative-music",
   "creative-image",
   "marketing-assets",
+  "watch-library",
   "skills",
   "team",
   "members",

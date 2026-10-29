@@ -87,7 +87,7 @@ pub(crate) async fn apply_cookie(req: reqwest::RequestBuilder) -> reqwest::Reque
     with_cookie(req, &cookie)
 }
 
-async fn cookie_snapshot() -> (u64, Option<String>) {
+pub(crate) async fn cookie_snapshot() -> (u64, Option<String>) {
     let mut cookie = cookie_store().lock().await;
     if SESSION_LOGGED_OUT.load(Ordering::SeqCst) {
         return (SESSION_GENERATION.load(Ordering::SeqCst), None);
@@ -106,7 +106,7 @@ fn with_cookie(req: reqwest::RequestBuilder, cookie: &Option<String>) -> reqwest
     }
 }
 
-fn ensure_current_session(generation: u64) -> Result<(), String> {
+pub(crate) fn ensure_current_session(generation: u64) -> Result<(), String> {
     if generation != SESSION_GENERATION.load(Ordering::SeqCst) {
         return Err("账户会话已变更，请重试。".into());
     }
@@ -843,6 +843,14 @@ fn direct_asset_url(ticket: &Value, asset_id: &str) -> Result<reqwest::Url, Stri
     )
 }
 
+fn direct_upload_request(client: &reqwest::Client, ticket: &Value) -> Result<reqwest::RequestBuilder, String> {
+    let origin = ticket["origin"].as_str().ok_or("Marketing transfer origin is missing")?;
+    let mut url = super::watch_library::uploads::marketing_origin(origin)?;
+    url.set_path("/api/assets/direct/upload");
+    let credential = ticket["uploadTicket"].as_str().filter(|value| !value.is_empty()).ok_or("Marketing upload ticket is missing")?;
+    Ok(client.post(url).bearer_auth(credential))
+}
+
 #[tauri::command]
 pub async fn marketing_upload_assets(
     file_paths: Vec<String>,
@@ -852,7 +860,6 @@ pub async fn marketing_upload_assets(
         return Err("请选择 1 到 8 个文件上传".to_string());
     }
     let transfer = marketing_transfer_ticket().await?;
-    let url = direct_transfer_url(&transfer, "/api/assets/direct/upload", "uploadTicket")?;
     let mut form = Form::new().text("folder", folder.unwrap_or_default());
     for path in file_paths {
         let file = Path::new(&path);
@@ -872,12 +879,12 @@ pub async fn marketing_upload_assets(
         form = form.part("files", Part::bytes(bytes).file_name(name.to_string()));
     }
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client
-        .post(url)
+    let response = direct_upload_request(&client, &transfer)?
         .multipart(form)
         .send()
         .await
@@ -1088,10 +1095,22 @@ pub async fn marketing_creative_save_to_workspace(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_account_overview, direct_asset_url, direct_transfer_url, normalize_account_balance,
+        build_account_overview, direct_asset_url, direct_transfer_url, direct_upload_request, normalize_account_balance,
         normalize_account_gateway_key, normalize_account_usage, omit_null_object_fields,
         save_target_path,
     };
+
+    #[test]
+    fn direct_upload_sends_ticket_only_as_authorization() {
+        let client = reqwest::Client::new();
+        let ticket = json!({"origin":"https://media.harmonywatch.cn:8443","uploadTicket":"upload-secret"});
+        let request = direct_upload_request(&client, &ticket).unwrap().build().unwrap();
+        assert_eq!(request.headers().get(reqwest::header::AUTHORIZATION).unwrap(), "Bearer upload-secret");
+        assert!(request.url().query().is_none());
+        assert!(!request.url().as_str().contains("upload-secret"));
+        let untrusted = json!({"origin":"https://other.example","uploadTicket":"upload-secret"});
+        assert!(direct_upload_request(&client, &untrusted).is_err());
+    }
     use serde_json::{json, Value};
 
     #[tokio::test]
