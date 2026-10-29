@@ -375,7 +375,7 @@ npm run test:artifact-runtime
 
 ## 版本与反馈
 
-- 当前源码版本：`1.1.2`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
+- 当前源码版本：`1.1.4`；公开安装包版本以 [官网](https://www.harmonywork.com.cn/workbuddy#download) 为准。
 - 问题反馈：[GitHub Issues](https://github.com/yu536686/harmony-work/issues)
 
 ---
