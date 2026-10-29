@@ -6,7 +6,7 @@
 
 **让 AI 不只回答问题，还能在项目、文档、创作、工具与 IM 会话中完成工作。**
 
-[![Version](https://img.shields.io/badge/source-1.1.2-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
+[![Version](https://img.shields.io/badge/source-1.1.4-7654E8?style=flat-square)](https://www.harmonywork.com.cn/)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](#windows-安装)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20Preview-000000?style=flat-square&logo=apple&logoColor=white)](#macos-预览版)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -42,6 +42,7 @@ Harmony Work 是一款桌面 AI Agent 工作台，提供 Windows 稳定版和 Ap
 | **技能与 MCP** | 浏览多个技能市场渠道，查看已安装版本、下载与安装进度，并可更新、打开目录或卸载技能。 |
 | **长期记忆** | 记忆页面、定期整理和 Agent 工具共用本地记忆记录；支持关键词检索及可选的 Harmony 向量检索，向量服务不可用时回退到关键词检索。 |
 | **素材库与数据看板** | 登录后浏览、筛选和预览素材，将文件暂存到会话，或基于看板数据新建分析任务。 |
+| **腕表如诗内容看板** | 获授权的营销用户可查看拍摄素材、检索型号与共享档案；支持流式视频、毛玻璃档案弹层、阶段进度和统一断点上传任务。 |
 | **个人设置云同步** | 登录后可按类别选择加密备份或恢复设置与记忆记录；记忆按逻辑记录同步，不上传本地数据库和向量索引。本机路径和 IM 凭据不迁移。 |
 | **IM 渠道** | 支持企业微信智能机器人长连接和个人微信 iLink，将消息转为可持续执行的 Agent 会话。 |
 | **自动化与桌面工具** | 支持定时任务、文件操作、Shell、浏览器控制和 Windows UI 自动化。 |
@@ -86,18 +87,16 @@ flowchart LR
 
 正式发布的全量包使用 WPF 安装界面，内置 Tauri 应用、离线 WebView2、Node.js、Python 嵌入式运行时、PortableGit、WeCom CLI、浏览器与桌面自动化组件，以及 Harmony Cut 的 Python 依赖。私有运行时不会覆盖系统环境；Python 无须通过系统 MSI 安装。企业微信授权、账号登录和模型 API Key 仍需由用户自行配置。
 
-当前分支开发源码版本为 `1.1.3-rc1`，仅面向 Windows 测试通道；官网正式版和 macOS 下载保持独立发布。构建产物与独立深度卸载器不纳入 Git 仓库。
+当前源码版本为 `1.1.4`，Windows 提供正式全量离线包和轻量更新包；macOS 下载保持独立发布。构建产物与独立深度卸载器不纳入 Git 仓库。
 
-本轮候选增加任务中心、文件变更审阅、Token 限额、交付流程模板和全局搜索，并完善账户隔离、附件历史与离线环境诊断。文件恢复须确认且不能覆盖后续修改；Token 数字来自已记录的服务报告，不等于精确账单。测试通道的发布与验收状态见 [候选说明](docs/releases/windows-1.1.3-rc1-20261027.md)。
+本版在此前任务中心、文件审阅、用量预算和全局搜索的基础上，增加腕表如诗内容看板、统一续传队列和档案交互优化。发布范围、校验值与验证边界见 [1.1.4 发布记录](docs/releases/windows-1.1.4.md)。
 
 ### 1. 下载安装包
 
 从 [Harmony Work 官网](https://www.harmonywork.com.cn/workbuddy#download) 下载 Windows x64 安装包。官网入口会跳转至腾讯云 CDN，当前文件为：
 
-```text
-Harmony-Work-1.1.0-x64-setup.exe
-SHA-256: 53f18da7253a817d74b1e773ea97c2ea245cd058a58bb426d55cb47994e19116
-```
+- [1.1.4 全量离线安装包](https://download.harmonywatch.cn/releases/Harmony-Work-1.1.4-x64-setup.exe)：首次安装或运行环境不完整时使用。
+- [1.1.4 轻量更新包](https://download.harmonywatch.cn/releases/Harmony-Work-1.1.4-x64-light.exe)：需要已有兼容的 Windows 完整安装，复用已安装的运行环境。
 
 需要核对文件完整性时，在安装包所在目录运行：
 

@@ -182,7 +182,7 @@ test("full installer bundles the deep uninstaller and exposes an installed entry
   assert.match(cleanup, /卸载 Harmony Work\.lnk/);
 });
 
-test("Harmony Work 1.1.4-rc2 release metadata, payload manifest, and installer naming stay aligned", async () => {
+test("Harmony Work 1.1.4 release metadata, payload manifest, and installer naming stay aligned", async () => {
   const [packageJson, packageLock, tauriConfig, cargoToml, project, engine, stageScript, buildScript, cargoLock, uninstaller, lightScript] =
     await Promise.all([
       readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
@@ -199,7 +199,7 @@ test("Harmony Work 1.1.4-rc2 release metadata, payload manifest, and installer n
     ]);
 
   assert.equal(packageJson.name, "harmony-work");
-  assert.equal(packageJson.version, "1.1.4-rc2");
+  assert.equal(packageJson.version, "1.1.4");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
   assert.equal(tauriConfig.productName, "Harmony Work");

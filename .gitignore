@@ -37,3 +37,5 @@ release/
 .verify-target/
 .superpowers/
 docs/site-audit-*/
+src/components/WatchLibrary/.visual-cache/
+src/components/WatchLibrary/visual-*.png

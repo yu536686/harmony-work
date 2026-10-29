@@ -1,4 +1,4 @@
-param([string]$Version='1.1.4-rc2',[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$CompatibleManagedRuntime='',[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
+param([string]$Version='1.1.4',[Parameter(Mandatory=$true)][string]$InstalledPayload,[Parameter(Mandatory=$true)][string]$BaselineInstall,[Parameter(Mandatory=$true)][string]$BaselineManagedRuntime,[string]$CompatibleManagedRuntime='',[string]$OutputDirectory='',[string]$MakeNsis='makensis.exe')
 $ErrorActionPreference='Stop'
 if($Version -notmatch '^1\.1\.(1|2(?:-rc\.[1-9]\d*)?|3(?:-rc[1-9]\d*)?|4(?:-rc[1-9]\d*)?)$'){throw 'Expected a supported Harmony Work 1.1 release'}
 $exe=Join-Path $InstalledPayload 'harmony-work.exe'
